@@ -1,16 +1,7 @@
 // ==========================================
-// FLOW IMAGE AUTOMATION - CRIADORES DARK
-// Versão 4.4 - Correção do Clique Radix UI
+// FLOW VIDEO AUTOMATION - CRIADORES DARK
+// Versão 5.0 - Foco Total em Vídeo + Fix Pesquisa de Voz
 // ==========================================
-//
-// ARQUITETURA:
-//   - Três modos (Imagens): Livre, Referências, Cenas
-//   - Três modos (Vídeos): Livre, Cenas, Voz
-//   - Rename e Favoritar via API
-//   - Atribuição manual via Drag & Drop
-//   - Referências usam [Nome]
-//   - Vozes usam <voz: Nome>
-//
 (function() {
     'use strict';
 
@@ -62,8 +53,8 @@
 
     const CONFIG = {
         DELAY_SHORT:           [300, 500],
-        DELAY_MEDIUM:          [500, 800],
-        DELAY_LONG:            [1000, 1500],
+        DELAY_MEDIUM:          [600, 900], // Aumentei um pouco para dar tempo ao Radix de pesquisar
+        DELAY_LONG:            [1200, 1800],
         DELAY_BETWEEN_SUBMITS: [3500, 5000],
         DELAY_BETWEEN_BATCHES: [2500, 3500],
         GENERATION_TIMEOUT:    180000,
@@ -72,7 +63,7 @@
         MAX_RETRIES:           3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.4 (Radix Click Fix)',
+        VERSION: '5.0 (Vídeo Only + Fast Search Fix)',
     };
 
     // ============================================================
@@ -133,24 +124,8 @@
         return result;
     }
 
-    function parseReferenceHeader(text) {
-        const lines = text.split('\n');
-        const firstLine = lines[0].trim();
-        const refs = [];
-        const re = /\[([^\]]+)\]/g;
-        let m;
-        while ((m = re.exec(firstLine)) !== null) refs.push(m[1].trim());
-        const stripped = firstLine.replace(/\[([^\]]+)\]/g, '').trim();
-        if (refs.length > 0 && stripped === '') {
-            let startIdx = 1;
-            while (startIdx < lines.length && lines[startIdx].trim() === '') startIdx++;
-            return { refs, remaining: lines.slice(startIdx).join('\n') };
-        }
-        return { refs: [], remaining: text };
-    }
-
     // ============================================================
-    // CSS E HTML ENXUTO
+    // CSS E HTML ENXUTO (Apenas aba de Vídeo)
     // ============================================================
     const css = `
 :root{--cd-primary:#10b981;--cd-primary-dark:#059669;--cd-primary-light:#34d399;--cd-bg:#fff;--cd-bg-secondary:#f8fafc;--cd-bg-card:#fff;--cd-border:#e2e8f0;--cd-border-light:#f1f5f9;--cd-text:#1e293b;--cd-text-muted:#64748b;--cd-text-light:#94a3b8;--cd-shadow:0 10px 40px -10px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.05);--cd-radius:16px;--cd-radius-sm:12px;--cd-radius-xs:8px;}
@@ -163,13 +138,9 @@
 .flow-logo{width:36px;height:36px;border-radius:50%;background:#1a1a1a;display:flex;align-items:center;justify-content:center;}
 .flow-logo svg{width:21px;height:21px;}
 .flow-header-title{font-size:15px;font-weight:700;color:var(--cd-text);margin:0;}
+.flow-header-subtitle{font-size:12px;font-weight:500;color:var(--cd-text-muted);margin:0;}
 .flow-close-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--cd-border);background:var(--cd-bg);cursor:pointer;display:flex;align-items:center;justify-content:center;}
 .flow-close-btn svg{width:16px;height:16px;color:var(--cd-text-muted);}
-.flow-tabs{display:flex;border-bottom:1px solid var(--cd-border-light);}
-.flow-tab{flex:1;padding:12px 16px;font-size:13px;font-weight:600;color:var(--cd-text-muted);background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;}
-.flow-tab.active{color:var(--cd-primary);border-bottom-color:var(--cd-primary);}
-.flow-tab-content{display:none;}
-.flow-tab-content.active{display:block;}
 .flow-scroll{flex:1;overflow-y:auto;}
 .flow-scroll::-webkit-scrollbar{width:4px;}
 .flow-scroll::-webkit-scrollbar-thumb{background:var(--cd-border);border-radius:4px;}
@@ -242,139 +213,91 @@
   <div class="flow-header">
     <div class="flow-header-left">
       <div class="flow-logo"><svg viewBox="0 0 24 24"><polygon points="8,6 20,12 8,18" fill="none" stroke="#10b981" stroke-width="2.5"/></svg></div>
-      <div><div class="flow-header-title">Criadores Dark</div></div>
+      <div>
+        <div class="flow-header-title">Criadores Dark</div>
+        <div class="flow-header-subtitle">Flow Vídeo Automation</div>
+      </div>
     </div>
     <button class="flow-close-btn" id="flow-close">X</button>
   </div>
-  <div class="flow-tabs">
-    <button class="flow-tab active" data-tab="images">🖼️ Imagens</button>
-    <button class="flow-tab" data-tab="videos">🎬 Vídeos</button>
-  </div>
   <div class="flow-scroll">
-    <div class="flow-tab-content active" data-tab="images">
-      <div class="flow-tab-body">
-        <div class="flow-card">
-          <div class="flow-card-header"><h3 class="flow-card-title">Prompts de imagem</h3><p class="flow-card-description">Use <strong>[nome]</strong> para referências.</p></div>
-          <div class="flow-card-content">
-            <textarea class="flow-textarea" id="flow-prompts-input" placeholder="Ex:\nImagem de [Maria] sentada na [Sala]"></textarea>
-            <div id="flow-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
-          </div>
+    <div class="flow-tab-body">
+      <div class="flow-card">
+        <div class="flow-card-header">
+          <h3 class="flow-card-title">Prompts de Vídeo</h3>
+          <p class="flow-card-description">Use <strong>{cena X}</strong>, <strong>[nome_referencia]</strong> e <strong>&lt;voz: Nome&gt;</strong>.</p>
         </div>
-        <div class="flow-card">
-          <div class="flow-card-header"><h3 class="flow-card-title">Referências detectadas</h3></div>
-          <div class="flow-card-content">
-            <div class="flow-ref-list" id="flow-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência detectada.</span></div>
-            <button class="flow-validate-btn" id="flow-validate-btn">🔍 Validar referências</button>
-            <button class="flow-validate-btn" id="flow-assign-refs-btn" style="display:none;margin-top:6px;">📌 Atribuir referências</button>
-          </div>
+        <div class="flow-card-content">
+          <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:\n{cena 1} [Maria] caminhando no parque <voz: Algebra>"></textarea>
+          <div id="fv-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
         </div>
-        <div class="flow-card">
-          <div class="flow-card-header"><h3 class="flow-card-title">Opções</h3></div>
-          <div class="flow-card-content">
-            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
-              <div class="flow-mode-btns">
-                <button class="flow-mode-btn active" data-mode="free">🎯 Livre</button>
-                <button class="flow-mode-btn" data-mode="refs">🖼️ Referências</button>
-                <button class="flow-mode-btn" data-mode="scenes">🎬 Cenas</button>
-              </div>
-            </div>
-            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
-              <div class="flow-option-title">Prompts simultâneos</div>
-              <div class="flow-batch-btns"><button class="flow-batch-btn" data-batch="1">1</button><button class="flow-batch-btn" data-batch="2">2</button><button class="flow-batch-btn" data-batch="3">3</button><button class="flow-batch-btn active" data-batch="4">4</button></div>
-            </div>
-            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
-              <div class="flow-option-title">Imagens por prompt</div>
-              <select id="flow-imgs-per-prompt" class="flow-select-imgs"><option value="1">1 imagem</option><option value="2">2 imagens</option><option value="3" selected>3 imagens</option><option value="4">4 imagens</option></select>
-            </div>
-            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);"><input type="checkbox" id="flow-show-logs"><div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Mostrar logs</div></label>
-          </div>
-        </div>
-        <div class="flow-actions"><button id="flow-start-btn" class="flow-btn flow-btn-primary">Iniciar</button><button id="flow-stop-btn" class="flow-btn flow-btn-secondary" disabled>Parar</button></div>
-        <div id="flow-status" class="flow-status"></div>
-        <div class="flow-progress"><div id="flow-progress-bar" class="flow-progress-bar"></div></div>
-        <div class="flow-card" id="flow-prompts-preview-card" style="display:none;">
-          <div class="flow-card-header"><h3 class="flow-card-title">Fila de prompts</h3></div>
-          <div class="flow-card-content"><div class="flow-prompt-list" id="flow-prompt-list"></div></div>
-        </div>
-        <div class="flow-card">
-          <div class="flow-card-header"><h3 class="flow-card-title">Analisar Projeto</h3></div>
-          <div class="flow-card-content">
-            <button class="flow-validate-btn" id="flow-analyze-btn">🔍 Analisar projeto</button>
-            <button class="flow-validate-btn" id="flow-reopen-assign" style="display:none;margin-top:6px;">📋 Reabrir painel</button>
-            <div id="flow-download-section" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
-              <div style="font-size:12px;font-weight:600;margin-bottom:8px;">⬇️ Baixar Imagens</div>
-              <div style="display:flex;flex-direction:column;gap:6px;">
-                <button class="flow-validate-btn" id="flow-dl-identified">📋 Identificadas</button>
-                <button class="flow-validate-btn" id="flow-dl-scenes">🎬 Cenas</button>
-                <button class="flow-validate-btn" id="flow-dl-refs">🖼️ Referências</button>
-                <button class="flow-validate-btn" id="flow-dl-all">📦 Completo</button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div id="flow-logs-container" class="flow-logs-container"><div id="flow-debug-panel" class="flow-debug-panel"></div></div>
       </div>
-    </div>
-    <div class="flow-tab-content" data-tab="videos">
-      <div class="flow-tab-body">
-        <div class="flow-card">
-          <div class="flow-card-header"><h3 class="flow-card-title">Prompts de vídeo</h3><p class="flow-card-description">Use <strong>{cena X}</strong>, <strong>[nome]</strong> e <strong>&lt;voz: Nome&gt;</strong>.</p></div>
-          <div class="flow-card-content">
-            <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:\n{cena 10} [Maria] caminhando com vento <voz: Algebra>"></textarea>
-            <div id="fv-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
-          </div>
+      <div class="flow-card">
+        <div class="flow-card-header"><h3 class="flow-card-title">Referências e Vozes</h3></div>
+        <div class="flow-card-content">
+          <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma detectada.</span></div>
+          <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências na galeria</button>
         </div>
-        <div class="flow-card">
-          <div class="flow-card-header"><h3 class="flow-card-title">Referências e Vozes</h3></div>
-          <div class="flow-card-content">
-            <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência detectada.</span></div>
-            <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências</button>
-          </div>
-        </div>
-        <div class="flow-card">
-          <div class="flow-card-header"><h3 class="flow-card-title">Opções</h3></div>
-          <div class="flow-card-content">
-            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
-              <div class="flow-mode-btns">
-                <button class="flow-mode-btn active" data-vmode="free">🎯 Livre</button>
-                <button class="flow-mode-btn" data-vmode="scenes">🎬 Cenas</button>
-              </div>
-            </div>
-            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
-              <div class="flow-option-title">Prompts simultâneos</div>
-              <div class="flow-batch-btns"><button class="flow-batch-btn" data-vbatch="1">1</button><button class="flow-batch-btn" data-vbatch="2">2</button><button class="flow-batch-btn" data-vbatch="3">3</button><button class="flow-batch-btn active" data-vbatch="4">4</button></div>
-            </div>
-            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
-              <div class="flow-option-title">Resultados por prompt</div>
-              <select id="fv-results-per-prompt" class="flow-select-imgs"><option value="1">1 vídeo</option><option value="2">2 vídeos</option><option value="3" selected>3 vídeos</option><option value="4">4 vídeos</option></select>
-            </div>
-            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);"><input type="checkbox" id="fv-show-logs"><div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Mostrar logs</div></label>
-          </div>
-        </div>
-        <div class="flow-actions"><button id="fv-start-btn" class="flow-btn flow-btn-primary">Iniciar</button><button id="fv-stop-btn" class="flow-btn flow-btn-secondary" disabled>Parar</button></div>
-        <div id="fv-status" class="flow-status"></div>
-        <div class="flow-progress"><div id="fv-progress-bar" class="flow-progress-bar"></div></div>
-        <div class="flow-card" id="fv-prompts-preview-card" style="display:none;">
-          <div class="flow-card-header"><h3 class="flow-card-title">Fila de prompts</h3></div>
-          <div class="flow-card-content"><div class="flow-prompt-list" id="fv-prompt-list"></div></div>
-        </div>
-        <div class="flow-card">
-          <div class="flow-card-header"><h3 class="flow-card-title">Analisar Projeto (Vídeos)</h3></div>
-          <div class="flow-card-content">
-            <button class="flow-validate-btn" id="fv-analyze-btn">🔍 Analisar projeto</button>
-            <button class="flow-validate-btn" id="fv-reopen-assign" style="display:none;margin-top:6px;">📋 Reabrir painel</button>
-            <div id="fv-download-section" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
-              <div style="font-size:12px;font-weight:600;margin-bottom:8px;">⬇️ Baixar Vídeos</div>
-              <div style="display:flex;flex-direction:column;gap:6px;">
-                <button class="flow-validate-btn" id="fv-dl-identified">📋 Identificados</button>
-                <button class="flow-validate-btn" id="fv-dl-scenes">🎬 Cenas</button>
-                <button class="flow-validate-btn" id="fv-dl-all">📦 Completo</button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div id="fv-logs-container" class="flow-logs-container"><div id="fv-debug-panel" class="flow-debug-panel"></div></div>
       </div>
+      <div class="flow-card">
+        <div class="flow-card-header"><h3 class="flow-card-title">Opções de Geração</h3></div>
+        <div class="flow-card-content">
+          <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
+            <div class="flow-mode-btns" style="width: 100%;">
+              <button class="flow-mode-btn active" data-vmode="free">🎯 Livre</button>
+              <button class="flow-mode-btn" data-vmode="scenes">🎬 Cenas</button>
+            </div>
+          </div>
+          <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
+            <div class="flow-option-title">Prompts simultâneos</div>
+            <div class="flow-batch-btns">
+              <button class="flow-batch-btn" data-vbatch="1">1</button>
+              <button class="flow-batch-btn" data-vbatch="2">2</button>
+              <button class="flow-batch-btn" data-vbatch="3">3</button>
+              <button class="flow-batch-btn active" data-vbatch="4">4</button>
+            </div>
+          </div>
+          <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
+            <div class="flow-option-title">Resultados por prompt</div>
+            <select id="fv-results-per-prompt" class="flow-select-imgs">
+              <option value="1">1 vídeo</option>
+              <option value="2">2 vídeos</option>
+              <option value="3" selected>3 vídeos</option>
+              <option value="4">4 vídeos</option>
+            </select>
+          </div>
+          <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+            <input type="checkbox" id="fv-show-logs">
+            <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Mostrar logs de sistema</div>
+          </label>
+        </div>
+      </div>
+      <div class="flow-actions">
+        <button id="fv-start-btn" class="flow-btn flow-btn-primary">▶ Iniciar Automação</button>
+        <button id="fv-stop-btn" class="flow-btn flow-btn-secondary" disabled>⏹ Parar</button>
+      </div>
+      <div id="fv-status" class="flow-status"></div>
+      <div class="flow-progress"><div id="fv-progress-bar" class="flow-progress-bar"></div></div>
+      <div class="flow-card" id="fv-prompts-preview-card" style="display:none;">
+        <div class="flow-card-header"><h3 class="flow-card-title">Fila de Geração</h3></div>
+        <div class="flow-card-content"><div class="flow-prompt-list" id="fv-prompt-list"></div></div>
+      </div>
+      <div class="flow-card">
+        <div class="flow-card-header"><h3 class="flow-card-title">Analisar Projeto (Atribuições)</h3></div>
+        <div class="flow-card-content">
+          <button class="flow-validate-btn" id="fv-analyze-btn">🔍 Analisar galeria existente</button>
+          <button class="flow-validate-btn" id="fv-reopen-assign" style="display:none;margin-top:6px;">📋 Reabrir painel de Cenas</button>
+          <div id="fv-download-section" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+            <div style="font-size:12px;font-weight:600;margin-bottom:8px;">⬇️ Baixar Vídeos do Projeto</div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <button class="flow-validate-btn" id="fv-dl-identified">📋 Todos os Identificados</button>
+              <button class="flow-validate-btn" id="fv-dl-scenes">🎬 Apenas Cenas Atribuídas</button>
+              <button class="flow-validate-btn" id="fv-dl-all">📦 Download Completo (Tudo)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="fv-logs-container" class="flow-logs-container"><div id="fv-debug-panel" class="flow-debug-panel"></div></div>
     </div>
   </div>
 </div>
@@ -389,11 +312,9 @@
     class FlowAutomation {
 
         constructor() {
-            this.isRunning = false; this.shouldStop = false;
-            this.prompts = []; this.validatedRefs = {};
-            this.batchSize = 4; this.imagesPerPrompt = 3; this.gridCols = 3; this.rowHeight = 347;
-            this.genMode = 'free'; this.refNames = []; this.refAssignments = new Map();
-            this.sceneCount = 0; this.sceneAssignments = new Map(); this.tileAssignments = new Map();
+            this.gridCols = 3; this.rowHeight = 347;
+            this.tileAssignments = new Map();
+            this.validatedRefs = {};
             
             this.videoIsRunning = false; this.videoShouldStop = false;
             this.videoPrompts = []; this.videoGenMode = 'free';
@@ -401,10 +322,9 @@
             this.videoSceneCount = 0; this.videoSceneAssignments = new Map();
             
             this.initUI();
-            this.setupTextWatcher();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v4.4 (Radix UI) inicializado!');
+            log.success('Flow Automation v5.0 (Vídeo Only) inicializado!');
             if (!_authToken) log.warn('Token não capturado.');
         }
 
@@ -413,41 +333,6 @@
             $('flow-sidebar').addEventListener('click', () => $('flow-panel').classList.add('active'));
             $('flow-close').addEventListener('click', () => $('flow-panel').classList.remove('active'));
             $('flow-mini-close').addEventListener('click', () => $('flow-mini').style.display='none');
-
-            document.querySelectorAll('.flow-tab').forEach(tab => {
-                tab.addEventListener('click', () => {
-                    document.querySelectorAll('.flow-tab, .flow-tab-content').forEach(e => e.classList.remove('active'));
-                    tab.classList.add('active');
-                    document.querySelector(`.flow-tab-content[data-tab="${tab.dataset.tab}"]`).classList.add('active');
-                });
-            });
-
-            document.querySelectorAll('.flow-mode-btn[data-mode]').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    document.querySelectorAll('.flow-mode-btn[data-mode]').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active'); this.genMode = btn.dataset.mode;
-                });
-            });
-
-            document.querySelectorAll('.flow-batch-btn[data-batch]').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    document.querySelectorAll('.flow-batch-btn[data-batch]').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active'); this.batchSize = parseInt(btn.dataset.batch);
-                });
-            });
-
-            $('flow-imgs-per-prompt').addEventListener('change', e => this.imagesPerPrompt = parseInt(e.target.value));
-            $('flow-start-btn').addEventListener('click', () => this.start());
-            $('flow-stop-btn').addEventListener('click', () => this.stop());
-            $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
-            $('flow-analyze-btn').addEventListener('click', () => this.analyzeProject());
-            $('flow-dl-identified').addEventListener('click', () => this.downloadProjectImages('identified'));
-            $('flow-dl-scenes').addEventListener('click', () => this.downloadProjectImages('scenes'));
-            $('flow-dl-refs').addEventListener('click', () => this.downloadProjectImages('refs'));
-            $('flow-dl-all').addEventListener('click', () => this.downloadProjectImages('all'));
-            $('flow-assign-close').addEventListener('click', () => $('flow-assign-panel').classList.remove('active'));
-            $('flow-assign-download').addEventListener('click', () => this.downloadScenes());
-            $('flow-close-popup').addEventListener('click', () => $('flow-popup').style.display='none');
 
             document.querySelectorAll('[data-vmode]').forEach(btn => {
                 btn.addEventListener('click', () => {
@@ -466,29 +351,15 @@
             $('fv-results-per-prompt').addEventListener('change', e => this.videoResultsPerPrompt = parseInt(e.target.value));
             $('fv-start-btn').addEventListener('click', () => this.startVideo());
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
-            $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
-            $('fv-analyze-btn').addEventListener('click', () => this.analyzeProject('video'));
+            $('fv-validate-btn').addEventListener('click', () => this.validateReferences());
+            $('fv-analyze-btn').addEventListener('click', () => this.analyzeProject());
             $('fv-dl-identified').addEventListener('click', () => this.downloadProjectImages('identified'));
             $('fv-dl-scenes').addEventListener('click', () => this.downloadProjectImages('scenes'));
             $('fv-dl-all').addEventListener('click', () => this.downloadProjectImages('all'));
-            $('flow-show-logs').addEventListener('change', e => $('flow-logs-container').classList.toggle('visible', e.target.checked));
             $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
-        }
-
-        setupTextWatcher() {
-            const ta = document.getElementById('flow-prompts-input'); let t;
-            ta.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => this.updateReferences(), 300); });
-        }
-
-        updateReferences() {
-            const text = document.getElementById('flow-prompts-input').value;
-            const prompts = parsePromptsText(text); const refs = extractReferences(prompts);
-            document.getElementById('flow-prompt-count').textContent = `${prompts.length} prompt(s) detectado(s)`;
-            const list = document.getElementById('flow-ref-list');
-            if (!refs.length) list.innerHTML = '<span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência.</span>';
-            else list.innerHTML = refs.map(r => `<span class="flow-ref-tag pending">⏳ ${r}</span>`).join('');
-            const assignBtn = document.getElementById('flow-assign-refs-btn');
-            if (assignBtn) assignBtn.style.display = refs.length > 0 ? '' : 'none';
+            $('flow-assign-close').addEventListener('click', () => $('flow-assign-panel').classList.remove('active'));
+            $('flow-assign-download').addEventListener('click', () => this.downloadScenes());
+            $('flow-close-popup').addEventListener('click', () => $('flow-popup').style.display='none');
         }
 
         setupVideoTextWatcher() {
@@ -521,12 +392,10 @@
         // ============================================
         async clickDialogTab(type) {
             let targetTab = null;
-            // Busca no documento inteiro, não só no dialog, porque o Radix usa Portals
             const selector = type === 'image' 
                 ? 'button[role="tab"][aria-controls*="IMAGE"]' 
                 : 'button[role="tab"][aria-controls*="AUDIO"]';
 
-            // Aguarda até 2 segundos a aba aparecer na tela
             for (let i = 0; i < 10; i++) {
                 targetTab = document.querySelector(selector);
                 if (targetTab) break;
@@ -534,20 +403,16 @@
             }
 
             if (!targetTab) {
-                this.logDebug(`⚠️ Aba de ${type} não encontrada.`, 'warn');
+                this.logVideoDebug(`⚠️ Aba de ${type} não encontrada.`, 'warn');
                 return;
             }
 
             const isSelected = targetTab.getAttribute('aria-selected') === 'true' || targetTab.getAttribute('data-state') === 'active';
             if (!isSelected) {
-                this.logDebug(`Migrando para a aba: ${type === 'image' ? 'Imagens' : 'Vozes'}`, 'info');
-                
-                // Simula um clique real de mouse, pois o React/Radix UI ignora .click() simples
+                this.logVideoDebug(`Migrando para a aba: ${type === 'image' ? 'Imagens' : 'Vozes'}`, 'info');
                 targetTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
                 targetTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
                 targetTab.click();
-                
-                // Pausa importante para dar tempo do Radix carregar a lista de vozes/imagens
                 await this.dynamicSleep([800, 1200]); 
             }
         }
@@ -606,7 +471,7 @@
         }
 
         // ============================================
-        // FUNÇÃO NOVA PARA VOZES
+        // FUNÇÃO FIXADA PARA VOZES (Digita Lento e Espera)
         // ============================================
         async searchAndSelectVoice(name) {
             const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
@@ -614,17 +479,21 @@
             await this.dynamicSleep([500, 700]);
             
             const input = dialog.querySelector('input[placeholder*="esquisa"], input[placeholder*="earch"], input[type="text"]');
-            if (!input) throw new Error('Input de pesquisa não encontrado');
+            if (!input) throw new Error('Input de pesquisa de voz não encontrado');
             
             input.focus(); await this.dynamicSleep([250, 400]);
+            
+            // Digita a voz caracter por caracter para engatilhar a busca dinâmica do Radix
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
             setter.call(input, name);
             input.dispatchEvent(new Event('input',  { bubbles:true }));
             input.dispatchEvent(new Event('change', { bubbles:true }));
-            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+            
+            // Pausa MAIOR aqui para o servidor do Google retornar a lista de vozes filtrada
+            await this.dynamicSleep([1500, 2000]); 
             
             let target = null;
-            for (let i = 0; i < 20; i++) {
+            for (let i = 0; i < 25; i++) { // Tentativas estendidas para garantir que ache
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
                 const items = dialog.querySelectorAll('[data-item-index], li, [role="option"], [role="menuitem"], button');
                 if (items.length > 0) {
@@ -632,20 +501,27 @@
                     for (const item of items) {
                         const textContent = (item.textContent || '').toLowerCase();
                         if (textContent.includes(nameLower)) {
-                            target = item.querySelector('div[role="button"]') || item.closest('button, [role="option"]') || item;
+                            // Encontra o botão final clicável
+                            target = item.querySelector('div[role="button"], button') || item.closest('button, [role="option"]') || item;
                             break;
                         }
                     }
                     if (target) break;
                 }
             }
-            if (!target) throw new Error(`Sem resultado para voz "${name}"`);
-            await this.dynamicSleep([250, 400]);
+            
+            if (!target) throw new Error(`Voz "${name}" não apareceu nos resultados da busca.`);
+            await this.dynamicSleep([300, 500]);
+            
+            // Simula clique real de mouse para confirmar a seleção no Radix
+            target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
             target.click();
+            
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                if (!document.querySelector('[role="dialog"]')) return;
+                if (!document.querySelector('[role="dialog"], [role="presentation"]')) return;
             }
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
@@ -708,14 +584,14 @@
                     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
                     
                     for (const seg of segs) {
-                        if (this.shouldStop || this.videoShouldStop) return false;
+                        if (this.videoShouldStop) return false;
                         
                         if (seg.type === 'text') {
                              await this.insertText(seg.content);
                         } else if (seg.type === 'ref') { 
                              await this.openAtSelector(); 
                              await this.clickDialogTab('image'); // GARANTE ABA IMAGEM ANTES DE BUSCAR
-                             await this.searchAndSelect(seg.name); // FUNÇÃO ORIGINAL DE IMAGEM
+                             await this.searchAndSelect(seg.name); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
@@ -728,7 +604,7 @@
                     await this.clickSubmit();
                     return true;
                 } catch (err) {
-                    this.logDebug(`Erro: ${err.message}`, 'error');
+                    this.logVideoDebug(`Erro: ${err.message}`, 'error');
                     if (attempt < MAX_SUBMIT_RETRIES) {
                         const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
                         if (dialog) { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true })); await this.sleep(500); }
@@ -796,7 +672,7 @@
 
             let detected = false;
             while (Date.now() - start < CONFIG.GENERATION_TIMEOUT) {
-                if (this.shouldStop || this.videoShouldStop) return;
+                if (this.videoShouldStop) return;
                 await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
                 if (scroller) scroller.scrollTop = 0;
                 const { loaded, errors, pending } = countStates();
@@ -806,7 +682,7 @@
 
             let lastPending = -1, pendingZeroAt = null;
             while (Date.now() - start < CONFIG.GENERATION_TIMEOUT) {
-                if (this.shouldStop || this.videoShouldStop) return;
+                if (this.videoShouldStop) return;
                 await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
                 if (scroller) scroller.scrollTop = 0;
                 const { loaded, errors, pending } = countStates();
@@ -818,7 +694,7 @@
                 const slot = matrix[i];
                 if (confirmedLoaded.has(i)) { slot.state = 'loaded'; continue; }
                 if (confirmedError.has(i)) { slot.state = 'error'; continue; }
-                if (this.shouldStop || this.videoShouldStop) return;
+                if (this.videoShouldStop) return;
                 
                 const tile = this.getTileAt(slot.row, slot.col);
                 if (!tile) { slot.state = 'error'; continue; }
@@ -899,82 +775,10 @@
         }
 
         // ============================================================
-        // INÍCIO DAS GERAÇÕES
+        // INÍCIO DA GERAÇÃO DE VÍDEOS
         // ============================================================
-        async start() {
-            if (this.videoIsRunning) return;
-            let text = document.getElementById('flow-prompts-input').value;
-            if (this.genMode === 'refs') {
-                const parsed = parseReferenceHeader(text);
-                this.refNames = parsed.refs; this.refAssignments = new Map(); text = parsed.remaining;
-            }
-            this.prompts = parsePromptsText(text);
-            if (!this.prompts.length) return;
-            if (this.genMode === 'scenes') {
-                this.sceneCount = this.prompts.length; this.sceneAssignments = new Map();
-                for (let i = 1; i <= this.sceneCount; i++) this.sceneAssignments.set(`Cena ${i}`, []);
-            }
-
-            this.isRunning = true; this.shouldStop = false;
-            document.getElementById('flow-start-btn').disabled = true; document.getElementById('flow-stop-btn').disabled = false;
-            this.setStatus('info', '🚀 Iniciando...'); this.updateProgress(0); await this.detectGrid();
-
-            const batches = [];
-            for (let i = 0; i < this.prompts.length; i += this.batchSize) batches.push(this.prompts.slice(i, Math.min(i + this.batchSize, this.prompts.length)));
-            const allMatrices = [];
-            const retryCount = {};
-
-            for (let bIdx = 0; bIdx < batches.length; bIdx++) {
-                if (this.shouldStop) break;
-                const batch = batches[bIdx];
-                this.updateProgress(bIdx / batches.length);
-                const beforeUuids = this.snapshotImageUuids();
-                for (let pi = 0; pi < batch.length; pi++) {
-                    if (this.shouldStop) break;
-                    const ok = await this.prepareAndSubmit(batch[pi]);
-                    if (!ok) break;
-                    if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
-                }
-                if (this.shouldStop) break;
-                await this.dynamicSleep([1800, 2500]);
-                const matrix = this.buildPositionMatrix(batch, this.imagesPerPrompt, 0);
-                await this.waitForMatrix(matrix, beforeUuids);
-                if (this.shouldStop) break;
-
-                const failedPrompts = [];
-                for (let bRevIdx = 0; bRevIdx < batch.length; bRevIdx++) {
-                    const prompt = batch[batch.length - 1 - bRevIdx];
-                    if (matrix.filter(s => s.promptNum === prompt.promptNum).every(s => s.state === 'error')) failedPrompts.push(prompt);
-                }
-
-                for (const fp of failedPrompts) {
-                    const key = fp.promptNum;
-                    if (!retryCount[key]) retryCount[key] = 0;
-                    while (retryCount[key] < CONFIG.MAX_RETRIES && !this.shouldStop) {
-                        retryCount[key]++;
-                        const retryBefore = this.snapshotImageUuids();
-                        const ok = await this.prepareAndSubmit(fp);
-                        if (!ok) break;
-                        await this.dynamicSleep([1800, 2500]);
-                        const retryMatrix = this.buildPositionMatrix([fp], this.imagesPerPrompt, 0);
-                        await this.waitForMatrix(retryMatrix, retryBefore);
-                        if (retryMatrix.filter(s => s.state === 'loaded').length >= this.imagesPerPrompt) { allMatrices.push(retryMatrix); break; }
-                    }
-                }
-                allMatrices.push(matrix);
-                if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
-            }
-
-            this.isRunning = false; document.getElementById('flow-start-btn').disabled = false; document.getElementById('flow-stop-btn').disabled = true;
-            this.updateProgress(1);
-            if (!this.shouldStop) {
-                this.setStatus('success', '✅ Geração concluída!');
-                if (this.genMode === 'refs' || this.genMode === 'scenes') this.showAssignPanel(allMatrices);
-            }
-        }
-
         async startVideo() {
-            if (this.isRunning) return;
+            if (this.videoIsRunning) return;
             const text = document.getElementById('fv-prompts-input').value;
             this.videoPrompts = parsePromptsText(text);
             if (!this.videoPrompts.length) return;
@@ -985,7 +789,7 @@
 
             this.videoIsRunning = true; this.videoShouldStop = false;
             document.getElementById('fv-start-btn').disabled = true; document.getElementById('fv-stop-btn').disabled = false;
-            this.setVideoStatus('info', '🚀 Iniciando vídeos...'); this.updateProgress(0); await this.detectGrid();
+            this.setVideoStatus('info', '🚀 Iniciando vídeos...'); this.updateVideoProgress(0); await this.detectGrid();
 
             const batches = [];
             for (let i = 0; i < this.videoPrompts.length; i += this.videoBatchSize) batches.push(this.videoPrompts.slice(i, Math.min(i + this.videoBatchSize, this.videoPrompts.length)));
@@ -995,7 +799,7 @@
             for (let bIdx = 0; bIdx < batches.length; bIdx++) {
                 if (this.videoShouldStop) break;
                 const batch = batches[bIdx];
-                this.updateProgress(bIdx / batches.length);
+                this.updateVideoProgress(bIdx / batches.length);
                 const beforeUuids = this.snapshotImageUuids();
                 for (let pi = 0; pi < batch.length; pi++) {
                     if (this.videoShouldStop) break;
@@ -1034,23 +838,40 @@
             }
 
             this.videoIsRunning = false; document.getElementById('fv-start-btn').disabled = false; document.getElementById('fv-stop-btn').disabled = true;
-            this.updateProgress(1);
+            this.updateVideoProgress(1);
             if (!this.videoShouldStop) {
                 this.setVideoStatus('success', '✅ Geração de vídeos concluída!');
                 if (this.videoGenMode === 'scenes') this.showAssignPanel(allMatrices);
             }
         }
         
-        stop() { this.shouldStop = true; }
         stopVideo() { this.videoShouldStop = true; }
 
         // ============================================================
-        // HELPERS UI E DRAG AND DROP EXTRAS
+        // API (rename + favorite)
         // ============================================================
-        setStatus(type, msg) { const el = document.getElementById('flow-status'); el.className = 'flow-status ' + type; el.innerHTML = msg; }
+        async apiRename(workflowId, newName) {
+            if (!_authToken) return false;
+            const projectId = this.getProjectId(); if (!projectId || !workflowId) return false;
+            try { const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, { method: 'PATCH', headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': _authToken }, body: JSON.stringify({ workflow: { name: workflowId, projectId, metadata: { displayName: newName } }, updateMask: 'metadata.displayName' }) }); return res.ok; } catch(e) { return false; }
+        }
+
+        async apiFavorite(workflowId, favorited) {
+            if (!_authToken) return false;
+            const projectId = this.getProjectId(); if (!projectId || !workflowId) return false;
+            try { const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, { method: 'PATCH', headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': _authToken }, body: JSON.stringify({ workflow: { name: workflowId, projectId, metadata: { favorited: !!favorited } }, updateMask: 'metadata.favorited' }) }); return res.ok; } catch(e) { return false; }
+        }
+        getProjectId() {
+            const m = location.href.match(/project\/([a-f0-9-]{36})/); if (m) return m[1];
+            const link = document.querySelector('a[href*="/project/"]'); if (link) { const m2 = link.href.match(/project\/([a-f0-9-]{36})/); if (m2) return m2[1]; }
+            return null;
+        }
+
+        // ============================================================
+        // HELPERS UI E DRAG AND DROP
+        // ============================================================
         setVideoStatus(type, msg) { const el = document.getElementById('fv-status'); el.className = 'flow-status ' + type; el.innerHTML = msg; }
-        updateProgress(fraction) { const pct = Math.round(fraction * 100); document.getElementById('flow-progress-bar').style.width = pct + '%'; document.getElementById('fv-progress-bar').style.width = pct + '%'; document.getElementById('flow-mini-progress-bar').style.width = pct + '%'; }
-        logDebug(msg, type = 'info') { const panel = document.getElementById('flow-debug-panel'); if (panel) { const line = document.createElement('div'); line.className = `flow-debug-line ${type}`; line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`; panel.appendChild(line); panel.scrollTop = panel.scrollHeight; } if (type === 'error') log.error(msg); else if (type === 'success') log.success(msg); else log.info(msg); }
+        updateVideoProgress(fraction) { const pct = Math.round(fraction * 100); document.getElementById('fv-progress-bar').style.width = pct + '%'; document.getElementById('flow-mini-progress-bar').style.width = pct + '%'; }
         logVideoDebug(msg, type = 'info') { const panel = document.getElementById('fv-debug-panel'); if (panel) { const line = document.createElement('div'); line.className = `flow-debug-line ${type}`; line.textContent = `[${new Date().toLocaleTimeString()}] 🎬 ${msg}`; panel.appendChild(line); panel.scrollTop = panel.scrollHeight; } if (type === 'error') log.error(msg); else if (type === 'success') log.success(msg); else log.info(msg); }
 
         setupDragDrop() {
@@ -1068,10 +889,13 @@
                 const xBtn = e.target.closest('.label-x'); if (!xBtn) return;
                 const label = xBtn.closest('.flow-tile-label'); if (!label) return;
                 const wfId = label.dataset.wf; const type = label.dataset.type; if (!wfId) return;
+                
+                await this.apiRename(wfId, 'Imagem gerada');
+                await this.apiFavorite(wfId, false);
                 label.remove();
-                if (type === 'ref') { const name = label.dataset.name; this.refAssignments.delete(name); } 
+                if (type === 'ref') { const name = label.dataset.name; this.validatedRefs[name] = undefined; } 
                 else if (type === 'scene') {
-                    const sceneName = label.dataset.scene; const arr = this.sceneAssignments.get(sceneName) || this.videoSceneAssignments.get(sceneName);
+                    const sceneName = label.dataset.scene; const arr = this.videoSceneAssignments.get(sceneName);
                     if (arr) { const idx = arr.findIndex(a => a.workflowId === wfId); if (idx >= 0) arr.splice(idx, 1); }
                 }
                 this.tileAssignments.delete(wfId);
@@ -1080,7 +904,9 @@
 
         async assignReference(name, workflowId, tileEl) {
             const apiName = name + CONFIG.REF_SUFFIX;
-            this.refAssignments.set(name, workflowId);
+            await this.apiRename(workflowId, apiName);
+            await this.apiFavorite(workflowId, true);
+            this.validatedRefs[name] = true;
             this.tileAssignments.set(workflowId, { label: name, type: 'ref', name });
             const outer = tileEl.closest('[data-tile-id]') || tileEl;
             outer.style.position = 'relative';
@@ -1089,12 +915,13 @@
         }
 
         async assignScene(sceneNum, sceneName, workflowId, tileEl) {
-            const assignments = this.videoIsRunning ? this.videoSceneAssignments : this.sceneAssignments;
-            const arr = assignments.get(sceneName) || [];
+            const arr = this.videoSceneAssignments.get(sceneName) || [];
             const imgNum = arr.length + 1;
-            const fullName = `Cena ${sceneNum} - ${this.videoIsRunning ? 'Vídeo' : 'Imagem'} ${imgNum}`;
+            const fullName = `Cena ${sceneNum} - Vídeo ${imgNum}`;
+            await this.apiRename(workflowId, fullName);
+            await this.apiFavorite(workflowId, true);
             arr.push({ imgNum, workflowId, src: this.getImgSrcFromTile(tileEl) || '' });
-            assignments.set(sceneName, arr);
+            this.videoSceneAssignments.set(sceneName, arr);
             this.tileAssignments.set(workflowId, { label: fullName, type: 'scene', scene: sceneName, imgNum });
             const outer = tileEl.closest('[data-tile-id]') || tileEl;
             outer.style.position = 'relative';
@@ -1102,11 +929,89 @@
             outer.appendChild(label);
         }
 
-        showAssignPanel() { document.getElementById('flow-assign-panel').classList.add('active'); }
-        async downloadScenes() { alert("Para baixar, ative o botão manualmente ou analise o projeto."); }
-        async downloadProjectImages() { alert("Baixando..."); }
-        async analyzeProject() { alert("Analisado."); }
-        async validateReferences() { alert("Validadas."); }
+        showAssignPanel(allMatrices) {
+            const panel = document.getElementById('flow-assign-panel');
+            const items = document.getElementById('flow-assign-items');
+            document.getElementById('flow-assign-download').style.display = 'inline-flex';
+            document.getElementById('flow-assign-download').disabled = false;
+            items.innerHTML = '';
+            for (const [sceneName] of this.videoSceneAssignments) {
+                const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
+                const item = document.createElement('div');
+                item.className = 'flow-assign-item';
+                item.draggable = true; item.dataset.type = 'scene'; item.dataset.scene = sceneName; item.dataset.sceneNum = sceneNum;
+                item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span>`;
+                item.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum, sceneName })); e.dataTransfer.effectAllowed = 'copy'; });
+                items.appendChild(item);
+            }
+            panel.classList.add('active');
+        }
+
+        async downloadScenes() {
+            const btn = document.getElementById('flow-assign-download');
+            btn.disabled = true; btn.textContent = '⏳ Baixando...';
+            for (const [sceneName, imgs] of [...this.videoSceneAssignments.entries()].sort((a,b) => parseInt(a[0].match(/\d+/)?.[0]||0) - parseInt(b[0].match(/\d+/)?.[0]||0))) {
+                const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
+                const sorted = imgs.sort((a,b) => a.imgNum - b.imgNum);
+                for (let i = 0; i < sorted.length; i++) {
+                    const fileName = i === 0 ? `cena_${sceneNum}.mp4` : `cena_${sceneNum}_${i+1}.mp4`;
+                    if (!sorted[i].src) continue;
+                    try {
+                        const resp = await _origFetch(sorted[i].src);
+                        const blob = await resp.blob(); const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a'); a.href = url; a.download = fileName;
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+                        await this.sleep(400);
+                    } catch(e) { this.logVideoDebug(`Erro download: ${e.message}`, 'error'); }
+                }
+            }
+            btn.disabled = false; btn.textContent = 'Baixar Cenas';
+        }
+
+        async validateReferences() {
+            const btn = document.getElementById('fv-validate-btn');
+            btn.disabled = true; btn.textContent = '⏳ Escaneando...';
+            try {
+                const text = document.getElementById('fv-prompts-input').value;
+                const prompts = parsePromptsText(text); const refs = extractReferences(prompts);
+                if (!refs.length) { btn.disabled = false; btn.textContent = '🔍 Validar referências'; return; }
+                const scroller = this.getScroller(); scroller.scrollTop = scroller.scrollHeight; await this.sleep(600);
+                for (let iter = 0; iter < 100; iter++) {
+                    const prev = scroller.scrollTop; scroller.scrollTop = Math.max(0, scroller.scrollTop - 350); await this.sleep(400);
+                    if (scroller.scrollTop === 0 && prev === 0) break;
+                }
+            } catch (err) {}
+            btn.disabled = false; btn.textContent = '🔍 Validar referências';
+        }
+
+        async analyzeProject() {
+            const btn = document.getElementById('fv-analyze-btn');
+            btn.disabled = true; btn.textContent = '⏳ Analisando...';
+            document.querySelectorAll('.flow-tile-label').forEach(l => l.remove()); this.tileAssignments.clear();
+            const scroller = this.getScroller(); if (!scroller) { btn.disabled=false; btn.textContent='🔍 Analisar'; return; }
+            scroller.scrollTop = 0; await this.sleep(600);
+            for (let iter = 0; iter < 100; iter++) {
+                const prev = scroller.scrollTop; scroller.scrollTop += 350; await this.sleep(400);
+                if (scroller.scrollTop === prev) break;
+            }
+            scroller.scrollTop = 0;
+            document.getElementById('fv-download-section').style.display = '';
+            btn.disabled = false; btn.textContent = '🔍 Analisar projeto';
+        }
+
+        async downloadProjectImages(mode) {
+            const btnId = { identified: 'fv-dl-identified', scenes: 'fv-dl-scenes', all: 'fv-dl-all' }[mode];
+            const btn = document.getElementById(btnId); const origText = btn?.textContent;
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Baixando...'; }
+            if (mode === 'all') {
+                const scroller = this.getScroller(); scroller.scrollTop = 0; await this.sleep(600);
+                for (let iter = 0; iter < 100; iter++) {
+                    const prev = scroller.scrollTop; scroller.scrollTop += 350; await this.sleep(400);
+                    if (scroller.scrollTop === prev) break;
+                }
+            }
+            if (btn) { btn.disabled = false; btn.textContent = origText; }
+        }
     }
 
     new FlowAutomation();
