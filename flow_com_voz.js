@@ -1,6 +1,6 @@
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
-// Versão 4.1 - Fix Clique de Voz (<voz: Nome>)
+// Versão 4.2 - Abas Inteligentes e Tag <voz: Nome>
 // ==========================================
 //
 // ARQUITETURA:
@@ -10,7 +10,7 @@
 //   - Atribuição manual via Drag & Drop após geração
 //   - Labels visuais nos tiles com X para remover
 //   - Referências usam sufixo " _" para identificação
-//   - Vozes usam <voz: Nome> no prompt
+//   - Vozes usam a tag <voz: Nome> no prompt
 //
 (function() {
     'use strict';
@@ -73,7 +73,7 @@
         MAX_RETRIES:           3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.1 (Voice Fix)',
+        VERSION: '4.2 (Smart Tabs + Voz Tag)',
     };
 
     // ============================================================
@@ -83,7 +83,7 @@
     function parsePrompt(prompt) {
         const segs = [];
         // Busca referências em [colchetes] OU vozes em <voz: Nome>
-        const re = /(\[([^\]]+)\]|<voz:\s*([^>]+)>)/g;
+        const re = /(\[([^\]]+)\]|<voz:\s*([^>]+)>)/gi;
         let last = 0, m;
         while ((m = re.exec(prompt)) !== null) {
             if (m.index > last) segs.push({ type:'text', content: prompt.slice(last, m.index) });
@@ -112,7 +112,7 @@
         const s = new Set();
         for (const p of prompts) {
             const t = typeof p === 'string' ? p : p.text;
-             (t.match(/<voz:\s*([^>]+)>/g) || []).forEach(m => s.add(m.replace(/<voz:\s*/, '').replace(/>/, '').trim()));
+             (t.match(/<voz:\s*([^>]+)>/gi) || []).forEach(m => s.add(m.replace(/<voz:\s*/i, '').replace(/>/, '').trim()));
         }
         return [...s];
     }
@@ -646,7 +646,7 @@
             this.setupTextWatcher();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v4.1 (Voice Fix) inicializado!');
+            log.success('Flow Automation v4.2 (Smart Tabs + Voz) inicializado!');
             if (!_authToken) log.warn('Token ainda não capturado — faça qualquer ação na página.');
         }
 
@@ -1133,7 +1133,7 @@
         }
 
         // ──────────────────────────────────────────────
-        // EDITOR (Slate) + SELEÇÃO DE VOZ
+        // EDITOR (Slate) + SELEÇÃO DE MÍDIA/VOZ
         // ──────────────────────────────────────────────
 
         getEditor() { return document.querySelector('[data-slate-editor="true"]'); }
@@ -1166,7 +1166,7 @@
                 let opened = false;
                 for (let i = 0; i < 20; i++) {
                     await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                    if (document.querySelector('[role="dialog"]')) { opened = true; break; }
+                    if (document.querySelector('[role="dialog"], [role="presentation"]')) { opened = true; break; }
                 }
                 if (opened) return;
                 this.logDebug(`⚠️ Diálogo @ não abriu (tentativa ${attempt}/${MAX_AT_RETRIES})`, 'error');
@@ -1181,134 +1181,89 @@
             throw new Error('Diálogo @ não abriu após ' + MAX_AT_RETRIES + ' tentativas');
         }
 
-        async searchAndSelect(name) {
-            const dialog = document.querySelector('[role="dialog"]');
-            if (!dialog) throw new Error('Diálogo @ não aberto');
+        // ==========================================
+        // NOVA FUNÇÃO UNIFICADA E INTELIGENTE
+        // ==========================================
+        async searchAndSelect(name, targetType) {
+            // targetType deve ser 'image' ou 'voice'
+            const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
+            if (!dialog) throw new Error('Diálogo não aberto');
             await this.dynamicSleep([500, 700]);
-            const input = dialog.querySelector('input[placeholder="Pesquisar recursos"]') ||
-                          dialog.querySelector('input[placeholder="Search for Assets"]') ||
-                          dialog.querySelector('input[type="text"]');
+
+            // Mudar de aba se necessário (Lógica Inteligente)
+            const tabs = [...dialog.querySelectorAll('button, [role="tab"]')];
+            const tabKeyword = targetType === 'voice' ? /(voz|voice|áudio|audio)/i : /(imagem|image|foto|photo)/i;
+            
+            const correctTab = tabs.find(t => tabKeyword.test(t.textContent || t.getAttribute('aria-label') || ''));
+            
+            if (correctTab) {
+                // Checa se a aba já não está selecionada (usando atributos comuns de aria)
+                const isSelected = correctTab.getAttribute('aria-selected') === 'true' || 
+                                   correctTab.classList.contains('selected') || 
+                                   correctTab.classList.contains('active');
+                if (!isSelected) {
+                    this.logDebug(`Migrando para a aba de ${targetType === 'voice' ? 'Voz' : 'Imagem'}...`, 'info');
+                    correctTab.click();
+                    await this.dynamicSleep([600, 900]); // Pausa extra para carregar o conteúdo da nova aba
+                }
+            } else {
+                 this.logDebug(`Aba de ${targetType} não encontrada, tentando pesquisar mesmo assim...`, 'warn');
+            }
+
+            // Achar o campo de pesquisa
+            const input = dialog.querySelector('input[placeholder*="esquisa"], input[placeholder*="earch"], input[type="text"]');
             if (!input) throw new Error('Input de pesquisa não encontrado');
-            input.focus(); await this.dynamicSleep([250, 400]);
+            
+            input.focus(); 
+            await this.dynamicSleep([250, 400]);
+            
+            // Digitar o nome
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
             setter.call(input, name);
             input.dispatchEvent(new Event('input',  { bubbles:true }));
             input.dispatchEvent(new Event('change', { bubbles:true }));
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+            
+            // Buscar o resultado na lista
             let target = null;
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                const items = dialog.querySelectorAll('[data-item-index]');
+                const items = dialog.querySelectorAll('[data-item-index], li, [role="option"], [role="menuitem"]');
                 if (items.length > 0) {
                     let bestItem = null;
                     const nameLower = name.toLowerCase().trim();
                     for (const item of items) {
-                        const nameDiv = [...item.querySelectorAll('div')].find(d =>
-                            d.children.length === 0 && d.textContent?.trim().length > 0
-                        );
+                        const textEls = [...item.querySelectorAll('div, span')].filter(el => el.children.length === 0 && el.textContent?.trim().length > 0);
+                        const nameDiv = textEls.find(el => el.textContent.toLowerCase().trim().includes(nameLower));
                         const img = item.querySelector('img');
-                        const itemName = (nameDiv?.textContent || img?.alt || '').trim().toLowerCase();
+                        
+                        const itemName = (nameDiv?.textContent || img?.alt || item.textContent || '').trim().toLowerCase();
                         const cleanName = itemName.replace(/ _$/, '').trim();
-                        if (cleanName === nameLower || itemName === nameLower) {
+                        
+                        if (cleanName.includes(nameLower) || itemName.includes(nameLower)) {
                             bestItem = item;
                             break;
                         }
                     }
                     const chosen = bestItem || items[0];
-                    target = chosen.querySelector('div[role="button"]') || chosen.querySelector('img')?.closest('div') || chosen.querySelector('div');
+                    target = chosen.querySelector('div[role="button"], button') || chosen.closest('button, [role="option"]') || chosen;
                     if (target) break;
                 }
             }
-            if (!target) throw new Error(`Sem resultado para "${name}"`);
+            
+            if (!target) throw new Error(`Sem resultado para "${name}" na aba de ${targetType}`);
             await this.dynamicSleep([250, 400]);
+            
             target.click();
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+            
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                if (!document.querySelector('[role="dialog"]')) return;
+                if (!document.querySelector('[role="dialog"], [role="presentation"]')) return;
             }
-            throw new Error('Diálogo não fechou');
-        }
-        
-        async openVoiceSelectorAndSelect(voiceName) {
-             // O botão correto de voz fica PRÓXIMO ao input de texto
-             // Normalmente tem um role="button" e o texto "Voz" ou "Voice"
-             const editorContainer = this.getEditor()?.closest('div[role="textbox"]')?.parentElement?.parentElement || document.body;
-             
-             const voiceBtn = [...editorContainer.querySelectorAll('button, div[role="button"]')].find(b => 
-                 b.querySelector('span, div')?.textContent?.includes('Voice') || 
-                 b.querySelector('span, div')?.textContent?.includes('Voz') ||
-                 b.getAttribute('aria-label')?.includes('Voice')
-             );
-             
-             if (!voiceBtn) {
-                 this.logDebug(`⚠️ Botão de Voz INLINE não encontrado para selecionar "${voiceName}"`, 'warn');
-                 return false;
-             }
-             
-             voiceBtn.click();
-             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-             
-             let dialog = null;
-             for (let i = 0; i < 15; i++) {
-                await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                dialog = document.querySelector('[role="dialog"], [role="menu"]');
-                if (dialog) break;
-             }
-             
-             if (!dialog) {
-                  this.logDebug(`⚠️ Menu de vozes não abriu`, 'warn');
-                  return false;
-             }
-             
-             // Rola a lista se necessário e procura pelo nome
-             const nameLower = voiceName.toLowerCase().trim();
-             let target = null;
-             
-             // Tenta buscar no menu atual
-             const findVoice = () => {
-                 return [...dialog.querySelectorAll('div, span, li')].find(el => {
-                     // Busca elementos de texto que contenham EXATAMENTE o nome da voz
-                     if (el.children.length === 0 && el.textContent) {
-                         return el.textContent.toLowerCase().trim() === nameLower;
-                     }
-                     return false;
-                 });
-             };
-             
-             target = findVoice();
-             
-             // Se não encontrou de primeira, tenta dar um pequeno scroll (caso o menu seja grande)
-             if (!target) {
-                 const scroller = dialog.querySelector('[data-testid="virtuoso-scroller"], div[style*="overflow: auto"]') || dialog;
-                 if (scroller && scroller !== dialog) {
-                     for(let i=0; i<3; i++) {
-                         scroller.scrollTop += 150;
-                         await this.sleep(300);
-                         target = findVoice();
-                         if (target) break;
-                     }
-                     // Volta pro topo se não achou rolando pra baixo
-                     scroller.scrollTop = 0;
-                 }
-             }
-
-             if (target) {
-                 // Clica no elemento pai mais próximo que seja clicável
-                 const clickable = target.closest('button, [role="menuitem"], [role="option"], [role="button"], li') || target;
-                 clickable.click();
-                 await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-                 
-                 // Aguarda fechar ou fecha manualmente (alguns menus fecham sozinhos após click)
-                 if (document.querySelector('[role="dialog"], [role="menu"]')) {
-                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                 }
-                 return true;
-             } else {
-                 this.logDebug(`⚠️ Voz "${voiceName}" não encontrada na lista`, 'warn');
-                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                 return false;
-             }
+            
+            // Se não fechar, força fechamento
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
 
         async clickSubmit() {
@@ -1333,26 +1288,19 @@
                     await this.clearEditor();
                     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
                     
-                    let voiceToSelect = null;
-                    
                     for (const seg of segs) {
                         if (this.shouldStop || this.videoShouldStop) return false;
                         if (seg.type === 'text') {
                              await this.insertText(seg.content);
                         } else if (seg.type === 'ref') { 
                              await this.openAtSelector(); 
-                             await this.searchAndSelect(seg.name); 
+                             await this.searchAndSelect(seg.name, 'image'); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         } else if (seg.type === 'voice') {
-                             voiceToSelect = seg.name;
+                             await this.openAtSelector(); 
+                             await this.searchAndSelect(seg.name, 'voice');
+                             await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         }
-                    }
-                    
-                    // Se encontrou uma voz no prompt, tenta selecionar ANTES de enviar
-                    if (voiceToSelect && this.videoIsRunning) {
-                         this.logDebug(`Selecionando voz: "${voiceToSelect}"`, 'info');
-                         await this.openVoiceSelectorAndSelect(voiceToSelect);
-                         await this.dynamicSleep(CONFIG.DELAY_SHORT);
                     }
                     
                     await this.clickSubmit();
@@ -1370,7 +1318,7 @@
         }
 
         async resetEditor() {
-            const dialog = document.querySelector('[role="dialog"], [role="menu"]');
+            const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
             if (dialog) {
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
                 await this.sleep(500);
@@ -1405,7 +1353,7 @@
                 }
             }
 
-            const dialog2 = document.querySelector('[role="dialog"], [role="menu"]');
+            const dialog2 = document.querySelector('[role="dialog"], [role="presentation"]');
             if (dialog2) {
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
                 await this.sleep(400);
@@ -1496,7 +1444,7 @@
             document.getElementById('flow-prompts-input').disabled = true;
 
             this.buildPromptList();
-            this.setStatus('info', '🚀 Iniciando automação v4.1...');
+            this.setStatus('info', '🚀 Iniciando automação v4.2...');
             this.updateProgress(0);
             await this.detectGrid();
             const batches = [];
@@ -2508,7 +2456,7 @@
             document.getElementById('fv-prompts-input').disabled = true;
 
             this.buildVideoPromptList();
-            this.setVideoStatus('info', '🚀 Iniciando automação de vídeos v4.1...');
+            this.setVideoStatus('info', '🚀 Iniciando automação de vídeos v4.2...');
             this.updateVideoProgress(0);
             await this.detectGrid();
 
@@ -2850,11 +2798,11 @@
             document.getElementById('fv-queue-info').textContent = `${this.videoPrompts.length} prompts na fila`;
             document.getElementById('fv-prompt-list').innerHTML = this.videoPrompts.map((p, i) => {
                 const refs = (p.text.match(/\[([^\]]+)\]/g) || []).map(m => m.slice(1,-1));
-                const voices = (p.text.match(/<voz:\s*([^>]+)>/g) || []).map(m => m.replace(/<voz:\s*/, '').replace(/>/, '').trim());
+                const voices = (p.text.match(/<voz:\s*([^>]+)>/gi) || []).map(m => m.replace(/<voz:\s*/i, '').replace(/>/, '').trim());
                 
                 return `<div class="flow-prompt-item" data-index="${i}">
                     <span class="num">${p.promptNum}</span>
-                    <span class="text">${this.esc(p.text.replace(/\[([^\]]+)\]/g, '●$1').replace(/<voz:\s*([^>]+)>/g, '🎙️$1'))}</span>
+                    <span class="text">${this.esc(p.text.replace(/\[([^\]]+)\]/g, '●$1').replace(/<voz:\s*([^>]+)>/gi, '🎙️$1'))}</span>
                     <span class="refs">
                         ${refs.map(r => `<span class="ref-badge">${this.esc(r)}</span>`).join('')}
                         ${voices.map(v => `<span class="voice-badge">🎙️ ${this.esc(v)}</span>`).join('')}
