@@ -1,6 +1,6 @@
 // ==========================================
 // FLOW VIDEO AUTOMATION - CRIADORES DARK
-// Versão 5.0 - Foco Total em Vídeo + Fix Pesquisa de Voz
+// Versão 5.1 - Foco em Vídeos + Restauração Original
 // ==========================================
 (function() {
     'use strict';
@@ -53,8 +53,8 @@
 
     const CONFIG = {
         DELAY_SHORT:           [300, 500],
-        DELAY_MEDIUM:          [600, 900], // Aumentei um pouco para dar tempo ao Radix de pesquisar
-        DELAY_LONG:            [1200, 1800],
+        DELAY_MEDIUM:          [500, 800],
+        DELAY_LONG:            [1000, 1500],
         DELAY_BETWEEN_SUBMITS: [3500, 5000],
         DELAY_BETWEEN_BATCHES: [2500, 3500],
         GENERATION_TIMEOUT:    180000,
@@ -63,7 +63,7 @@
         MAX_RETRIES:           3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '5.0 (Vídeo Only + Fast Search Fix)',
+        VERSION: '5.1 (Vídeo Only + Original Restore)',
     };
 
     // ============================================================
@@ -150,7 +150,7 @@
 .flow-card-title{font-size:14px;font-weight:600;color:var(--cd-text);margin:0;}
 .flow-card-description{font-size:12px;color:var(--cd-text-muted);margin:4px 0 0;}
 .flow-card-content{padding:8px 16px 16px;}
-.flow-textarea{width:100%;min-height:300px;border:1px solid var(--cd-border);border-radius:var(--cd-radius-xs);padding:12px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;outline:none;}
+.flow-textarea{width:100%;min-height:250px;border:1px solid var(--cd-border);border-radius:var(--cd-radius-xs);padding:12px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;outline:none;}
 .flow-ref-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
 .flow-ref-tag{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:500;border:1px solid;}
 .flow-ref-tag.found{background:#ecfdf5;color:#065f46;border-color:#a7f3d0;}
@@ -182,7 +182,6 @@
 .flow-logs-container.visible{display:block;}
 .flow-debug-panel{max-height:180px;overflow-y:auto;font-family:monospace;font-size:11px;background:#0f172a;color:#e2e8f0;border-radius:var(--cd-radius-xs);padding:12px;}
 .flow-debug-panel::-webkit-scrollbar{width:4px;}
-.flow-debug-panel::-webkit-scrollbar-thumb{background:#334155;border-radius:4px;}
 .flow-debug-line{padding:1px 0;}
 .flow-debug-line.error{color:#f87171;}
 .flow-debug-line.success{color:#4ade80;}
@@ -215,7 +214,7 @@
       <div class="flow-logo"><svg viewBox="0 0 24 24"><polygon points="8,6 20,12 8,18" fill="none" stroke="#10b981" stroke-width="2.5"/></svg></div>
       <div>
         <div class="flow-header-title">Criadores Dark</div>
-        <div class="flow-header-subtitle">Flow Vídeo Automation</div>
+        <div class="flow-header-subtitle">Flow Vídeos</div>
       </div>
     </div>
     <button class="flow-close-btn" id="flow-close">X</button>
@@ -268,7 +267,7 @@
           </div>
           <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
             <input type="checkbox" id="fv-show-logs">
-            <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Mostrar logs de sistema</div>
+            <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Mostrar logs do sistema</div>
           </label>
         </div>
       </div>
@@ -314,7 +313,7 @@
         constructor() {
             this.gridCols = 3; this.rowHeight = 347;
             this.tileAssignments = new Map();
-            this.validatedRefs = {};
+            this.validatedRefs = {}; // RESTAURADO O ESTADO ORIGINAL
             
             this.videoIsRunning = false; this.videoShouldStop = false;
             this.videoPrompts = []; this.videoGenMode = 'free';
@@ -324,7 +323,7 @@
             this.initUI();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v5.0 (Vídeo Only) inicializado!');
+            log.success('Flow Automation v5.1 (Vídeo Only) inicializado!');
             if (!_authToken) log.warn('Token não capturado.');
         }
 
@@ -351,7 +350,7 @@
             $('fv-results-per-prompt').addEventListener('change', e => this.videoResultsPerPrompt = parseInt(e.target.value));
             $('fv-start-btn').addEventListener('click', () => this.startVideo());
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
-            $('fv-validate-btn').addEventListener('click', () => this.validateReferences());
+            $('fv-validate-btn').addEventListener('click', () => this.validateReferences()); // AGORA CHAMA A FUNÇÃO REAL
             $('fv-analyze-btn').addEventListener('click', () => this.analyzeProject());
             $('fv-dl-identified').addEventListener('click', () => this.downloadProjectImages('identified'));
             $('fv-dl-scenes').addEventListener('click', () => this.downloadProjectImages('scenes'));
@@ -367,17 +366,29 @@
             ta.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => this.updateVideoReferences(), 300); });
         }
 
+        // ============================================
+        // RESTAURADO: CORES VERDE/VERMELHO NO PAINEL
+        // ============================================
         updateVideoReferences() {
             const text = document.getElementById('fv-prompts-input').value;
             const prompts = parsePromptsText(text); 
             const refs = extractReferences(prompts); const voices = extractVoices(prompts);
             document.getElementById('fv-prompt-count').textContent = `${prompts.length} prompt(s) detectado(s)`;
             const list = document.getElementById('fv-ref-list');
+            
             if (!refs.length && !voices.length) {
                 list.innerHTML = '<span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span>';
             } else {
-                let html = refs.map(r => `<span class="flow-ref-tag pending">⏳ ${r}</span>`).join('');
-                html += voices.map(v => `<span class="flow-voice-tag">🎙️ ${v}</span>`).join('');
+                // Para Imagens: Usa a lógica exata do original para pintar de Verde/Vermelho
+                let html = refs.map(r => {
+                    const s = this.validatedRefs[r.toLowerCase()];
+                    const cls  = s === true ? 'found'   : s === false ? 'missing'  : 'pending';
+                    const icon = s === true ? '✅'      : s === false ? '❌'       : '⏳';
+                    return `<span class="flow-ref-tag ${cls}">${icon} ${this.esc(r)}</span>`;
+                }).join('');
+                
+                // Para Vozes: Fica sempre em tag azul, já que não é validada na galeria
+                html += voices.map(v => `<span class="flow-voice-tag">🎙️ ${this.esc(v)}</span>`).join('');
                 list.innerHTML = html;
             }
         }
@@ -388,7 +399,7 @@
         esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
         // ============================================
-        // O SEGREDO DAS ABAS (CORREÇÃO RADIX UI)
+        // O SEGREDO DAS ABAS 
         // ============================================
         async clickDialogTab(type) {
             let targetTab = null;
@@ -410,8 +421,6 @@
             const isSelected = targetTab.getAttribute('aria-selected') === 'true' || targetTab.getAttribute('data-state') === 'active';
             if (!isSelected) {
                 this.logVideoDebug(`Migrando para a aba: ${type === 'image' ? 'Imagens' : 'Vozes'}`, 'info');
-                targetTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-                targetTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
                 targetTab.click();
                 await this.dynamicSleep([800, 1200]); 
             }
@@ -471,7 +480,7 @@
         }
 
         // ============================================
-        // FUNÇÃO FIXADA PARA VOZES (Digita Lento e Espera)
+        // FUNÇÃO NOVA PARA VOZES - MESMO PRINCÍPIO DE CLICK
         // ============================================
         async searchAndSelectVoice(name) {
             const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
@@ -482,46 +491,37 @@
             if (!input) throw new Error('Input de pesquisa de voz não encontrado');
             
             input.focus(); await this.dynamicSleep([250, 400]);
-            
-            // Digita a voz caracter por caracter para engatilhar a busca dinâmica do Radix
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
             setter.call(input, name);
             input.dispatchEvent(new Event('input',  { bubbles:true }));
             input.dispatchEvent(new Event('change', { bubbles:true }));
-            
-            // Pausa MAIOR aqui para o servidor do Google retornar a lista de vozes filtrada
-            await this.dynamicSleep([1500, 2000]); 
+            await this.dynamicSleep([1000, 1500]); // Delay para carregar as vozes na lista
             
             let target = null;
-            for (let i = 0; i < 25; i++) { // Tentativas estendidas para garantir que ache
+            for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                const items = dialog.querySelectorAll('[data-item-index], li, [role="option"], [role="menuitem"], button');
+                const items = dialog.querySelectorAll('button');
                 if (items.length > 0) {
                     const nameLower = name.toLowerCase().trim();
-                    for (const item of items) {
-                        const textContent = (item.textContent || '').toLowerCase();
-                        if (textContent.includes(nameLower)) {
-                            // Encontra o botão final clicável
-                            target = item.querySelector('div[role="button"], button') || item.closest('button, [role="option"]') || item;
+                    for (const btn of items) {
+                        if (btn.textContent && btn.textContent.toLowerCase().includes(nameLower)) {
+                            target = btn;
                             break;
                         }
                     }
                     if (target) break;
                 }
             }
+            if (!target) throw new Error(`Sem resultado para voz "${name}"`);
+            await this.dynamicSleep([250, 400]);
             
-            if (!target) throw new Error(`Voz "${name}" não apareceu nos resultados da busca.`);
-            await this.dynamicSleep([300, 500]);
-            
-            // Simula clique real de mouse para confirmar a seleção no Radix
-            target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-            target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            // O MESMO CLIQUE LIMPO USADO NA IMAGEM
             target.click();
             
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                if (!document.querySelector('[role="dialog"], [role="presentation"]')) return;
+                if (!document.querySelector('[role="dialog"]')) return;
             }
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
@@ -590,13 +590,13 @@
                              await this.insertText(seg.content);
                         } else if (seg.type === 'ref') { 
                              await this.openAtSelector(); 
-                             await this.clickDialogTab('image'); // GARANTE ABA IMAGEM ANTES DE BUSCAR
+                             await this.clickDialogTab('image'); // GARANTE ABA IMAGEM
                              await this.searchAndSelect(seg.name); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
-                             await this.clickDialogTab('voice'); // GARANTE ABA VOZ ANTES DE BUSCAR
-                             await this.searchAndSelectVoice(seg.name); 
+                             await this.clickDialogTab('voice'); // GARANTE ABA VOZ
+                             await this.searchAndSelectVoice(seg.name); // CLIQUE ORIGINAL RESTAURADO
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         }
                     }
@@ -968,48 +968,211 @@
             btn.disabled = false; btn.textContent = 'Baixar Cenas';
         }
 
+        // ============================================
+        // RESTAURADO: VALIDAÇÃO REAL NA GALERIA 
+        // ============================================
         async validateReferences() {
             const btn = document.getElementById('fv-validate-btn');
-            btn.disabled = true; btn.textContent = '⏳ Escaneando...';
+            btn.disabled = true; btn.textContent = '⏳ Escaneando galeria...';
             try {
                 const text = document.getElementById('fv-prompts-input').value;
-                const prompts = parsePromptsText(text); const refs = extractReferences(prompts);
-                if (!refs.length) { btn.disabled = false; btn.textContent = '🔍 Validar referências'; return; }
-                const scroller = this.getScroller(); scroller.scrollTop = scroller.scrollHeight; await this.sleep(600);
-                for (let iter = 0; iter < 100; iter++) {
-                    const prev = scroller.scrollTop; scroller.scrollTop = Math.max(0, scroller.scrollTop - 350); await this.sleep(400);
+                const prompts = parsePromptsText(text);
+                const refs = extractReferences(prompts);
+                
+                if (!refs.length) { 
+                    this.validatedRefs = {}; 
+                    this.updateVideoReferences(); 
+                    btn.disabled = false; 
+                    btn.textContent = '🔍 Validar referências na galeria'; 
+                    return; 
+                }
+                
+                const pending = new Set(refs.map(r => r.toLowerCase().trim()));
+                const found = new Set();
+                const checkedTileIds = new Set();
+                const scroller = this.getScroller();
+                
+                if (!scroller) throw new Error('Scroller não encontrado');
+                
+                scroller.scrollTop = scroller.scrollHeight; 
+                await this.sleep(600);
+                
+                for (let iter = 0; iter < 200 && pending.size > 0; iter++) {
+                    const tiles = [...document.querySelectorAll('[data-tile-id]')].filter(el => el.parentElement.closest('[data-tile-id]'));
+                    for (const tile of tiles) {
+                        if (!pending.size) break;
+                        const id = tile.getAttribute('data-tile-id');
+                        if (checkedTileIds.has(id)) continue;
+                        checkedTileIds.add(id);
+                        
+                        // Busca o nome do tile
+                        tile.dispatchEvent(new MouseEvent('mouseover', { bubbles:true }));
+                        tile.dispatchEvent(new MouseEvent('mouseenter', { bubbles:true }));
+                        await this.sleep(100);
+                        let name = null;
+                        for (const div of tile.querySelectorAll('div')) {
+                            const t = div.textContent?.trim();
+                            if (t && t.length > 0 && t.length < 80 && !div.querySelector('i, svg, button')) {
+                                name = t; break;
+                            }
+                        }
+                        tile.dispatchEvent(new MouseEvent('mouseleave', { bubbles:true }));
+                        
+                        if (!name) continue;
+                        
+                        const lc = name.toLowerCase().trim().replace(/ _$/, '');
+                        if (pending.has(lc)) {
+                            pending.delete(lc); found.add(lc);
+                            btn.textContent = `⏳ ${found.size}/${refs.length}`;
+                            const wfId = this.getWorkflowIdFromTile(tile);
+                            const originalName = refs.find(r => r.toLowerCase().trim() === lc) || name.replace(/ _$/, '');
+                            if (wfId) {
+                                const outer = tile.closest('[data-tile-id]') || tile;
+                                this.tileAssignments.set(wfId, { label: originalName, type: 'ref', name: originalName });
+                                this.addLabelToTile(outer, originalName, wfId, 'ref', originalName);
+                            }
+                        }
+                    }
+                    const prev = scroller.scrollTop;
+                    scroller.scrollTop = Math.max(0, scroller.scrollTop - 350); 
+                    await this.sleep(400);
                     if (scroller.scrollTop === 0 && prev === 0) break;
                 }
-            } catch (err) {}
-            btn.disabled = false; btn.textContent = '🔍 Validar referências';
+                
+                this.validatedRefs = {};
+                for (const ref of refs) this.validatedRefs[ref.toLowerCase()] = found.has(ref.toLowerCase().trim());
+                this.updateVideoReferences();
+                
+                if (!pending.size) this.setVideoStatus('success', `✅ Todas as ${refs.length} referências encontradas!`);
+                else this.setVideoStatus('error', `❌ Não encontradas: ${refs.filter(r => pending.has(r.toLowerCase().trim())).join(', ')}`);
+                
+                scroller.scrollTop = 0;
+            } catch (err) { 
+                this.setVideoStatus('error', 'Erro: ' + err.message); 
+            }
+            btn.disabled = false; btn.textContent = '🔍 Validar referências na galeria';
         }
 
+        // ============================================
+        // RESTAURADO: ANÁLISE REAL DA GALERIA 
+        // ============================================
         async analyzeProject() {
             const btn = document.getElementById('fv-analyze-btn');
             btn.disabled = true; btn.textContent = '⏳ Analisando...';
             document.querySelectorAll('.flow-tile-label').forEach(l => l.remove()); this.tileAssignments.clear();
-            const scroller = this.getScroller(); if (!scroller) { btn.disabled=false; btn.textContent='🔍 Analisar'; return; }
+            const scroller = this.getScroller(); 
+            if (!scroller) { btn.disabled=false; btn.textContent='🔍 Analisar galeria existente'; return; }
+            
+            let labelsFound = 0;
+            const checkedIds = new Set();
             scroller.scrollTop = 0; await this.sleep(600);
-            for (let iter = 0; iter < 100; iter++) {
+            
+            for (let iter = 0; iter < 300; iter++) {
+                const tiles = [...document.querySelectorAll('[data-tile-id]')].filter(el => el.parentElement.closest('[data-tile-id]'));
+                for (const tile of tiles) {
+                    const tileId = tile.getAttribute('data-tile-id');
+                    if (checkedIds.has(tileId)) continue;
+                    checkedIds.add(tileId);
+
+                    tile.dispatchEvent(new MouseEvent('mouseover', { bubbles:true }));
+                    await this.sleep(50);
+                    let name = null;
+                    for (const div of tile.querySelectorAll('div')) {
+                        const t = div.textContent?.trim();
+                        if (t && t.length > 0 && t.length < 80 && !div.querySelector('i, svg, button')) {
+                            name = t; break;
+                        }
+                    }
+                    tile.dispatchEvent(new MouseEvent('mouseleave', { bubbles:true }));
+                    
+                    if (!name) continue;
+
+                    const wfId = this.getWorkflowIdFromTile(tile);
+                    let labelText = null, type = null, extra = null;
+
+                    const sceneMatch = name.match(/^Cena\s+(\d+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)$/i);
+                    if (sceneMatch) {
+                        labelText = name; type = 'scene'; extra = `Cena ${sceneMatch[1]}`;
+                    } else if (name.endsWith(CONFIG.REF_SUFFIX)) {
+                        const cleanName = name.slice(0, -CONFIG.REF_SUFFIX.length);
+                        labelText = cleanName; type = 'ref'; extra = cleanName;
+                    }
+
+                    if (labelText && type && wfId) {
+                        const outer = tile.closest('[data-tile-id]') || tile;
+                        this.addLabelToTile(outer, labelText, wfId, type, extra);
+                        this.tileAssignments.set(wfId, { label: labelText, type, name: extra, scene: extra });
+                        labelsFound++;
+                        btn.textContent = `⏳ ${labelsFound} encontrada(s)...`;
+                    }
+                }
                 const prev = scroller.scrollTop; scroller.scrollTop += 350; await this.sleep(400);
                 if (scroller.scrollTop === prev) break;
             }
             scroller.scrollTop = 0;
+            this.setVideoStatus('success', `✅ Análise concluída: ${labelsFound} item(ns) identificado(s).`);
             document.getElementById('fv-download-section').style.display = '';
-            btn.disabled = false; btn.textContent = '🔍 Analisar projeto';
+            btn.disabled = false; btn.textContent = '🔍 Analisar galeria existente';
         }
 
+        // ============================================
+        // RESTAURADO: DOWNLOAD DA GALERIA
+        // ============================================
         async downloadProjectImages(mode) {
             const btnId = { identified: 'fv-dl-identified', scenes: 'fv-dl-scenes', all: 'fv-dl-all' }[mode];
             const btn = document.getElementById(btnId); const origText = btn?.textContent;
             if (btn) { btn.disabled = true; btn.textContent = '⏳ Baixando...'; }
-            if (mode === 'all') {
-                const scroller = this.getScroller(); scroller.scrollTop = 0; await this.sleep(600);
-                for (let iter = 0; iter < 100; iter++) {
+            
+            try {
+                const scroller = this.getScroller();
+                if (!scroller) return;
+                scroller.scrollTop = 0; await this.sleep(600);
+                
+                let count = 0;
+                let downloaded = new Set();
+                
+                for (let iter = 0; iter < 500; iter++) {
+                    const tiles = [...document.querySelectorAll('[data-tile-id]')].filter(el => el.parentElement.closest('[data-tile-id]'));
+                    for (const tile of tiles) {
+                        if (!this.isTileLoaded(tile)) continue;
+                        const uuid = this.getUuidFromTile(tile);
+                        if (!uuid || downloaded.has(uuid)) continue;
+
+                        const wfId = this.getWorkflowIdFromTile(tile);
+                        const data = wfId ? this.tileAssignments.get(wfId) : null;
+                        
+                        if (mode === 'identified' && !data) continue;
+                        if (mode === 'scenes' && data?.type !== 'scene') continue;
+                        
+                        downloaded.add(uuid);
+                        const mediaSrc = this.getMediaSrcFromTile(tile);
+                        if (!mediaSrc) continue;
+
+                        let fileName = `media_${count + 1}.mp4`;
+                        if (data?.type === 'scene') {
+                            const sm = data.label.match(/Cena\s+(\d+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)/i);
+                            if (sm) fileName = parseInt(sm[2]) === 1 ? `cena_${sm[1]}.mp4` : `cena_${sm[1]}_${sm[2]}.mp4`;
+                            else fileName = `cena_${data.label.replace(/\s+/g, '_')}.mp4`;
+                        } else if (data?.type === 'ref') {
+                            const clean = (data.name || data.label).replace(/ _$/, '').trim();
+                            fileName = `referencia_${clean.toLowerCase().replace(/\s+/g, '_')}.jpg`;
+                        }
+
+                        try {
+                            const resp = await _origFetch(mediaSrc);
+                            const blob = await resp.blob(); const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a'); a.href = url; a.download = fileName;
+                            document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+                            count++;
+                            if (btn) btn.textContent = `⏳ ${count} baixada(s)...`;
+                            await this.sleep(300);
+                        } catch(e) {}
+                    }
                     const prev = scroller.scrollTop; scroller.scrollTop += 350; await this.sleep(400);
                     if (scroller.scrollTop === prev) break;
                 }
-            }
+                scroller.scrollTop = 0;
+            } catch(e) {}
             if (btn) { btn.disabled = false; btn.textContent = origText; }
         }
     }
