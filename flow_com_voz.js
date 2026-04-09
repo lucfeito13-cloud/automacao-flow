@@ -1,6 +1,6 @@
 // ==========================================
 // FLOW VIDEO AUTOMATION - CRIADORES DARK
-// Versão 5.1 - Foco em Vídeos + Restauração Original
+// Versão 6.0 - Exclusiva para Vídeos + Voz Fix
 // ==========================================
 (function() {
     'use strict';
@@ -63,7 +63,7 @@
         MAX_RETRIES:           3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '5.1 (Vídeo Only + Original Restore)',
+        VERSION: '6.0 (Vídeo Only + Smart Voice)',
     };
 
     // ============================================================
@@ -125,7 +125,7 @@
     }
 
     // ============================================================
-    // CSS E HTML ENXUTO (Apenas aba de Vídeo)
+    // CSS E HTML (Exclusivo para Vídeos)
     // ============================================================
     const css = `
 :root{--cd-primary:#10b981;--cd-primary-dark:#059669;--cd-primary-light:#34d399;--cd-bg:#fff;--cd-bg-secondary:#f8fafc;--cd-bg-card:#fff;--cd-border:#e2e8f0;--cd-border-light:#f1f5f9;--cd-text:#1e293b;--cd-text-muted:#64748b;--cd-text-light:#94a3b8;--cd-shadow:0 10px 40px -10px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.05);--cd-radius:16px;--cd-radius-sm:12px;--cd-radius-xs:8px;}
@@ -150,7 +150,7 @@
 .flow-card-title{font-size:14px;font-weight:600;color:var(--cd-text);margin:0;}
 .flow-card-description{font-size:12px;color:var(--cd-text-muted);margin:4px 0 0;}
 .flow-card-content{padding:8px 16px 16px;}
-.flow-textarea{width:100%;min-height:250px;border:1px solid var(--cd-border);border-radius:var(--cd-radius-xs);padding:12px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;outline:none;}
+.flow-textarea{width:100%;min-height:220px;border:1px solid var(--cd-border);border-radius:var(--cd-radius-xs);padding:12px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;outline:none;}
 .flow-ref-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
 .flow-ref-tag{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:500;border:1px solid;}
 .flow-ref-tag.found{background:#ecfdf5;color:#065f46;border-color:#a7f3d0;}
@@ -214,7 +214,7 @@
       <div class="flow-logo"><svg viewBox="0 0 24 24"><polygon points="8,6 20,12 8,18" fill="none" stroke="#10b981" stroke-width="2.5"/></svg></div>
       <div>
         <div class="flow-header-title">Criadores Dark</div>
-        <div class="flow-header-subtitle">Flow Vídeos</div>
+        <div class="flow-header-subtitle">Flow Vídeo Automation</div>
       </div>
     </div>
     <button class="flow-close-btn" id="flow-close">X</button>
@@ -267,7 +267,7 @@
           </div>
           <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
             <input type="checkbox" id="fv-show-logs">
-            <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Mostrar logs do sistema</div>
+            <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Mostrar logs de sistema</div>
           </label>
         </div>
       </div>
@@ -285,7 +285,6 @@
         <div class="flow-card-header"><h3 class="flow-card-title">Analisar Projeto (Atribuições)</h3></div>
         <div class="flow-card-content">
           <button class="flow-validate-btn" id="fv-analyze-btn">🔍 Analisar galeria existente</button>
-          <button class="flow-validate-btn" id="fv-reopen-assign" style="display:none;margin-top:6px;">📋 Reabrir painel de Cenas</button>
           <div id="fv-download-section" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px;">⬇️ Baixar Vídeos do Projeto</div>
             <div style="display:flex;flex-direction:column;gap:6px;">
@@ -313,7 +312,9 @@
         constructor() {
             this.gridCols = 3; this.rowHeight = 347;
             this.tileAssignments = new Map();
-            this.validatedRefs = {}; // RESTAURADO O ESTADO ORIGINAL
+            
+            // O segredo das cores: Volta a usar a variável original
+            this.validatedRefs = {}; 
             
             this.videoIsRunning = false; this.videoShouldStop = false;
             this.videoPrompts = []; this.videoGenMode = 'free';
@@ -323,7 +324,7 @@
             this.initUI();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v5.1 (Vídeo Only) inicializado!');
+            log.success('Flow Automation v6.0 (Vídeo Only + Smart Voice) inicializado!');
             if (!_authToken) log.warn('Token não capturado.');
         }
 
@@ -350,7 +351,7 @@
             $('fv-results-per-prompt').addEventListener('change', e => this.videoResultsPerPrompt = parseInt(e.target.value));
             $('fv-start-btn').addEventListener('click', () => this.startVideo());
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
-            $('fv-validate-btn').addEventListener('click', () => this.validateReferences()); // AGORA CHAMA A FUNÇÃO REAL
+            $('fv-validate-btn').addEventListener('click', () => this.validateReferences());
             $('fv-analyze-btn').addEventListener('click', () => this.analyzeProject());
             $('fv-dl-identified').addEventListener('click', () => this.downloadProjectImages('identified'));
             $('fv-dl-scenes').addEventListener('click', () => this.downloadProjectImages('scenes'));
@@ -367,19 +368,21 @@
         }
 
         // ============================================
-        // RESTAURADO: CORES VERDE/VERMELHO NO PAINEL
+        // RESTAURAÇÃO: CORES VERDE E VERMELHA ORIGINAIS
         // ============================================
         updateVideoReferences() {
             const text = document.getElementById('fv-prompts-input').value;
             const prompts = parsePromptsText(text); 
-            const refs = extractReferences(prompts); const voices = extractVoices(prompts);
+            const refs = extractReferences(prompts); 
+            const voices = extractVoices(prompts);
+            
             document.getElementById('fv-prompt-count').textContent = `${prompts.length} prompt(s) detectado(s)`;
             const list = document.getElementById('fv-ref-list');
             
             if (!refs.length && !voices.length) {
                 list.innerHTML = '<span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span>';
             } else {
-                // Para Imagens: Usa a lógica exata do original para pintar de Verde/Vermelho
+                // A mesma lógica intacta da sua versão original para imagens
                 let html = refs.map(r => {
                     const s = this.validatedRefs[r.toLowerCase()];
                     const cls  = s === true ? 'found'   : s === false ? 'missing'  : 'pending';
@@ -387,7 +390,7 @@
                     return `<span class="flow-ref-tag ${cls}">${icon} ${this.esc(r)}</span>`;
                 }).join('');
                 
-                // Para Vozes: Fica sempre em tag azul, já que não é validada na galeria
+                // Para Vozes: Fica sempre com a tag azulzinha de microfone
                 html += voices.map(v => `<span class="flow-voice-tag">🎙️ ${this.esc(v)}</span>`).join('');
                 list.innerHTML = html;
             }
@@ -399,10 +402,11 @@
         esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
         // ============================================
-        // O SEGREDO DAS ABAS 
+        // O SEGREDO DAS ABAS (FORÇAR CLIQUE NO RADIX)
         // ============================================
         async clickDialogTab(type) {
             let targetTab = null;
+            // Busca no documento inteiro usando o seletor exato do Radix
             const selector = type === 'image' 
                 ? 'button[role="tab"][aria-controls*="IMAGE"]' 
                 : 'button[role="tab"][aria-controls*="AUDIO"]';
@@ -421,7 +425,13 @@
             const isSelected = targetTab.getAttribute('aria-selected') === 'true' || targetTab.getAttribute('data-state') === 'active';
             if (!isSelected) {
                 this.logVideoDebug(`Migrando para a aba: ${type === 'image' ? 'Imagens' : 'Vozes'}`, 'info');
+                
+                // Simula um clique real de mouse, pois o React/Radix UI ignora .click() simples
+                targetTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                targetTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
                 targetTab.click();
+                
+                // Pausa importante para dar tempo da aba abrir
                 await this.dynamicSleep([800, 1200]); 
             }
         }
@@ -480,7 +490,7 @@
         }
 
         // ============================================
-        // FUNÇÃO NOVA PARA VOZES - MESMO PRINCÍPIO DE CLICK
+        // FUNÇÃO FIXADA PARA VOZES - USA A MESMA MIRA DA IMAGEM
         // ============================================
         async searchAndSelectVoice(name) {
             const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
@@ -491,37 +501,46 @@
             if (!input) throw new Error('Input de pesquisa de voz não encontrado');
             
             input.focus(); await this.dynamicSleep([250, 400]);
+            
+            // Digita a voz
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
             setter.call(input, name);
             input.dispatchEvent(new Event('input',  { bubbles:true }));
             input.dispatchEvent(new Event('change', { bubbles:true }));
-            await this.dynamicSleep([1000, 1500]); // Delay para carregar as vozes na lista
+            
+            // Pausa para dar tempo do Radix filtrar e mostrar "a única caixa que está aparecendo"
+            await this.dynamicSleep([1500, 2000]); 
             
             let target = null;
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                const items = dialog.querySelectorAll('button');
+                const items = dialog.querySelectorAll('[data-item-index], li, [role="option"], [role="menuitem"], button');
                 if (items.length > 0) {
                     const nameLower = name.toLowerCase().trim();
-                    for (const btn of items) {
-                        if (btn.textContent && btn.textContent.toLowerCase().includes(nameLower)) {
-                            target = btn;
+                    for (const item of items) {
+                        const textContent = (item.textContent || '').toLowerCase();
+                        if (textContent.includes(nameLower)) {
+                            // Encontra o botão final clicável - igual na imagem!
+                            target = item.querySelector('div[role="button"], button') || item.closest('button, [role="option"]') || item;
                             break;
                         }
                     }
                     if (target) break;
                 }
             }
-            if (!target) throw new Error(`Sem resultado para voz "${name}"`);
+            
+            if (!target) throw new Error(`Voz "${name}" não apareceu nos resultados da busca.`);
             await this.dynamicSleep([250, 400]);
             
-            // O MESMO CLIQUE LIMPO USADO NA IMAGEM
+            // O MESMO CLIQUE DA IMAGEM (com um reforço do mousedown do radix)
+            target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
             target.click();
             
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                if (!document.querySelector('[role="dialog"]')) return;
+                if (!document.querySelector('[role="dialog"], [role="presentation"]')) return;
             }
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
@@ -590,13 +609,13 @@
                              await this.insertText(seg.content);
                         } else if (seg.type === 'ref') { 
                              await this.openAtSelector(); 
-                             await this.clickDialogTab('image'); // GARANTE ABA IMAGEM
+                             await this.clickDialogTab('image'); // GARANTE ABA IMAGEM ANTES DE BUSCAR
                              await this.searchAndSelect(seg.name); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
-                             await this.clickDialogTab('voice'); // GARANTE ABA VOZ
-                             await this.searchAndSelectVoice(seg.name); // CLIQUE ORIGINAL RESTAURADO
+                             await this.clickDialogTab('voice'); // GARANTE ABA VOZ ANTES DE BUSCAR
+                             await this.searchAndSelectVoice(seg.name); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         }
                     }
@@ -969,7 +988,7 @@
         }
 
         // ============================================
-        // RESTAURADO: VALIDAÇÃO REAL NA GALERIA 
+        // RESTAURAÇÃO: VALIDAÇÃO REAL NA GALERIA 
         // ============================================
         async validateReferences() {
             const btn = document.getElementById('fv-validate-btn');
@@ -1005,7 +1024,6 @@
                         if (checkedTileIds.has(id)) continue;
                         checkedTileIds.add(id);
                         
-                        // Busca o nome do tile
                         tile.dispatchEvent(new MouseEvent('mouseover', { bubbles:true }));
                         tile.dispatchEvent(new MouseEvent('mouseenter', { bubbles:true }));
                         await this.sleep(100);
@@ -1054,7 +1072,7 @@
         }
 
         // ============================================
-        // RESTAURADO: ANÁLISE REAL DA GALERIA 
+        // RESTAURAÇÃO: ANÁLISE REAL DA GALERIA 
         // ============================================
         async analyzeProject() {
             const btn = document.getElementById('fv-analyze-btn');
@@ -1116,7 +1134,7 @@
         }
 
         // ============================================
-        // RESTAURADO: DOWNLOAD DA GALERIA
+        // RESTAURAÇÃO: DOWNLOAD DA GALERIA
         // ============================================
         async downloadProjectImages(mode) {
             const btnId = { identified: 'fv-dl-identified', scenes: 'fv-dl-scenes', all: 'fv-dl-all' }[mode];
