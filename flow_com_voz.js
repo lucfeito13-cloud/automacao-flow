@@ -1,6 +1,6 @@
 // ==========================================
 // FLOW VIDEO AUTOMATION - CRIADORES DARK
-// Versão 6.0 - Exclusiva para Vídeos + Voz Fix
+// Versão 7.0 - Exclusiva Vídeo + Fix Voz (Div Radix) + Base Original
 // ==========================================
 (function() {
     'use strict';
@@ -11,9 +11,6 @@
     }
     window.FlowAutomationInitialized = true;
 
-    // ============================================================
-    // TOKEN INTERCEPTION
-    // ============================================================
     const _origFetch = window.fetch;
     let _authToken = null;
 
@@ -40,9 +37,6 @@
         return _origXhrSetHeader.apply(this, arguments);
     };
 
-    // ============================================================
-    // DEBUG + CONFIG
-    // ============================================================
     const DEBUG = true;
     const log = {
         info:    (m,...a) => DEBUG && console.log(`%c[Flow] ℹ️ ${m}`,  'color:#7b1fa2;font-weight:bold;',...a),
@@ -53,8 +47,8 @@
 
     const CONFIG = {
         DELAY_SHORT:           [300, 500],
-        DELAY_MEDIUM:          [500, 800],
-        DELAY_LONG:            [1000, 1500],
+        DELAY_MEDIUM:          [600, 900],
+        DELAY_LONG:            [1200, 1800],
         DELAY_BETWEEN_SUBMITS: [3500, 5000],
         DELAY_BETWEEN_BATCHES: [2500, 3500],
         GENERATION_TIMEOUT:    180000,
@@ -63,12 +57,8 @@
         MAX_RETRIES:           3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '6.0 (Vídeo Only + Smart Voice)',
+        VERSION: '7.0 (Vídeo Only)',
     };
-
-    // ============================================================
-    // PARSERS
-    // ============================================================
 
     function parsePrompt(prompt) {
         const segs = [];
@@ -76,12 +66,8 @@
         let last = 0, m;
         while ((m = re.exec(prompt)) !== null) {
             if (m.index > last) segs.push({ type:'text', content: prompt.slice(last, m.index) });
-            
-            if (m[2]) {
-                 segs.push({ type:'ref', name: m[2].trim() });
-            } else if (m[3]) {
-                 segs.push({ type:'voice', name: m[3].trim() });
-            }
+            if (m[2]) segs.push({ type:'ref', name: m[2].trim() });
+            else if (m[3]) segs.push({ type:'voice', name: m[3].trim() });
             last = m.index + m[0].length;
         }
         if (last < prompt.length) segs.push({ type:'text', content: prompt.slice(last) });
@@ -124,197 +110,113 @@
         return result;
     }
 
-    // ============================================================
-    // CSS E HTML (Exclusivo para Vídeos)
-    // ============================================================
     const css = `
-:root{--cd-primary:#10b981;--cd-primary-dark:#059669;--cd-primary-light:#34d399;--cd-bg:#fff;--cd-bg-secondary:#f8fafc;--cd-bg-card:#fff;--cd-border:#e2e8f0;--cd-border-light:#f1f5f9;--cd-text:#1e293b;--cd-text-muted:#64748b;--cd-text-light:#94a3b8;--cd-shadow:0 10px 40px -10px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.05);--cd-radius:16px;--cd-radius-sm:12px;--cd-radius-xs:8px;}
-#flow-sidebar{position:fixed;right:12px;top:50%;transform:translateY(-50%);z-index:10000;background:linear-gradient(135deg,var(--cd-primary),var(--cd-primary-dark));border-radius:9999px;padding:16px 12px;cursor:pointer;box-shadow:var(--cd-shadow);transition:all .2s;font-family:'Inter',system-ui,sans-serif;border:none;writing-mode:vertical-rl;text-orientation:mixed;}
-#flow-sidebar .icon{color:#fff;font-size:14px;font-weight:600;}
-#flow-panel{position:fixed;top:12px;right:12px;bottom:12px;width:420px;z-index:10001;background:var(--cd-bg);border-radius:var(--cd-radius);box-shadow:var(--cd-shadow);border:1px solid var(--cd-border);display:flex;flex-direction:column;font-family:'Inter',system-ui,sans-serif;transform:translateX(110%);transition:transform .3s;overflow:hidden;}
+:root{--cd-primary:#10b981;--cd-primary-dark:#059669;--cd-bg:#fff;--cd-bg-secondary:#f8fafc;--cd-border:#e2e8f0;--cd-text:#1e293b;--cd-text-muted:#64748b;--cd-shadow:0 10px 40px -10px rgba(0,0,0,.1);--cd-radius:16px;--cd-radius-xs:8px;}
+#flow-sidebar{position:fixed;right:12px;top:50%;transform:translateY(-50%);z-index:10000;background:linear-gradient(135deg,var(--cd-primary),var(--cd-primary-dark));border-radius:9999px;padding:16px 12px;cursor:pointer;box-shadow:var(--cd-shadow);font-family:system-ui,sans-serif;border:none;writing-mode:vertical-rl;color:#fff;font-weight:600;}
+#flow-panel{position:fixed;top:12px;right:12px;bottom:12px;width:420px;z-index:10001;background:var(--cd-bg);border-radius:var(--cd-radius);box-shadow:var(--cd-shadow);border:1px solid var(--cd-border);display:flex;flex-direction:column;font-family:system-ui,sans-serif;transform:translateX(110%);transition:transform .3s;overflow:hidden;}
 #flow-panel.active{transform:translateX(0);}
-.flow-header{padding:16px 20px;border-bottom:1px solid var(--cd-border-light);display:flex;align-items:center;justify-content:space-between;}
-.flow-header-left{display:flex;align-items:center;gap:12px;}
-.flow-logo{width:36px;height:36px;border-radius:50%;background:#1a1a1a;display:flex;align-items:center;justify-content:center;}
-.flow-logo svg{width:21px;height:21px;}
+.flow-header{padding:16px 20px;border-bottom:1px solid var(--cd-border);display:flex;align-items:center;justify-content:space-between;}
 .flow-header-title{font-size:15px;font-weight:700;color:var(--cd-text);margin:0;}
-.flow-header-subtitle{font-size:12px;font-weight:500;color:var(--cd-text-muted);margin:0;}
-.flow-close-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--cd-border);background:var(--cd-bg);cursor:pointer;display:flex;align-items:center;justify-content:center;}
-.flow-close-btn svg{width:16px;height:16px;color:var(--cd-text-muted);}
-.flow-scroll{flex:1;overflow-y:auto;}
-.flow-scroll::-webkit-scrollbar{width:4px;}
-.flow-scroll::-webkit-scrollbar-thumb{background:var(--cd-border);border-radius:4px;}
-.flow-tab-body{padding:16px 20px;}
-.flow-card{background:var(--cd-bg-card);border:1px solid var(--cd-border);border-radius:var(--cd-radius-sm);margin-bottom:12px;overflow:hidden;}
-.flow-card-header{padding:14px 16px 8px;}
-.flow-card-title{font-size:14px;font-weight:600;color:var(--cd-text);margin:0;}
-.flow-card-description{font-size:12px;color:var(--cd-text-muted);margin:4px 0 0;}
-.flow-card-content{padding:8px 16px 16px;}
-.flow-textarea{width:100%;min-height:220px;border:1px solid var(--cd-border);border-radius:var(--cd-radius-xs);padding:12px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;outline:none;}
+.flow-close-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--cd-border);background:var(--cd-bg);cursor:pointer;}
+.flow-scroll{flex:1;overflow-y:auto;padding:16px 20px;}
+.flow-card{border:1px solid var(--cd-border);border-radius:12px;margin-bottom:12px;padding:12px;}
+.flow-card-title{font-size:14px;font-weight:600;margin:0 0 8px;}
+.flow-textarea{width:100%;min-height:180px;border:1px solid var(--cd-border);border-radius:var(--cd-radius-xs);padding:12px;font-family:inherit;resize:vertical;box-sizing:border-box;}
 .flow-ref-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
 .flow-ref-tag{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:500;border:1px solid;}
 .flow-ref-tag.found{background:#ecfdf5;color:#065f46;border-color:#a7f3d0;}
 .flow-ref-tag.missing{background:#fef2f2;color:#991b1b;border-color:#fecaca;}
 .flow-ref-tag.pending{background:#f8fafc;color:#64748b;border-color:#e2e8f0;}
 .flow-voice-tag{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:500;border:1px solid #c7d2fe; background:#eff6ff; color:#1e40af;}
-.flow-validate-btn{background:var(--cd-bg-secondary);color:var(--cd-text);border:1px solid var(--cd-border);border-radius:var(--cd-radius-xs);padding:8px 14px;font-size:12px;font-weight:500;cursor:pointer;margin-top:10px;width:100%;}
-.flow-option{display:flex;align-items:flex-start;gap:10px;padding:8px 0;}
-.flow-option-text{flex:1;}
-.flow-option-title{font-size:13px;font-weight:500;color:var(--cd-text);}
-.flow-mode-btns{display:flex;gap:6px;margin-top:6px;}
-.flow-mode-btn{flex:1;padding:9px 8px;border-radius:var(--cd-radius-xs);border:1.5px solid var(--cd-border);background:var(--cd-bg);font-size:12px;font-weight:600;color:var(--cd-text-muted);cursor:pointer;text-align:center;}
-.flow-mode-btn.active{background:linear-gradient(135deg,var(--cd-primary),var(--cd-primary-dark));color:#fff;border-color:var(--cd-primary);}
-.flow-batch-btns{display:flex;gap:6px;}
-.flow-batch-btn{width:36px;height:36px;border-radius:var(--cd-radius-xs);border:1px solid var(--cd-border);background:var(--cd-bg-secondary);font-size:14px;font-weight:700;color:var(--cd-text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;}
-.flow-batch-btn.active{background:var(--cd-primary);color:#fff;border-color:var(--cd-primary);}
-.flow-select-imgs{border:1px solid var(--cd-border);border-radius:var(--cd-radius-xs);padding:6px 10px;font-size:13px;font-family:inherit;background:var(--cd-bg);color:var(--cd-text);cursor:pointer;}
-.flow-actions{display:flex;gap:10px;margin:16px 0 12px;}
-.flow-btn{flex:1;padding:10px 16px;border-radius:var(--cd-radius-xs);font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;border:1px solid transparent;}
-.flow-btn-primary{background:linear-gradient(135deg,var(--cd-primary),var(--cd-primary-dark));color:#fff;}
-.flow-btn-secondary{background:var(--cd-bg);color:var(--cd-text);border-color:var(--cd-border);}
-.flow-status{padding:10px 14px;border-radius:var(--cd-radius-xs);font-size:12px;margin-bottom:10px;display:none;}
-.flow-status.info{display:block;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;}
-.flow-status.success{display:block;background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;}
-.flow-status.error{display:block;background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
-.flow-progress{height:4px;background:var(--cd-border-light);border-radius:4px;overflow:hidden;margin-bottom:10px;}
-.flow-progress-bar{height:100%;background:linear-gradient(90deg,var(--cd-primary),var(--cd-primary-light));border-radius:4px;width:0%;}
-.flow-logs-container{display:none;}
-.flow-logs-container.visible{display:block;}
-.flow-debug-panel{max-height:180px;overflow-y:auto;font-family:monospace;font-size:11px;background:#0f172a;color:#e2e8f0;border-radius:var(--cd-radius-xs);padding:12px;}
-.flow-debug-panel::-webkit-scrollbar{width:4px;}
-.flow-debug-line{padding:1px 0;}
-.flow-debug-line.error{color:#f87171;}
-.flow-debug-line.success{color:#4ade80;}
-.flow-debug-line.info{color:#60a5fa;}
-.flow-prompt-item{display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;padding:10px 12px;border:1px solid var(--cd-border-light);border-radius:var(--cd-radius-xs);margin-bottom:6px;font-size:12px;}
-.flow-prompt-item .num{font-weight:700;color:var(--cd-primary);}
-.flow-prompt-item .text{color:var(--cd-text);}
-.flow-prompt-item .refs{grid-column:2;display:flex;gap:4px;flex-wrap:wrap;}
-.flow-prompt-item .ref-badge{background:var(--cd-primary);color:#fff;padding:1px 6px;border-radius:9999px;font-size:10px;}
-.flow-prompt-item .voice-badge{background:#3b82f6;color:#fff;padding:1px 6px;border-radius:9999px;font-size:10px;}
+.flow-validate-btn{background:var(--cd-bg-secondary);border:1px solid var(--cd-border);border-radius:var(--cd-radius-xs);padding:8px 14px;font-size:12px;font-weight:500;cursor:pointer;margin-top:10px;width:100%;}
+.flow-mode-btns, .flow-batch-btns{display:flex;gap:6px;margin-top:6px;}
+.flow-mode-btn, .flow-batch-btn{flex:1;padding:8px;border-radius:var(--cd-radius-xs);border:1px solid var(--cd-border);background:var(--cd-bg);font-size:12px;cursor:pointer;}
+.flow-mode-btn.active, .flow-batch-btn.active{background:var(--cd-primary);color:#fff;border-color:var(--cd-primary);}
+.flow-actions{display:flex;gap:10px;margin-bottom:12px;}
+.flow-btn{flex:1;padding:10px;border-radius:var(--cd-radius-xs);font-weight:600;cursor:pointer;border:1px solid transparent;}
+.flow-btn-primary{background:var(--cd-primary);color:#fff;}
+.flow-btn-secondary{background:var(--cd-bg);border-color:var(--cd-border);}
+.flow-status{padding:10px;border-radius:var(--cd-radius-xs);font-size:12px;margin-bottom:10px;display:none;}
+.flow-status.info{display:block;background:#eff6ff;color:#1e40af;border-color:#bfdbfe;}
+.flow-status.success{display:block;background:#ecfdf5;color:#065f46;border-color:#a7f3d0;}
+.flow-status.error{display:block;background:#fef2f2;color:#991b1b;border-color:#fecaca;}
+.flow-progress-bar{height:4px;background:var(--cd-primary);width:0%;transition:width .3s;}
+.flow-prompt-item{display:grid;grid-template-columns:auto 1fr auto;gap:4px;padding:8px;border:1px solid var(--cd-border);border-radius:var(--cd-radius-xs);margin-bottom:6px;font-size:12px;}
+.flow-prompt-item.active{border-color:var(--cd-primary);background:#ecfdf5;}
+.flow-prompt-item.done{border-color:#a7f3d0;background:#f0fdf4;}
+.flow-prompt-item.error{border-color:#fecaca;background:#fef2f2;}
 .flow-tile-label{position:absolute;top:8px;left:8px;z-index:10;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,.8);color:#fff;font-size:11px;font-weight:600;padding:4px 8px;border-radius:6px;}
-#flow-mini{position:fixed;bottom:16px;right:16px;z-index:10002;background:var(--cd-bg);border:1px solid var(--cd-border);border-radius:var(--cd-radius-sm);padding:14px 18px;display:none;flex-direction:column;gap:8px;cursor:pointer;box-shadow:var(--cd-shadow);min-width:280px;}
-#flow-popup{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10004;background:var(--cd-bg);border-radius:var(--cd-radius);padding:32px;box-shadow:var(--cd-shadow);text-align:center;max-width:480px;width:90%;}
-#flow-assign-panel{display:none;position:fixed;top:12px;left:84px;right:456px;z-index:10005;background:var(--cd-bg);border-radius:var(--cd-radius);box-shadow:0 10px 40px -10px rgba(0,0,0,.2);border:1px solid var(--cd-border);overflow:hidden;flex-direction:column;transition:all .3s;}
+#flow-mini{position:fixed;bottom:16px;right:16px;z-index:10002;background:var(--cd-bg);border:1px solid var(--cd-border);border-radius:12px;padding:14px;display:none;flex-direction:column;gap:8px;cursor:pointer;}
+#flow-assign-panel{display:none;position:fixed;top:12px;left:84px;right:456px;z-index:10005;background:var(--cd-bg);border-radius:12px;box-shadow:var(--cd-shadow);border:1px solid var(--cd-border);overflow:hidden;flex-direction:column;}
 #flow-assign-panel.active{display:flex;}
-.flow-assign-header{padding:10px 16px;border-bottom:1px solid var(--cd-border-light);display:flex;align-items:center;gap:12px;}
-.flow-assign-items{padding:8px 12px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:6px;max-height:130px;}
-.flow-assign-item{display:flex;align-items:center;gap:6px;padding:6px 12px;border:2px solid var(--cd-border);border-radius:9999px;cursor:grab;font-size:12px;background:var(--cd-bg);}
-.flow-assign-item.assigned{background:#ecfdf5;border-color:#a7f3d0;opacity:.65;}
+.flow-assign-items{padding:8px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:6px;}
+.flow-assign-item{display:flex;gap:6px;padding:6px 12px;border:2px solid var(--cd-border);border-radius:9999px;cursor:grab;font-size:12px;}
+.flow-assign-item.assigned{background:#ecfdf5;border-color:#a7f3d0;opacity:.7;}
 `;
-    const styleEl = document.createElement('style');
-    styleEl.textContent = css;
-    document.head.appendChild(styleEl);
+    const styleEl = document.createElement('style'); styleEl.textContent = css; document.head.appendChild(styleEl);
 
     document.body.insertAdjacentHTML('beforeend', `
-<button id="flow-sidebar"><span class="icon">Criadores Dark</span></button>
+<button id="flow-sidebar">Criadores Dark</button>
 <div id="flow-panel">
   <div class="flow-header">
-    <div class="flow-header-left">
-      <div class="flow-logo"><svg viewBox="0 0 24 24"><polygon points="8,6 20,12 8,18" fill="none" stroke="#10b981" stroke-width="2.5"/></svg></div>
-      <div>
-        <div class="flow-header-title">Criadores Dark</div>
-        <div class="flow-header-subtitle">Flow Vídeo Automation</div>
-      </div>
-    </div>
+    <div class="flow-header-title">Criadores Dark - Automação Vídeo</div>
     <button class="flow-close-btn" id="flow-close">X</button>
   </div>
   <div class="flow-scroll">
-    <div class="flow-tab-body">
-      <div class="flow-card">
-        <div class="flow-card-header">
-          <h3 class="flow-card-title">Prompts de Vídeo</h3>
-          <p class="flow-card-description">Use <strong>{cena X}</strong>, <strong>[nome_referencia]</strong> e <strong>&lt;voz: Nome&gt;</strong>.</p>
-        </div>
-        <div class="flow-card-content">
-          <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:\n{cena 1} [Maria] caminhando no parque <voz: Algebra>"></textarea>
-          <div id="fv-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
-        </div>
+    <div class="flow-card">
+      <h3 class="flow-card-title">Prompts de Vídeo</h3>
+      <div style="font-size:11px; margin-bottom:8px; color:#64748b;">Use <b>{cena X}</b>, <b>[nome_referencia]</b> e <b>&lt;voz: Nome&gt;</b></div>
+      <textarea class="flow-textarea" id="fv-prompts-input" placeholder="{cena 1} [Soldado] caminhando <voz: Algenib>"></textarea>
+      <div id="fv-prompt-count" style="font-size:11px; margin-top:4px;">0 prompts detectados</div>
+    </div>
+    <div class="flow-card">
+      <h3 class="flow-card-title">Validação na Galeria</h3>
+      <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;">Aguardando...</span></div>
+      <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar Referências</button>
+    </div>
+    <div class="flow-card">
+      <h3 class="flow-card-title">Configurações</h3>
+      <div class="flow-mode-btns">
+        <button class="flow-mode-btn active" data-vmode="free">Livre</button>
+        <button class="flow-mode-btn" data-vmode="scenes">Cenas</button>
       </div>
-      <div class="flow-card">
-        <div class="flow-card-header"><h3 class="flow-card-title">Referências e Vozes</h3></div>
-        <div class="flow-card-content">
-          <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma detectada.</span></div>
-          <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências na galeria</button>
-        </div>
+      <div style="margin-top:8px; font-size:12px;">Vídeos por Prompt</div>
+      <select id="fv-results-per-prompt" style="width:100%; padding:6px; margin-top:4px; border-radius:4px;"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option></select>
+    </div>
+    <div class="flow-actions">
+      <button id="fv-start-btn" class="flow-btn flow-btn-primary">Iniciar</button>
+      <button id="fv-stop-btn" class="flow-btn flow-btn-secondary" disabled>Parar</button>
+    </div>
+    <div id="fv-status" class="flow-status"></div>
+    <div style="height:4px; background:#e2e8f0; border-radius:4px; overflow:hidden;"><div id="fv-progress-bar" class="flow-progress-bar"></div></div>
+    
+    <div class="flow-card" id="fv-prompts-preview-card" style="display:none; margin-top:12px;">
+      <h3 class="flow-card-title">Fila de Geração</h3>
+      <div id="fv-prompt-list"></div>
+    </div>
+
+    <div class="flow-card">
+      <h3 class="flow-card-title">Ações do Projeto</h3>
+      <button class="flow-validate-btn" id="fv-analyze-btn">🔍 Analisar Galeria</button>
+      <div id="fv-download-section" style="display:none; margin-top:10px; border-top:1px solid #e2e8f0; padding-top:10px;">
+        <button class="flow-validate-btn" id="fv-dl-identified">Baixar Identificados</button>
+        <button class="flow-validate-btn" id="fv-dl-scenes">Baixar Cenas Atribuídas</button>
+        <button class="flow-validate-btn" id="fv-dl-all">Baixar Tudo</button>
       </div>
-      <div class="flow-card">
-        <div class="flow-card-header"><h3 class="flow-card-title">Opções de Geração</h3></div>
-        <div class="flow-card-content">
-          <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
-            <div class="flow-mode-btns" style="width: 100%;">
-              <button class="flow-mode-btn active" data-vmode="free">🎯 Livre</button>
-              <button class="flow-mode-btn" data-vmode="scenes">🎬 Cenas</button>
-            </div>
-          </div>
-          <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
-            <div class="flow-option-title">Prompts simultâneos</div>
-            <div class="flow-batch-btns">
-              <button class="flow-batch-btn" data-vbatch="1">1</button>
-              <button class="flow-batch-btn" data-vbatch="2">2</button>
-              <button class="flow-batch-btn" data-vbatch="3">3</button>
-              <button class="flow-batch-btn active" data-vbatch="4">4</button>
-            </div>
-          </div>
-          <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;">
-            <div class="flow-option-title">Resultados por prompt</div>
-            <select id="fv-results-per-prompt" class="flow-select-imgs">
-              <option value="1">1 vídeo</option>
-              <option value="2">2 vídeos</option>
-              <option value="3" selected>3 vídeos</option>
-              <option value="4">4 vídeos</option>
-            </select>
-          </div>
-          <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
-            <input type="checkbox" id="fv-show-logs">
-            <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Mostrar logs de sistema</div>
-          </label>
-        </div>
-      </div>
-      <div class="flow-actions">
-        <button id="fv-start-btn" class="flow-btn flow-btn-primary">▶ Iniciar Automação</button>
-        <button id="fv-stop-btn" class="flow-btn flow-btn-secondary" disabled>⏹ Parar</button>
-      </div>
-      <div id="fv-status" class="flow-status"></div>
-      <div class="flow-progress"><div id="fv-progress-bar" class="flow-progress-bar"></div></div>
-      <div class="flow-card" id="fv-prompts-preview-card" style="display:none;">
-        <div class="flow-card-header"><h3 class="flow-card-title">Fila de Geração</h3></div>
-        <div class="flow-card-content"><div class="flow-prompt-list" id="fv-prompt-list"></div></div>
-      </div>
-      <div class="flow-card">
-        <div class="flow-card-header"><h3 class="flow-card-title">Analisar Projeto (Atribuições)</h3></div>
-        <div class="flow-card-content">
-          <button class="flow-validate-btn" id="fv-analyze-btn">🔍 Analisar galeria existente</button>
-          <div id="fv-download-section" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
-            <div style="font-size:12px;font-weight:600;margin-bottom:8px;">⬇️ Baixar Vídeos do Projeto</div>
-            <div style="display:flex;flex-direction:column;gap:6px;">
-              <button class="flow-validate-btn" id="fv-dl-identified">📋 Todos os Identificados</button>
-              <button class="flow-validate-btn" id="fv-dl-scenes">🎬 Apenas Cenas Atribuídas</button>
-              <button class="flow-validate-btn" id="fv-dl-all">📦 Download Completo (Tudo)</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div id="fv-logs-container" class="flow-logs-container"><div id="fv-debug-panel" class="flow-debug-panel"></div></div>
     </div>
   </div>
 </div>
-<div id="flow-mini"><div class="flow-mini-header"><div class="flow-mini-title">Criadores Dark</div><button id="flow-mini-close" class="flow-close-btn">X</button></div><div id="flow-mini-status" class="flow-mini-status">Processando...</div><div class="flow-progress"><div id="flow-mini-progress-bar" class="flow-progress-bar"></div></div></div>
-<div id="flow-popup" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10004;background:#fff;padding:20px;border-radius:12px;box-shadow:0 0 20px rgba(0,0,0,0.2);"><h3>✅ Concluído!</h3><p id="flow-popup-msg"></p><div id="flow-popup-failed" style="color:red;font-size:12px;"></div><button id="flow-close-popup" class="flow-btn flow-btn-secondary" style="margin-top:10px;">Fechar</button></div>
-<div id="flow-assign-panel"><div class="flow-assign-header"><h3 id="flow-assign-title">Atribuir</h3><span id="flow-assign-count"></span><button id="flow-assign-download" class="flow-validate-btn" style="width:auto;margin:0 0 0 auto;">Baixar Cenas</button><button id="flow-assign-close" class="flow-close-btn" style="margin-left:10px;">X</button></div><div id="flow-assign-items" class="flow-assign-items"></div></div>
+<div id="flow-assign-panel">
+  <div class="flow-header"><h3 class="flow-header-title">Atribuir Cenas</h3><div style="display:flex;gap:8px;"><button id="flow-assign-download" class="flow-validate-btn" style="margin:0;">Baixar Cenas</button><button id="flow-assign-close" class="flow-close-btn">X</button></div></div>
+  <div id="flow-assign-items" class="flow-assign-items"></div>
+</div>
     `);
 
-    // ============================================================
-    // CLASSE PRINCIPAL
-    // ============================================================
     class FlowAutomation {
-
         constructor() {
             this.gridCols = 3; this.rowHeight = 347;
             this.tileAssignments = new Map();
-            
-            // O segredo das cores: Volta a usar a variável original
-            this.validatedRefs = {}; 
+            this.validatedRefs = {}; // Armazena estado da validação
             
             this.videoIsRunning = false; this.videoShouldStop = false;
             this.videoPrompts = []; this.videoGenMode = 'free';
@@ -324,27 +226,18 @@
             this.initUI();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v6.0 (Vídeo Only + Smart Voice) inicializado!');
-            if (!_authToken) log.warn('Token não capturado.');
+            log.success('Flow Automation v7.0 iniciado!');
         }
 
         initUI() {
             const $ = id => document.getElementById(id);
             $('flow-sidebar').addEventListener('click', () => $('flow-panel').classList.add('active'));
             $('flow-close').addEventListener('click', () => $('flow-panel').classList.remove('active'));
-            $('flow-mini-close').addEventListener('click', () => $('flow-mini').style.display='none');
 
             document.querySelectorAll('[data-vmode]').forEach(btn => {
                 btn.addEventListener('click', () => {
                     document.querySelectorAll('[data-vmode]').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active'); this.videoGenMode = btn.dataset.vmode;
-                });
-            });
-
-            document.querySelectorAll('[data-vbatch]').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    document.querySelectorAll('[data-vbatch]').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active'); this.videoBatchSize = parseInt(btn.dataset.vbatch);
                 });
             });
 
@@ -356,10 +249,8 @@
             $('fv-dl-identified').addEventListener('click', () => this.downloadProjectImages('identified'));
             $('fv-dl-scenes').addEventListener('click', () => this.downloadProjectImages('scenes'));
             $('fv-dl-all').addEventListener('click', () => this.downloadProjectImages('all'));
-            $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
             $('flow-assign-close').addEventListener('click', () => $('flow-assign-panel').classList.remove('active'));
             $('flow-assign-download').addEventListener('click', () => this.downloadScenes());
-            $('flow-close-popup').addEventListener('click', () => $('flow-popup').style.display='none');
         }
 
         setupVideoTextWatcher() {
@@ -368,7 +259,7 @@
         }
 
         // ============================================
-        // RESTAURAÇÃO: CORES VERDE E VERMELHA ORIGINAIS
+        // A MAGIA DAS CORES ORIGINAIS
         // ============================================
         updateVideoReferences() {
             const text = document.getElementById('fv-prompts-input').value;
@@ -376,13 +267,12 @@
             const refs = extractReferences(prompts); 
             const voices = extractVoices(prompts);
             
-            document.getElementById('fv-prompt-count').textContent = `${prompts.length} prompt(s) detectado(s)`;
+            document.getElementById('fv-prompt-count').textContent = `${prompts.length} prompt(s) detectados`;
             const list = document.getElementById('fv-ref-list');
             
             if (!refs.length && !voices.length) {
-                list.innerHTML = '<span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span>';
+                list.innerHTML = '<span style="font-size:12px;">Nenhuma referência ou voz.</span>';
             } else {
-                // A mesma lógica intacta da sua versão original para imagens
                 let html = refs.map(r => {
                     const s = this.validatedRefs[r.toLowerCase()];
                     const cls  = s === true ? 'found'   : s === false ? 'missing'  : 'pending';
@@ -390,7 +280,6 @@
                     return `<span class="flow-ref-tag ${cls}">${icon} ${this.esc(r)}</span>`;
                 }).join('');
                 
-                // Para Vozes: Fica sempre com a tag azulzinha de microfone
                 html += voices.map(v => `<span class="flow-voice-tag">🎙️ ${this.esc(v)}</span>`).join('');
                 list.innerHTML = html;
             }
@@ -402,11 +291,10 @@
         esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
         // ============================================
-        // O SEGREDO DAS ABAS (FORÇAR CLIQUE NO RADIX)
+        // ABAS INTELIGENTES DO RADIX
         // ============================================
         async clickDialogTab(type) {
             let targetTab = null;
-            // Busca no documento inteiro usando o seletor exato do Radix
             const selector = type === 'image' 
                 ? 'button[role="tab"][aria-controls*="IMAGE"]' 
                 : 'button[role="tab"][aria-controls*="AUDIO"]';
@@ -417,27 +305,19 @@
                 await this.dynamicSleep([200, 300]);
             }
 
-            if (!targetTab) {
-                this.logVideoDebug(`⚠️ Aba de ${type} não encontrada.`, 'warn');
-                return;
-            }
-
-            const isSelected = targetTab.getAttribute('aria-selected') === 'true' || targetTab.getAttribute('data-state') === 'active';
-            if (!isSelected) {
-                this.logVideoDebug(`Migrando para a aba: ${type === 'image' ? 'Imagens' : 'Vozes'}`, 'info');
-                
-                // Simula um clique real de mouse, pois o React/Radix UI ignora .click() simples
-                targetTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-                targetTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-                targetTab.click();
-                
-                // Pausa importante para dar tempo da aba abrir
-                await this.dynamicSleep([800, 1200]); 
+            if (targetTab) {
+                const isSelected = targetTab.getAttribute('aria-selected') === 'true' || targetTab.getAttribute('data-state') === 'active';
+                if (!isSelected) {
+                    targetTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                    targetTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                    targetTab.click();
+                    await this.dynamicSleep([800, 1200]); 
+                }
             }
         }
 
         // ============================================
-        // FUNÇÃO ORIGINAL INTACTA PARA IMAGENS
+        // SELEÇÃO DE IMAGEM INTACTA
         // ============================================
         async searchAndSelect(name) {
             const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
@@ -490,7 +370,7 @@
         }
 
         // ============================================
-        // FUNÇÃO FIXADA PARA VOZES - USA A MESMA MIRA DA IMAGEM
+        // SELEÇÃO DE VOZ (DICA DO INSPECIONAR APLICADA)
         // ============================================
         async searchAndSelectVoice(name) {
             const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
@@ -498,41 +378,34 @@
             await this.dynamicSleep([500, 700]);
             
             const input = dialog.querySelector('input[placeholder*="esquisa"], input[placeholder*="earch"], input[type="text"]');
-            if (!input) throw new Error('Input de pesquisa de voz não encontrado');
+            if (!input) throw new Error('Input de voz não encontrado');
             
             input.focus(); await this.dynamicSleep([250, 400]);
-            
-            // Digita a voz
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
             setter.call(input, name);
             input.dispatchEvent(new Event('input',  { bubbles:true }));
             input.dispatchEvent(new Event('change', { bubbles:true }));
-            
-            // Pausa para dar tempo do Radix filtrar e mostrar "a única caixa que está aparecendo"
             await this.dynamicSleep([1500, 2000]); 
             
             let target = null;
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                const items = dialog.querySelectorAll('[data-item-index], li, [role="option"], [role="menuitem"], button');
-                if (items.length > 0) {
-                    const nameLower = name.toLowerCase().trim();
-                    for (const item of items) {
-                        const textContent = (item.textContent || '').toLowerCase();
-                        if (textContent.includes(nameLower)) {
-                            // Encontra o botão final clicável - igual na imagem!
-                            target = item.querySelector('div[role="button"], button') || item.closest('button, [role="option"]') || item;
-                            break;
-                        }
+                const nameLower = name.toLowerCase().trim();
+                const divs = dialog.querySelectorAll('div');
+                for (const div of divs) {
+                    // Busca a exata div que contem o texto do nome (como "Algenib")
+                    if (div.children.length === 0 && div.textContent && div.textContent.trim().toLowerCase() === nameLower) {
+                        target = div.closest('button, [role="option"], [role="button"], [role="menuitem"]') || div;
+                        break;
                     }
-                    if (target) break;
                 }
+                if (target) break;
             }
             
-            if (!target) throw new Error(`Voz "${name}" não apareceu nos resultados da busca.`);
+            if (!target) throw new Error(`Voz "${name}" não encontrada.`);
             await this.dynamicSleep([250, 400]);
             
-            // O MESMO CLIQUE DA IMAGEM (com um reforço do mousedown do radix)
+            // O mesmo clique da imagem
             target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
             target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
             target.click();
@@ -540,7 +413,7 @@
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                if (!document.querySelector('[role="dialog"], [role="presentation"]')) return;
+                if (!document.querySelector('[role="dialog"]')) return;
             }
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
@@ -549,7 +422,6 @@
 
         async clearEditor() {
             const e = this.getEditor();
-            if (!e) throw new Error('Editor Slate não encontrado');
             e.focus(); await this.dynamicSleep(CONFIG.DELAY_SHORT);
             document.execCommand('selectAll', false, null); await this.dynamicSleep([250, 400]);
             document.execCommand('delete', false, null); await this.dynamicSleep(CONFIG.DELAY_SHORT);
@@ -557,7 +429,6 @@
 
         async insertText(text) {
             const e = this.getEditor();
-            if (!e) throw new Error('Editor não encontrado');
             e.focus(); await this.dynamicSleep([250, 400]);
             e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
@@ -567,7 +438,6 @@
             const MAX_AT_RETRIES = 3;
             for (let attempt = 1; attempt <= MAX_AT_RETRIES; attempt++) {
                 const e = this.getEditor();
-                if (!e) throw new Error('Editor não encontrado');
                 e.focus(); await this.dynamicSleep([250, 400]);
                 e.dispatchEvent(new KeyboardEvent('keydown', { key:'@', bubbles:true, cancelable:true }));
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
@@ -582,21 +452,17 @@
                 await this.sleep(200);
                 if (attempt < MAX_AT_RETRIES) { await this.dynamicSleep([2000, 3000]); e.focus(); e.click(); await this.dynamicSleep([500, 800]); }
             }
-            throw new Error('Diálogo @ não abriu');
         }
 
         async clickSubmit() {
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
             const btn = [...document.querySelectorAll('button')].find(b => b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward');
-            if (!btn) throw new Error('Botão enviar não encontrado');
             for (let i = 0; i < 30; i++) { if (!btn.disabled) break; await this.dynamicSleep(CONFIG.DELAY_SHORT); }
-            if (btn.disabled) throw new Error('Botão enviar desabilitado');
             btn.click(); await this.dynamicSleep(CONFIG.DELAY_LONG);
         }
 
         async prepareAndSubmit(promptObj) {
-            const MAX_SUBMIT_RETRIES = 2;
-            for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
+            for (let attempt = 1; attempt <= 2; attempt++) {
                 try {
                     const segs = parsePrompt(promptObj.text);
                     await this.clearEditor();
@@ -604,17 +470,16 @@
                     
                     for (const seg of segs) {
                         if (this.videoShouldStop) return false;
-                        
                         if (seg.type === 'text') {
                              await this.insertText(seg.content);
                         } else if (seg.type === 'ref') { 
                              await this.openAtSelector(); 
-                             await this.clickDialogTab('image'); // GARANTE ABA IMAGEM ANTES DE BUSCAR
+                             await this.clickDialogTab('image');
                              await this.searchAndSelect(seg.name); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
-                             await this.clickDialogTab('voice'); // GARANTE ABA VOZ ANTES DE BUSCAR
+                             await this.clickDialogTab('voice');
                              await this.searchAndSelectVoice(seg.name); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         }
@@ -623,8 +488,7 @@
                     await this.clickSubmit();
                     return true;
                 } catch (err) {
-                    this.logVideoDebug(`Erro: ${err.message}`, 'error');
-                    if (attempt < MAX_SUBMIT_RETRIES) {
+                    if (attempt < 2) {
                         const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
                         if (dialog) { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true })); await this.sleep(500); }
                         await this.clearEditor();
@@ -635,9 +499,6 @@
             return false;
         }
 
-        // ============================================================
-        // LÓGICA DE GRID, RASTREIO E ATRIBUIÇÃO INTACTAS
-        // ============================================================
         async detectGrid() {
             const scroller = this.getScroller();
             if (scroller) { scroller.scrollTop = 0; await this.sleep(500); }
@@ -734,8 +595,7 @@
             const colSlot = container.children[col];
             if (!colSlot) return null;
             const wrapper = colSlot.firstElementChild;
-            if (!wrapper) return null;
-            return wrapper.firstElementChild || null;
+            return wrapper?.firstElementChild || null;
         }
 
         getUuidFromTile(tile) {
@@ -793,9 +653,6 @@
             return uuids;
         }
 
-        // ============================================================
-        // INÍCIO DA GERAÇÃO DE VÍDEOS
-        // ============================================================
         async startVideo() {
             if (this.videoIsRunning) return;
             const text = document.getElementById('fv-prompts-input').value;
@@ -808,7 +665,7 @@
 
             this.videoIsRunning = true; this.videoShouldStop = false;
             document.getElementById('fv-start-btn').disabled = true; document.getElementById('fv-stop-btn').disabled = false;
-            this.setVideoStatus('info', '🚀 Iniciando vídeos...'); this.updateVideoProgress(0); await this.detectGrid();
+            this.setVideoStatus('info', 'Iniciando...'); this.updateVideoProgress(0); await this.detectGrid();
 
             const batches = [];
             for (let i = 0; i < this.videoPrompts.length; i += this.videoBatchSize) batches.push(this.videoPrompts.slice(i, Math.min(i + this.videoBatchSize, this.videoPrompts.length)));
@@ -859,16 +716,13 @@
             this.videoIsRunning = false; document.getElementById('fv-start-btn').disabled = false; document.getElementById('fv-stop-btn').disabled = true;
             this.updateVideoProgress(1);
             if (!this.videoShouldStop) {
-                this.setVideoStatus('success', '✅ Geração de vídeos concluída!');
+                this.setVideoStatus('success', 'Geração de vídeos concluída!');
                 if (this.videoGenMode === 'scenes') this.showAssignPanel(allMatrices);
             }
         }
         
         stopVideo() { this.videoShouldStop = true; }
 
-        // ============================================================
-        // API (rename + favorite)
-        // ============================================================
         async apiRename(workflowId, newName) {
             if (!_authToken) return false;
             const projectId = this.getProjectId(); if (!projectId || !workflowId) return false;
@@ -880,19 +734,16 @@
             const projectId = this.getProjectId(); if (!projectId || !workflowId) return false;
             try { const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, { method: 'PATCH', headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': _authToken }, body: JSON.stringify({ workflow: { name: workflowId, projectId, metadata: { favorited: !!favorited } }, updateMask: 'metadata.favorited' }) }); return res.ok; } catch(e) { return false; }
         }
+        
         getProjectId() {
             const m = location.href.match(/project\/([a-f0-9-]{36})/); if (m) return m[1];
             const link = document.querySelector('a[href*="/project/"]'); if (link) { const m2 = link.href.match(/project\/([a-f0-9-]{36})/); if (m2) return m2[1]; }
             return null;
         }
 
-        // ============================================================
-        // HELPERS UI E DRAG AND DROP
-        // ============================================================
         setVideoStatus(type, msg) { const el = document.getElementById('fv-status'); el.className = 'flow-status ' + type; el.innerHTML = msg; }
-        updateVideoProgress(fraction) { const pct = Math.round(fraction * 100); document.getElementById('fv-progress-bar').style.width = pct + '%'; document.getElementById('flow-mini-progress-bar').style.width = pct + '%'; }
-        logVideoDebug(msg, type = 'info') { const panel = document.getElementById('fv-debug-panel'); if (panel) { const line = document.createElement('div'); line.className = `flow-debug-line ${type}`; line.textContent = `[${new Date().toLocaleTimeString()}] 🎬 ${msg}`; panel.appendChild(line); panel.scrollTop = panel.scrollHeight; } if (type === 'error') log.error(msg); else if (type === 'success') log.success(msg); else log.info(msg); }
-
+        updateVideoProgress(fraction) { const pct = Math.round(fraction * 100); document.getElementById('fv-progress-bar').style.width = pct + '%'; }
+        
         setupDragDrop() {
             document.addEventListener('dragover', e => { const tile = e.target.closest('[data-tile-id]'); if (tile) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; const inner = tile.querySelector('[data-tile-id]') || tile; document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover')); inner.classList.add('drop-hover'); }});
             document.addEventListener('dragleave', e => { const related = e.relatedTarget?.closest('[data-tile-id]'); const current = e.target.closest('[data-tile-id]'); if (current && current !== related) current.classList.remove('drop-hover'); });
@@ -948,18 +799,16 @@
             outer.appendChild(label);
         }
 
-        showAssignPanel(allMatrices) {
+        showAssignPanel() {
             const panel = document.getElementById('flow-assign-panel');
             const items = document.getElementById('flow-assign-items');
-            document.getElementById('flow-assign-download').style.display = 'inline-flex';
-            document.getElementById('flow-assign-download').disabled = false;
             items.innerHTML = '';
             for (const [sceneName] of this.videoSceneAssignments) {
                 const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
                 const item = document.createElement('div');
                 item.className = 'flow-assign-item';
                 item.draggable = true; item.dataset.type = 'scene'; item.dataset.scene = sceneName; item.dataset.sceneNum = sceneNum;
-                item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span>`;
+                item.innerHTML = `<span class="assign-name">${sceneName}</span>`;
                 item.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum, sceneName })); e.dataTransfer.effectAllowed = 'copy'; });
                 items.appendChild(item);
             }
@@ -981,18 +830,18 @@
                         const a = document.createElement('a'); a.href = url; a.download = fileName;
                         document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
                         await this.sleep(400);
-                    } catch(e) { this.logVideoDebug(`Erro download: ${e.message}`, 'error'); }
+                    } catch(e) {}
                 }
             }
             btn.disabled = false; btn.textContent = 'Baixar Cenas';
         }
 
         // ============================================
-        // RESTAURAÇÃO: VALIDAÇÃO REAL NA GALERIA 
+        // VALIDAÇÃO REAL NA GALERIA 
         // ============================================
         async validateReferences() {
             const btn = document.getElementById('fv-validate-btn');
-            btn.disabled = true; btn.textContent = '⏳ Escaneando galeria...';
+            btn.disabled = true; btn.textContent = 'Escaneando...';
             try {
                 const text = document.getElementById('fv-prompts-input').value;
                 const prompts = parsePromptsText(text);
@@ -1002,7 +851,7 @@
                     this.validatedRefs = {}; 
                     this.updateVideoReferences(); 
                     btn.disabled = false; 
-                    btn.textContent = '🔍 Validar referências na galeria'; 
+                    btn.textContent = '🔍 Validar Referências'; 
                     return; 
                 }
                 
@@ -1061,25 +910,25 @@
                 for (const ref of refs) this.validatedRefs[ref.toLowerCase()] = found.has(ref.toLowerCase().trim());
                 this.updateVideoReferences();
                 
-                if (!pending.size) this.setVideoStatus('success', `✅ Todas as ${refs.length} referências encontradas!`);
-                else this.setVideoStatus('error', `❌ Não encontradas: ${refs.filter(r => pending.has(r.toLowerCase().trim())).join(', ')}`);
+                if (!pending.size) this.setVideoStatus('success', `Todas encontradas!`);
+                else this.setVideoStatus('error', `Não encontradas: ${refs.filter(r => pending.has(r.toLowerCase().trim())).join(', ')}`);
                 
                 scroller.scrollTop = 0;
             } catch (err) { 
                 this.setVideoStatus('error', 'Erro: ' + err.message); 
             }
-            btn.disabled = false; btn.textContent = '🔍 Validar referências na galeria';
+            btn.disabled = false; btn.textContent = '🔍 Validar Referências';
         }
 
         // ============================================
-        // RESTAURAÇÃO: ANÁLISE REAL DA GALERIA 
+        // ANÁLISE DA GALERIA 
         // ============================================
         async analyzeProject() {
             const btn = document.getElementById('fv-analyze-btn');
-            btn.disabled = true; btn.textContent = '⏳ Analisando...';
+            btn.disabled = true; btn.textContent = 'Analisando...';
             document.querySelectorAll('.flow-tile-label').forEach(l => l.remove()); this.tileAssignments.clear();
             const scroller = this.getScroller(); 
-            if (!scroller) { btn.disabled=false; btn.textContent='🔍 Analisar galeria existente'; return; }
+            if (!scroller) { btn.disabled=false; btn.textContent='🔍 Analisar Galeria'; return; }
             
             let labelsFound = 0;
             const checkedIds = new Set();
@@ -1121,25 +970,24 @@
                         this.addLabelToTile(outer, labelText, wfId, type, extra);
                         this.tileAssignments.set(wfId, { label: labelText, type, name: extra, scene: extra });
                         labelsFound++;
-                        btn.textContent = `⏳ ${labelsFound} encontrada(s)...`;
                     }
                 }
                 const prev = scroller.scrollTop; scroller.scrollTop += 350; await this.sleep(400);
                 if (scroller.scrollTop === prev) break;
             }
             scroller.scrollTop = 0;
-            this.setVideoStatus('success', `✅ Análise concluída: ${labelsFound} item(ns) identificado(s).`);
+            this.setVideoStatus('success', `Identificados: ${labelsFound}`);
             document.getElementById('fv-download-section').style.display = '';
-            btn.disabled = false; btn.textContent = '🔍 Analisar galeria existente';
+            btn.disabled = false; btn.textContent = '🔍 Analisar Galeria';
         }
 
         // ============================================
-        // RESTAURAÇÃO: DOWNLOAD DA GALERIA
+        // DOWNLOAD DA GALERIA
         // ============================================
         async downloadProjectImages(mode) {
             const btnId = { identified: 'fv-dl-identified', scenes: 'fv-dl-scenes', all: 'fv-dl-all' }[mode];
             const btn = document.getElementById(btnId); const origText = btn?.textContent;
-            if (btn) { btn.disabled = true; btn.textContent = '⏳ Baixando...'; }
+            if (btn) { btn.disabled = true; btn.textContent = 'Baixando...'; }
             
             try {
                 const scroller = this.getScroller();
@@ -1182,7 +1030,6 @@
                             const a = document.createElement('a'); a.href = url; a.download = fileName;
                             document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
                             count++;
-                            if (btn) btn.textContent = `⏳ ${count} baixada(s)...`;
                             await this.sleep(300);
                         } catch(e) {}
                     }
