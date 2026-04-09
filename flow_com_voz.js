@@ -1,6 +1,6 @@
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
-// Versão 4.0 - Drag & Drop + API Rename + VOZ
+// Versão 4.1 - Fix Clique de Voz (<voz: Nome>)
 // ==========================================
 //
 // ARQUITETURA:
@@ -10,7 +10,7 @@
 //   - Atribuição manual via Drag & Drop após geração
 //   - Labels visuais nos tiles com X para remover
 //   - Referências usam sufixo " _" para identificação
-//   - Vozes usam "//Nome//" no prompt
+//   - Vozes usam <voz: Nome> no prompt
 //
 (function() {
     'use strict';
@@ -73,7 +73,7 @@
         MAX_RETRIES:           3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.0.1 (Voice Update)',
+        VERSION: '4.1 (Voice Fix)',
     };
 
     // ============================================================
@@ -82,8 +82,8 @@
 
     function parsePrompt(prompt) {
         const segs = [];
-        // Agora busca referências em [colchetes] OU vozes em //barras duplas//
-        const re = /(\[([^\]]+)\]|\/\/([^\/]+)\/\/)/g;
+        // Busca referências em [colchetes] OU vozes em <voz: Nome>
+        const re = /(\[([^\]]+)\]|<voz:\s*([^>]+)>)/g;
         let last = 0, m;
         while ((m = re.exec(prompt)) !== null) {
             if (m.index > last) segs.push({ type:'text', content: prompt.slice(last, m.index) });
@@ -112,7 +112,7 @@
         const s = new Set();
         for (const p of prompts) {
             const t = typeof p === 'string' ? p : p.text;
-             (t.match(/\/\/([^\/]+)\/\//g) || []).forEach(m => s.add(m.replace(/\/\//g, '').trim()));
+             (t.match(/<voz:\s*([^>]+)>/g) || []).forEach(m => s.add(m.replace(/<voz:\s*/, '').replace(/>/, '').trim()));
         }
         return [...s];
     }
@@ -467,10 +467,10 @@
         <div class="flow-card">
           <div class="flow-card-header">
             <h3 class="flow-card-title">Prompts de vídeo</h3>
-            <p class="flow-card-description">Um prompt por linha. Use <strong>{cena X}</strong>, <strong>[nome]</strong> e <strong>//voz//</strong>.</p>
+            <p class="flow-card-description">Um prompt por linha. Use <strong>{cena X}</strong>, <strong>[nome]</strong> e <strong>&lt;voz: Nome&gt;</strong>.</p>
           </div>
           <div class="flow-card-content">
-            <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:\n{cena 10} [Maria] caminhando no [Parque] com vento forte //Algebra// \n{cena 13} Close-up de [João] olhando para o horizonte\n\nOu sem numeração:\nPaisagem noturna com lua cheia //Aoede//"></textarea>
+            <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:\n{cena 10} [Maria] caminhando no [Parque] com vento forte <voz: Algebra> \n{cena 13} Close-up de [João] olhando para o horizonte\n\nOu sem numeração:\nPaisagem noturna com lua cheia <voz: Aoede>"></textarea>
             <div id="fv-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
@@ -646,7 +646,7 @@
             this.setupTextWatcher();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v4.0.1 (Voice) inicializado!');
+            log.success('Flow Automation v4.1 (Voice Fix) inicializado!');
             if (!_authToken) log.warn('Token ainda não capturado — faça qualquer ação na página.');
         }
 
@@ -747,7 +747,7 @@
             const videoModeDescs = {
                 free: 'Gera vídeos sem atribuir nomes. Ideal para testes rápidos.',
                 scenes: 'Cada prompt = uma cena. Após gerar, arraste as cenas para os melhores vídeos e baixe.',
-                voice: 'Seleciona a voz especificada com //Nome// e gera a cena.'
+                voice: 'Seleciona a voz especificada com <voz: Nome> e gera a cena.'
             };
 
             document.querySelectorAll('[data-vmode]').forEach(btn => {
@@ -1231,15 +1231,18 @@
         }
         
         async openVoiceSelectorAndSelect(voiceName) {
-             const voiceBtn = [...document.querySelectorAll('button')].find(b => 
-                 b.querySelector('i, svg')?.textContent?.includes('mic') || 
+             // O botão correto de voz fica PRÓXIMO ao input de texto
+             // Normalmente tem um role="button" e o texto "Voz" ou "Voice"
+             const editorContainer = this.getEditor()?.closest('div[role="textbox"]')?.parentElement?.parentElement || document.body;
+             
+             const voiceBtn = [...editorContainer.querySelectorAll('button, div[role="button"]')].find(b => 
+                 b.querySelector('span, div')?.textContent?.includes('Voice') || 
                  b.querySelector('span, div')?.textContent?.includes('Voz') ||
-                 b.querySelector('span, div')?.textContent?.includes('Voice') ||
                  b.getAttribute('aria-label')?.includes('Voice')
              );
              
              if (!voiceBtn) {
-                 this.logDebug(`⚠️ Botão de Voz não encontrado para selecionar "${voiceName}"`, 'warn');
+                 this.logDebug(`⚠️ Botão de Voz INLINE não encontrado para selecionar "${voiceName}"`, 'warn');
                  return false;
              }
              
@@ -1258,20 +1261,48 @@
                   return false;
              }
              
-             // Procura pelo nome da voz na lista
+             // Rola a lista se necessário e procura pelo nome
              const nameLower = voiceName.toLowerCase().trim();
-             const items = [...dialog.querySelectorAll('div, span, button, li')].filter(el => 
-                 el.textContent && el.textContent.toLowerCase().trim() === nameLower
-             );
+             let target = null;
              
-             if (items.length > 0) {
-                 // Clica no elemento mais próximo que seja clicável
-                 const target = items[0].closest('button, [role="menuitem"], [role="option"], [role="button"]') || items[0];
-                 target.click();
+             // Tenta buscar no menu atual
+             const findVoice = () => {
+                 return [...dialog.querySelectorAll('div, span, li')].find(el => {
+                     // Busca elementos de texto que contenham EXATAMENTE o nome da voz
+                     if (el.children.length === 0 && el.textContent) {
+                         return el.textContent.toLowerCase().trim() === nameLower;
+                     }
+                     return false;
+                 });
+             };
+             
+             target = findVoice();
+             
+             // Se não encontrou de primeira, tenta dar um pequeno scroll (caso o menu seja grande)
+             if (!target) {
+                 const scroller = dialog.querySelector('[data-testid="virtuoso-scroller"], div[style*="overflow: auto"]') || dialog;
+                 if (scroller && scroller !== dialog) {
+                     for(let i=0; i<3; i++) {
+                         scroller.scrollTop += 150;
+                         await this.sleep(300);
+                         target = findVoice();
+                         if (target) break;
+                     }
+                     // Volta pro topo se não achou rolando pra baixo
+                     scroller.scrollTop = 0;
+                 }
+             }
+
+             if (target) {
+                 // Clica no elemento pai mais próximo que seja clicável
+                 const clickable = target.closest('button, [role="menuitem"], [role="option"], [role="button"], li') || target;
+                 clickable.click();
                  await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
                  
-                 // Aguarda fechar ou fecha manualmente se for menu
-                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                 // Aguarda fechar ou fecha manualmente (alguns menus fecham sozinhos após click)
+                 if (document.querySelector('[role="dialog"], [role="menu"]')) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                 }
                  return true;
              } else {
                  this.logDebug(`⚠️ Voz "${voiceName}" não encontrada na lista`, 'warn');
@@ -1317,8 +1348,8 @@
                         }
                     }
                     
-                    // Se encontrou uma voz no prompt, tenta selecionar antes de enviar
-                    if (voiceToSelect) {
+                    // Se encontrou uma voz no prompt, tenta selecionar ANTES de enviar
+                    if (voiceToSelect && this.videoIsRunning) {
                          this.logDebug(`Selecionando voz: "${voiceToSelect}"`, 'info');
                          await this.openVoiceSelectorAndSelect(voiceToSelect);
                          await this.dynamicSleep(CONFIG.DELAY_SHORT);
@@ -1339,7 +1370,7 @@
         }
 
         async resetEditor() {
-            const dialog = document.querySelector('[role="dialog"]');
+            const dialog = document.querySelector('[role="dialog"], [role="menu"]');
             if (dialog) {
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
                 await this.sleep(500);
@@ -1374,7 +1405,7 @@
                 }
             }
 
-            const dialog2 = document.querySelector('[role="dialog"]');
+            const dialog2 = document.querySelector('[role="dialog"], [role="menu"]');
             if (dialog2) {
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
                 await this.sleep(400);
@@ -1465,7 +1496,7 @@
             document.getElementById('flow-prompts-input').disabled = true;
 
             this.buildPromptList();
-            this.setStatus('info', '🚀 Iniciando automação v4.0...');
+            this.setStatus('info', '🚀 Iniciando automação v4.1...');
             this.updateProgress(0);
             await this.detectGrid();
             const batches = [];
@@ -2477,7 +2508,7 @@
             document.getElementById('fv-prompts-input').disabled = true;
 
             this.buildVideoPromptList();
-            this.setVideoStatus('info', '🚀 Iniciando automação de vídeos v4.0.1...');
+            this.setVideoStatus('info', '🚀 Iniciando automação de vídeos v4.1...');
             this.updateVideoProgress(0);
             await this.detectGrid();
 
@@ -2819,11 +2850,11 @@
             document.getElementById('fv-queue-info').textContent = `${this.videoPrompts.length} prompts na fila`;
             document.getElementById('fv-prompt-list').innerHTML = this.videoPrompts.map((p, i) => {
                 const refs = (p.text.match(/\[([^\]]+)\]/g) || []).map(m => m.slice(1,-1));
-                const voices = (p.text.match(/\/\/([^\/]+)\/\//g) || []).map(m => m.replace(/\/\//g, '').trim());
+                const voices = (p.text.match(/<voz:\s*([^>]+)>/g) || []).map(m => m.replace(/<voz:\s*/, '').replace(/>/, '').trim());
                 
                 return `<div class="flow-prompt-item" data-index="${i}">
                     <span class="num">${p.promptNum}</span>
-                    <span class="text">${this.esc(p.text.replace(/\[([^\]]+)\]/g, '●$1').replace(/\/\/([^\/]+)\/\//g, '🎙️$1'))}</span>
+                    <span class="text">${this.esc(p.text.replace(/\[([^\]]+)\]/g, '●$1').replace(/<voz:\s*([^>]+)>/g, '🎙️$1'))}</span>
                     <span class="refs">
                         ${refs.map(r => `<span class="ref-badge">${this.esc(r)}</span>`).join('')}
                         ${voices.map(v => `<span class="voice-badge">🎙️ ${this.esc(v)}</span>`).join('')}
