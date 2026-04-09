@@ -1,6 +1,6 @@
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
-// Versão 4.3 Final - Abas Inteligentes via HTML
+// Versão 4.4 - Correção do Clique Radix UI
 // ==========================================
 //
 // ARQUITETURA:
@@ -72,7 +72,7 @@
         MAX_RETRIES:           3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.3 Final (Smart Tabs)',
+        VERSION: '4.4 (Radix Click Fix)',
     };
 
     // ============================================================
@@ -404,7 +404,7 @@
             this.setupTextWatcher();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v4.3 Final (Smart Tabs) inicializado!');
+            log.success('Flow Automation v4.4 (Radix UI) inicializado!');
             if (!_authToken) log.warn('Token não capturado.');
         }
 
@@ -517,26 +517,38 @@
         esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
         // ============================================
-        // O SEGREDO DAS ABAS (USANDO OS ATRIBUTOS)
+        // O SEGREDO DAS ABAS (CORREÇÃO RADIX UI)
         // ============================================
         async clickDialogTab(type) {
-            const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
-            if (!dialog) return;
-
             let targetTab = null;
-            if (type === 'image') {
-                targetTab = dialog.querySelector('button[role="tab"][aria-controls*="IMAGE"]');
-            } else if (type === 'voice') {
-                targetTab = dialog.querySelector('button[role="tab"][aria-controls*="AUDIO"]');
+            // Busca no documento inteiro, não só no dialog, porque o Radix usa Portals
+            const selector = type === 'image' 
+                ? 'button[role="tab"][aria-controls*="IMAGE"]' 
+                : 'button[role="tab"][aria-controls*="AUDIO"]';
+
+            // Aguarda até 2 segundos a aba aparecer na tela
+            for (let i = 0; i < 10; i++) {
+                targetTab = document.querySelector(selector);
+                if (targetTab) break;
+                await this.dynamicSleep([200, 300]);
             }
 
-            if (targetTab) {
-                const isSelected = targetTab.getAttribute('aria-selected') === 'true' || targetTab.getAttribute('data-state') === 'active';
-                if (!isSelected) {
-                    this.logDebug(`Migrando para a aba: ${type === 'image' ? 'Imagens' : 'Vozes'}`, 'info');
-                    targetTab.click();
-                    await this.dynamicSleep([400, 600]); 
-                }
+            if (!targetTab) {
+                this.logDebug(`⚠️ Aba de ${type} não encontrada.`, 'warn');
+                return;
+            }
+
+            const isSelected = targetTab.getAttribute('aria-selected') === 'true' || targetTab.getAttribute('data-state') === 'active';
+            if (!isSelected) {
+                this.logDebug(`Migrando para a aba: ${type === 'image' ? 'Imagens' : 'Vozes'}`, 'info');
+                
+                // Simula um clique real de mouse, pois o React/Radix UI ignora .click() simples
+                targetTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                targetTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                targetTab.click();
+                
+                // Pausa importante para dar tempo do Radix carregar a lista de vozes/imagens
+                await this.dynamicSleep([800, 1200]); 
             }
         }
 
@@ -703,7 +715,7 @@
                         } else if (seg.type === 'ref') { 
                              await this.openAtSelector(); 
                              await this.clickDialogTab('image'); // GARANTE ABA IMAGEM ANTES DE BUSCAR
-                             await this.searchAndSelect(seg.name); 
+                             await this.searchAndSelect(seg.name); // FUNÇÃO ORIGINAL DE IMAGEM
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
