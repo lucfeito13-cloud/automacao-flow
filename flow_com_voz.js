@@ -1,7 +1,16 @@
 // ==========================================
-// FLOW AUTOMATION - CRIADORES DARK
-// Versão 8.0 MÁXIMA - Original + Voz + Resume + Upscale
+// FLOW IMAGE AUTOMATION - CRIADORES DARK
+// Versão 4.0 - Drag & Drop + API Rename (Flow Voz)
 // ==========================================
+//
+// ARQUITETURA:
+//   - Três modos: Livre, Referências, Cenas
+//   - Rename e Favoritar via API (não simula cliques)
+//   - Atribuição manual via Drag & Drop após geração
+//   - Labels visuais nos tiles com X para remover
+//   - Referências usam sufixo " _" para identificação
+//   - Vozes adicionadas usando a tag <voz: Nome>
+//
 (function() {
     'use strict';
 
@@ -12,7 +21,7 @@
     window.FlowAutomationInitialized = true;
 
     // ============================================================
-    // TOKEN INTERCEPTION
+    // TOKEN INTERCEPTION (captura Bearer token automaticamente)
     // ============================================================
     const _origFetch = window.fetch;
     let _authToken = null;
@@ -52,18 +61,18 @@
     };
 
     const CONFIG = {
-        DELAY_SHORT:           [300, 500],
-        DELAY_MEDIUM:          [500, 800],
-        DELAY_LONG:            [1000, 1500],
-        DELAY_BETWEEN_SUBMITS: [3500, 5000],
-        DELAY_BETWEEN_BATCHES: [2500, 3500],
-        GENERATION_TIMEOUT:    180000,
-        TILE_CHECK_INTERVAL:   2500,
-        STABILIZE_TIME:        6000,
-        MAX_RETRIES:           3,
+        DELAY_SHORT:            [300, 500],
+        DELAY_MEDIUM:           [500, 800],
+        DELAY_LONG:             [1000, 1500],
+        DELAY_BETWEEN_SUBMITS:  [3500, 5000],
+        DELAY_BETWEEN_BATCHES:  [2500, 3500],
+        GENERATION_TIMEOUT:     180000,
+        TILE_CHECK_INTERVAL:    2500,
+        STABILIZE_TIME:         6000,
+        MAX_RETRIES:            3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '8.0 (Resume + Upscale)',
+        VERSION: '4.0 (Flow Voz)',
     };
 
     // ============================================================
@@ -76,8 +85,11 @@
         let last = 0, m;
         while ((m = re.exec(prompt)) !== null) {
             if (m.index > last) segs.push({ type:'text', content: prompt.slice(last, m.index) });
-            if (m[2]) segs.push({ type:'ref', name: m[2].trim() });
-            else if (m[3]) segs.push({ type:'voice', name: m[3].trim() });
+            if (m[2]) {
+                 segs.push({ type:'ref', name: m[2].trim() });
+            } else if (m[3]) {
+                 segs.push({ type:'voice', name: m[3].trim() });
+            }
             last = m.index + m[0].length;
         }
         if (last < prompt.length) segs.push({ type:'text', content: prompt.slice(last) });
@@ -92,7 +104,7 @@
         }
         return [...s];
     }
-    
+
     function extractVoices(prompts) {
         const s = new Set();
         for (const p of prompts) {
@@ -120,6 +132,7 @@
         return result;
     }
 
+    /** Extrai nomes de referência da primeira linha: [Maria][José][Praia] */
     function parseReferenceHeader(text) {
         const lines = text.split('\n');
         const firstLine = lines[0].trim();
@@ -127,6 +140,7 @@
         const re = /\[([^\]]+)\]/g;
         let m;
         while ((m = re.exec(firstLine)) !== null) refs.push(m[1].trim());
+        // Primeira linha é SOMENTE referências?
         const stripped = firstLine.replace(/\[([^\]]+)\]/g, '').trim();
         if (refs.length > 0 && stripped === '') {
             let startIdx = 1;
@@ -375,12 +389,6 @@
               </div>
               <div id="flow-mode-desc" style="font-size:11px;color:var(--cd-text-light);line-height:1.4;min-height:16px;">Gera imagens sem atribuir nomes. Ideal para testes rápidos.</div>
             </div>
-            
-            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;border-top:1px solid var(--cd-border-light);padding-top:12px;">
-              <div class="flow-option-title">Retomar de (Pular Cenas)</div>
-              <input type="number" id="fi-start-from" placeholder="Ex: 20 (Deixe vazio para todas)" style="width:100%; padding:6px; border-radius:4px; border:1px solid var(--cd-border); font-family:inherit; font-size:12px;">
-            </div>
-
             <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;">
               <div class="flow-option-text">
                 <div class="flow-option-title">Prompts simultâneos</div>
@@ -467,11 +475,11 @@
         </div>
         <div class="flow-card">
           <div class="flow-card-header">
-            <h3 class="flow-card-title">Referências e Vozes</h3>
-            <p class="flow-card-description">Valide imagens e verifique vozes.</p>
+            <h3 class="flow-card-title">Referências detectadas</h3>
+            <p class="flow-card-description">Valide as referências [nome] antes de iniciar.</p>
           </div>
           <div class="flow-card-content">
-            <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência detectada.</span></div>
+            <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span></div>
             <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências na galeria</button>
           </div>
         </div>
@@ -558,13 +566,14 @@
                 <button class="flow-validate-btn" id="fv-dl-all" style="margin:0;">📦 Completo (Todas as Geradas)</button>
               </div>
             </div>
+
           </div>
         </div>
         <div id="fv-logs-container" class="flow-logs-container"><div id="fv-debug-panel" class="flow-debug-panel"></div></div>
       </div>
     </div>
   </div>
-  <footer class="flow-footer">Feito por <a href="https://www.youtube.com/@Vin%C3%ADciusLinharesCANALDARK" target="_blank">Criadores Dark - Vinícius Linhares</a></footer>
+  <footer class="flow-footer">Feito por <a href="https://www.youtube.com/@ViníciusLinharesCANALDARK" target="_blank">Criadores Dark - Vinícius Linhares</a></footer>
 </div>
 <div id="flow-mini">
   <div class="flow-mini-header">
@@ -630,7 +639,7 @@
             this.videoIsRunning       = false;
             this.videoShouldStop      = false;
             this.videoPrompts         = [];
-            this.videoGenMode         = 'free';
+            this.videoGenMode         = 'free'; 
             this.videoBatchSize       = 4;
             this.videoResultsPerPrompt = 3;
             this.videoSceneCount      = 0;
@@ -640,7 +649,7 @@
             this.setupTextWatcher();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v8.0 inicializado!');
+            log.success('Flow Automation v4.0 inicializado!');
             if (!_authToken) log.warn('Token ainda não capturado.');
         }
 
@@ -679,11 +688,19 @@
                 });
             });
 
+            const modeDescs = {
+                free: 'Gera imagens sem atribuir nomes. Ideal para testes rápidos.',
+                refs: 'Primeira linha: [Nome1][Nome2]... Após gerar, arraste cada referência para a imagem desejada.',
+                scenes: 'Cada prompt = uma cena. Após gerar, arraste as cenas para as melhores imagens e baixe.'
+            };
             document.querySelectorAll('.flow-mode-btn[data-mode]').forEach(btn => {
                 btn.addEventListener('click', () => {
                     document.querySelectorAll('.flow-mode-btn[data-mode]').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
                     this.genMode = btn.dataset.mode;
+                    const descEl = document.getElementById('flow-mode-desc');
+                    if (descEl) descEl.textContent = modeDescs[this.genMode] || '';
+                    this.logDebug(`Modo: ${this.genMode}`, 'info');
                 });
             });
 
@@ -720,11 +737,18 @@
             });
 
             // ── VIDEO TAB LISTENERS ──
+            const videoModeDescs = {
+                free: 'Gera vídeos sem atribuir nomes. Ideal para testes rápidos.',
+                scenes: 'Cada prompt = uma cena. Após gerar, arraste as cenas para os melhores vídeos e baixe.',
+                voice: 'Seleciona a voz especificada com <voz: Nome> e gera a cena.'
+            };
             document.querySelectorAll('[data-vmode]').forEach(btn => {
                 btn.addEventListener('click', () => {
                     document.querySelectorAll('[data-vmode]').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
                     this.videoGenMode = btn.dataset.vmode;
+                    const descEl = document.getElementById('fv-mode-desc');
+                    if (descEl) descEl.textContent = videoModeDescs[this.videoGenMode] || '';
                 });
             });
 
@@ -750,6 +774,7 @@
             $('fv-dl-all').addEventListener('click', () => this.downloadProjectImages('all'));
             $('fv-reopen-assign').addEventListener('click', () => this.reopenAssignPanel());
             
+            // Event Listener para o Upscale 1080p
             $('fv-upscale-btn').addEventListener('click', () => this.startUpscaleProcess());
         }
 
@@ -763,10 +788,8 @@
             const text    = document.getElementById('flow-prompts-input').value;
             const prompts = parsePromptsText(text);
             const refs    = extractReferences(prompts);
-            
             document.getElementById('flow-prompt-count').textContent =
                 `${prompts.length} prompt${prompts.length !== 1 ? 's' : ''} detectado${prompts.length !== 1 ? 's' : ''}`;
-                
             const list = document.getElementById('flow-ref-list');
             if (!refs.length) {
                 list.innerHTML = '<span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência. Prompts serão enviados como texto puro.</span>';
@@ -796,7 +819,6 @@
             
             document.getElementById('fv-prompt-count').textContent =
                 `${prompts.length} prompt${prompts.length !== 1 ? 's' : ''} detectado${prompts.length !== 1 ? 's' : ''}`;
-                
             const list = document.getElementById('fv-ref-list');
             if (!refs.length && !voices.length) {
                 list.innerHTML = '<span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span>';
@@ -834,6 +856,9 @@
 
         esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
+        // ============================================
+        // ABAS DO RADIX (Imagem e Voz)
+        // ============================================
         async clickDialogTab(type) {
             let targetTab = null;
             const selector = type === 'image' 
@@ -865,17 +890,14 @@
             const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
             if (!dialog) throw new Error('Diálogo @ não aberto');
             await this.dynamicSleep([500, 700]);
-            
             const input = dialog.querySelector('input[placeholder*="esquisa"], input[placeholder*="earch"], input[type="text"]');
             if (!input) throw new Error('Input de pesquisa não encontrado');
-            
             input.focus(); await this.dynamicSleep([250, 400]);
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
             setter.call(input, name);
             input.dispatchEvent(new Event('input',  { bubbles:true }));
             input.dispatchEvent(new Event('change', { bubbles:true }));
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-            
             let target = null;
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
@@ -911,6 +933,9 @@
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
 
+        // ============================================
+        // SELEÇÃO DE VOZES 
+        // ============================================
         async searchAndSelectVoice(name) {
             const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
             if (!dialog) throw new Error('Diálogo @ não aberto');
@@ -1220,7 +1245,7 @@
                     e.focus(); e.click(); await this.dynamicSleep([500, 800]);
                 }
             }
-            throw new Error('Diálogo @ não abriu após ' + MAX_AT_RETRIES + ' tentativas');
+            throw new Error('Diálogo @ não abriu');
         }
 
         async clickSubmit() {
@@ -1313,7 +1338,7 @@
         }
 
         // ============================================================
-        // PIPELINE DE IMAGENS (COM RESUME)
+        // PIPELINE DE IMAGENS 
         // ============================================================
 
         async start() {
@@ -1437,7 +1462,7 @@
         stop() { this.shouldStop = true; this.setStatus('warning', '⏹ Parando...'); }
 
         // ============================================================
-        // PIPELINE DE VÍDEOS (COM RESUME E CENA CERTA NO PAINEL)
+        // PIPELINE DE VÍDEOS (VOZ, RESUME E UPSCALE)
         // ============================================================
 
         async startVideo() {
@@ -1852,6 +1877,7 @@
             const rlBar = document.getElementById('flow-assign-reload-bar');
             if (rlBar) rlBar.classList.remove('visible');
 
+            // Usa videoSceneAssignments e videoPrompts
             for (const [sceneName] of this.videoSceneAssignments) {
                 const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
                 const prompt = this.videoPrompts.find(p => p.promptNum === sceneNum);
