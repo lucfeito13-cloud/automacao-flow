@@ -1,6 +1,6 @@
 // ==========================================
 // FLOW AUTOMATION - CRIADORES DARK
-// Versão 8.0 MÁXIMA - Original + Voz + Resume + Upscale 1080p
+// Versão 8.0 MÁXIMA - Original + Voz + Resume + Upscale
 // ==========================================
 (function() {
     'use strict';
@@ -294,6 +294,9 @@
 .flow-assign-hbtn{background:none;border:none;cursor:pointer;padding:3px;color:var(--cd-text-muted);font-size:14px;line-height:1;transition:all .2s;border-radius:4px;}
 .flow-assign-hbtn:hover{color:var(--cd-text);background:var(--cd-bg-secondary);}
 .flow-assign-hbtn.close-btn:hover{color:#ef4444;background:#fef2f2;}
+.flow-assign-dl-btn{display:none;padding:5px 14px;font-size:12px;font-weight:700;background:linear-gradient(135deg,var(--cd-primary),var(--cd-primary-dark));color:#fff;border:none;border-radius:6px;cursor:pointer;transition:all .2s;white-space:nowrap;}
+.flow-assign-dl-btn:hover:not(:disabled){box-shadow:0 4px 12px rgba(16,185,129,.35);transform:translateY(-1px);}
+.flow-assign-dl-btn:disabled{opacity:.35;cursor:not-allowed;transform:none;}
 .flow-assign-reload-bar{display:none;padding:10px 16px;text-align:center;border-top:1px solid var(--cd-border-light);flex-shrink:0;}
 .flow-assign-reload-bar.visible{display:block;}
 .flow-assign-reload-bar button{padding:8px 24px;font-size:13px;font-weight:700;background:linear-gradient(135deg,var(--cd-primary),var(--cd-primary-dark));color:#fff;border:none;border-radius:var(--cd-radius-xs);cursor:pointer;animation:pulse-glow 1.5s ease-in-out infinite;transition:all .2s;}
@@ -345,7 +348,7 @@
             <p class="flow-card-description">Um prompt por linha. Use <strong>[nome]</strong> para referências do projeto.</p>
           </div>
           <div class="flow-card-content">
-            <textarea class="flow-textarea" id="flow-prompts-input" placeholder="Ex:\nImagem de [Maria] sentada na [Sala]\n[João] caminhando no [Parque]"></textarea>
+            <textarea class="flow-textarea" id="flow-prompts-input" placeholder="Ex:&#10;Imagem de [Maria] sentada na [Sala]&#10;[João] caminhando no [Parque]"></textarea>
             <div id="flow-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
@@ -458,7 +461,7 @@
             <p class="flow-card-description">Um prompt por linha. Use <strong>{cena X}</strong>, <strong>[nome]</strong> e <strong>&lt;voz: Nome&gt;</strong>.</p>
           </div>
           <div class="flow-card-content">
-            <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:\n{cena 10} [Maria] caminhando no [Parque] com vento forte <voz: Algebra> \n{cena 13} Close-up de [João] olhando para o horizonte\n\nOu sem numeração:\nPaisagem noturna com lua cheia <voz: Aoede>"></textarea>
+            <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:&#10;{cena 10} [Maria] caminhando no [Parque] com vento forte <voz: Algebra> &#10;{cena 13} Close-up de [João] olhando para o horizonte&#10;&#10;Ou sem numeração:&#10;Paisagem noturna com lua cheia <voz: Aoede>"></textarea>
             <div id="fv-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
@@ -601,10 +604,7 @@
   <div class="flow-assign-prompt-preview" id="flow-assign-preview" style="display:none;"><span class="preview-label"></span><span class="preview-text"></span></div>
   <div class="flow-assign-reload-bar" id="flow-assign-reload-bar"><button id="flow-assign-reload">🔄 Atualizar Página</button></div>
 </div>
-    `;
-    const styleEl = document.createElement('style');
-    styleEl.textContent = css;
-    document.head.appendChild(styleEl);
+`);
 
     // ============================================================
     // CLASSE PRINCIPAL
@@ -750,7 +750,6 @@
             $('fv-dl-all').addEventListener('click', () => this.downloadProjectImages('all'));
             $('fv-reopen-assign').addEventListener('click', () => this.reopenAssignPanel());
             
-            // Botão de Upscale
             $('fv-upscale-btn').addEventListener('click', () => this.startUpscaleProcess());
         }
 
@@ -951,7 +950,7 @@
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                if (!document.querySelector('[role="dialog"]')) return;
+                if (!document.querySelector('[role="dialog"], [role="presentation"]')) return;
             }
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
@@ -1117,7 +1116,6 @@
 
         async waitForMatrix(matrix, beforeUuids) {
             const scroller = this.getScroller();
-            const rowsNeeded = Math.max(...matrix.map(s => s.row)) + 1;
             const start = Date.now();
             if (scroller) { scroller.scrollTop = 0; await this.sleep(500); }
 
@@ -1797,7 +1795,6 @@
                 dlBtn.disabled = true;
                 const rlBar2 = document.getElementById('flow-assign-reload-bar'); if (rlBar2) rlBar2.classList.remove('visible');
                 
-                // Mapeia todas as cenas da this.prompts (Corrigido os numeros)
                 for (const p of this.prompts) {
                     const sceneName = `Cena ${p.promptNum}`;
                     const promptText = p.text || '';
@@ -1855,7 +1852,6 @@
             const rlBar = document.getElementById('flow-assign-reload-bar');
             if (rlBar) rlBar.classList.remove('visible');
 
-            // Usa videoSceneAssignments e videoPrompts para pegar a ordem certa dos numeros
             for (const [sceneName] of this.videoSceneAssignments) {
                 const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
                 const prompt = this.videoPrompts.find(p => p.promptNum === sceneNum);
