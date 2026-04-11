@@ -1,16 +1,7 @@
 // ==========================================
-// FLOW IMAGE AUTOMATION - CRIADORES DARK
-// Versão 4.0 - Drag & Drop + API Rename (Flow Voz)
+// FLOW AUTOMATION - CRIADORES DARK
+// Versão 8.0 MÁXIMA - Original + Voz + Resume + Upscale 1080p
 // ==========================================
-//
-// ARQUITETURA:
-//   - Três modos: Livre, Referências, Cenas
-//   - Rename e Favoritar via API (não simula cliques)
-//   - Atribuição manual via Drag & Drop após geração
-//   - Labels visuais nos tiles com X para remover
-//   - Referências usam sufixo " _" para identificação
-//   - Vozes adicionadas usando a tag <voz: Nome>
-//
 (function() {
     'use strict';
 
@@ -21,7 +12,7 @@
     window.FlowAutomationInitialized = true;
 
     // ============================================================
-    // TOKEN INTERCEPTION (captura Bearer token automaticamente)
+    // TOKEN INTERCEPTION
     // ============================================================
     const _origFetch = window.fetch;
     let _authToken = null;
@@ -61,18 +52,18 @@
     };
 
     const CONFIG = {
-        DELAY_SHORT:            [300, 500],
-        DELAY_MEDIUM:           [500, 800],
+        DELAY_SHORT:           [300, 500],
+        DELAY_MEDIUM:          [500, 800],
         DELAY_LONG:            [1000, 1500],
         DELAY_BETWEEN_SUBMITS: [3500, 5000],
         DELAY_BETWEEN_BATCHES: [2500, 3500],
-        GENERATION_TIMEOUT:  180000,
+        GENERATION_TIMEOUT:    180000,
         TILE_CHECK_INTERVAL:   2500,
         STABILIZE_TIME:        6000,
-        MAX_RETRIES:              3,
+        MAX_RETRIES:           3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.0 (Flow Voz)',
+        VERSION: '8.0 (Resume + Upscale)',
     };
 
     // ============================================================
@@ -85,11 +76,8 @@
         let last = 0, m;
         while ((m = re.exec(prompt)) !== null) {
             if (m.index > last) segs.push({ type:'text', content: prompt.slice(last, m.index) });
-            if (m[2]) {
-                 segs.push({ type:'ref', name: m[2].trim() });
-            } else if (m[3]) {
-                 segs.push({ type:'voice', name: m[3].trim() });
-            }
+            if (m[2]) segs.push({ type:'ref', name: m[2].trim() });
+            else if (m[3]) segs.push({ type:'voice', name: m[3].trim() });
             last = m.index + m[0].length;
         }
         if (last < prompt.length) segs.push({ type:'text', content: prompt.slice(last) });
@@ -104,7 +92,7 @@
         }
         return [...s];
     }
-
+    
     function extractVoices(prompts) {
         const s = new Set();
         for (const p of prompts) {
@@ -132,7 +120,6 @@
         return result;
     }
 
-    /** Extrai nomes de referência da primeira linha: [Maria][José][Praia] */
     function parseReferenceHeader(text) {
         const lines = text.split('\n');
         const firstLine = lines[0].trim();
@@ -140,7 +127,6 @@
         const re = /\[([^\]]+)\]/g;
         let m;
         while ((m = re.exec(firstLine)) !== null) refs.push(m[1].trim());
-        // Primeira linha é SOMENTE referências?
         const stripped = firstLine.replace(/\[([^\]]+)\]/g, '').trim();
         if (refs.length > 0 && stripped === '') {
             let startIdx = 1;
@@ -278,7 +264,7 @@
 .flow-promo:hover{transform:scale(1.02);box-shadow:0 4px 12px rgba(16,185,129,.15);}
 .flow-promo p{color:var(--cd-text);font-size:12px;margin:0;line-height:1.5;}
 .flow-promo strong{color:var(--cd-primary-dark);}
-/* ========== ASSIGNMENT PANEL (horizontal top bar) ========== */
+/* ========== ASSIGNMENT PANEL ========== */
 #flow-assign-panel{display:none;position:fixed;top:12px;left:84px;right:456px;z-index:10005;background:var(--cd-bg);border-radius:var(--cd-radius);box-shadow:0 10px 40px -10px rgba(0,0,0,.2);border:1px solid var(--cd-border);font-family:'Inter','Segoe UI',system-ui,sans-serif;overflow:hidden;flex-direction:column;transition:all .3s;}
 #flow-assign-panel.active{display:flex;}
 #flow-assign-panel.panel-closed{right:12px;}
@@ -308,9 +294,6 @@
 .flow-assign-hbtn{background:none;border:none;cursor:pointer;padding:3px;color:var(--cd-text-muted);font-size:14px;line-height:1;transition:all .2s;border-radius:4px;}
 .flow-assign-hbtn:hover{color:var(--cd-text);background:var(--cd-bg-secondary);}
 .flow-assign-hbtn.close-btn:hover{color:#ef4444;background:#fef2f2;}
-.flow-assign-dl-btn{display:none;padding:5px 14px;font-size:12px;font-weight:700;background:linear-gradient(135deg,var(--cd-primary),var(--cd-primary-dark));color:#fff;border:none;border-radius:6px;cursor:pointer;transition:all .2s;white-space:nowrap;}
-.flow-assign-dl-btn:hover:not(:disabled){box-shadow:0 4px 12px rgba(16,185,129,.35);transform:translateY(-1px);}
-.flow-assign-dl-btn:disabled{opacity:.35;cursor:not-allowed;transform:none;}
 .flow-assign-reload-bar{display:none;padding:10px 16px;text-align:center;border-top:1px solid var(--cd-border-light);flex-shrink:0;}
 .flow-assign-reload-bar.visible{display:block;}
 .flow-assign-reload-bar button{padding:8px 24px;font-size:13px;font-weight:700;background:linear-gradient(135deg,var(--cd-primary),var(--cd-primary-dark));color:#fff;border:none;border-radius:var(--cd-radius-xs);cursor:pointer;animation:pulse-glow 1.5s ease-in-out infinite;transition:all .2s;}
@@ -362,7 +345,7 @@
             <p class="flow-card-description">Um prompt por linha. Use <strong>[nome]</strong> para referências do projeto.</p>
           </div>
           <div class="flow-card-content">
-            <textarea class="flow-textarea" id="flow-prompts-input" placeholder="Ex:&#10;Imagem de [Maria] sentada na [Sala]&#10;[João] caminhando no [Parque]"></textarea>
+            <textarea class="flow-textarea" id="flow-prompts-input" placeholder="Ex:\nImagem de [Maria] sentada na [Sala]\n[João] caminhando no [Parque]"></textarea>
             <div id="flow-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
@@ -389,6 +372,12 @@
               </div>
               <div id="flow-mode-desc" style="font-size:11px;color:var(--cd-text-light);line-height:1.4;min-height:16px;">Gera imagens sem atribuir nomes. Ideal para testes rápidos.</div>
             </div>
+            
+            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;border-top:1px solid var(--cd-border-light);padding-top:12px;">
+              <div class="flow-option-title">Retomar de (Pular Cenas)</div>
+              <input type="number" id="fi-start-from" placeholder="Ex: 20 (Deixe vazio para todas)" style="width:100%; padding:6px; border-radius:4px; border:1px solid var(--cd-border); font-family:inherit; font-size:12px;">
+            </div>
+
             <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;">
               <div class="flow-option-text">
                 <div class="flow-option-title">Prompts simultâneos</div>
@@ -466,20 +455,20 @@
         <div class="flow-card">
           <div class="flow-card-header">
             <h3 class="flow-card-title">Prompts de vídeo</h3>
-            <p class="flow-card-description">Um prompt por linha. Use <strong>{cena X}</strong> para numerar cenas, <strong>[nome]</strong> para referências e <strong>&lt;voz: Nome&gt;</strong> para vozes.</p>
+            <p class="flow-card-description">Um prompt por linha. Use <strong>{cena X}</strong>, <strong>[nome]</strong> e <strong>&lt;voz: Nome&gt;</strong>.</p>
           </div>
           <div class="flow-card-content">
-            <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:&#10;{cena 10} [Maria] caminhando no [Parque] com vento forte &lt;voz: Algebra&gt;&#10;{cena 13} Close-up de [João] olhando para o horizonte&#10;&#10;Ou sem numeração:&#10;Paisagem noturna com lua cheia&#10;Carro andando na estrada"></textarea>
+            <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:\n{cena 10} [Maria] caminhando no [Parque] com vento forte <voz: Algebra> \n{cena 13} Close-up de [João] olhando para o horizonte\n\nOu sem numeração:\nPaisagem noturna com lua cheia <voz: Aoede>"></textarea>
             <div id="fv-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
         <div class="flow-card">
           <div class="flow-card-header">
-            <h3 class="flow-card-title">Referências detectadas</h3>
-            <p class="flow-card-description">Valide as referências [nome] antes de iniciar.</p>
+            <h3 class="flow-card-title">Referências e Vozes</h3>
+            <p class="flow-card-description">Valide imagens e verifique vozes.</p>
           </div>
           <div class="flow-card-content">
-            <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span></div>
+            <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência detectada.</span></div>
             <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências na galeria</button>
           </div>
         </div>
@@ -495,6 +484,12 @@
               </div>
               <div id="fv-mode-desc" style="font-size:11px;color:var(--cd-text-light);line-height:1.4;min-height:16px;">Gera vídeos sem atribuir nomes. Ideal para testes rápidos.</div>
             </div>
+
+            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;border-top:1px solid var(--cd-border-light);padding-top:12px;">
+              <div class="flow-option-title">Retomar de (Pular Cenas)</div>
+              <input type="number" id="fv-start-from" placeholder="Ex: 20 (Deixe vazio para todas)" style="width:100%; padding:6px; border-radius:4px; border:1px solid var(--cd-border); font-family:inherit; font-size:12px;">
+            </div>
+
             <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;">
               <div class="flow-option-text">
                 <div class="flow-option-title">Prompts simultâneos</div>
@@ -550,11 +545,13 @@
           <div class="flow-card-content">
             <button class="flow-validate-btn" id="fv-analyze-btn">🔍 Analisar projeto existente</button>
             <button class="flow-validate-btn" id="fv-reopen-assign" style="display:none;margin-top:6px;">📋 Reabrir painel de atribuição</button>
+            
             <div id="fv-download-section" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
-              <div style="font-size:12px;font-weight:600;color:var(--cd-text);margin-bottom:8px;">⬇️ Baixar do Projeto</div>
+              <div style="font-size:12px;font-weight:600;color:var(--cd-text);margin-bottom:8px;">⬇️ Ações de Vídeos</div>
               <div style="display:flex;flex-direction:column;gap:6px;">
-                <button class="flow-validate-btn" id="fv-dl-identified" style="margin:0;">📋 Todas as Identificadas</button>
-                <button class="flow-validate-btn" id="fv-dl-scenes" style="margin:0;">🎬 Apenas Cenas</button>
+                <button class="flow-validate-btn" id="fv-upscale-btn" style="background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; margin:0;">🚀 Iniciar Upscale 1080p (Cenas Atribuídas)</button>
+                <button class="flow-validate-btn" id="fv-dl-identified" style="margin:0;">📋 Baixar Todos os Identificados</button>
+                <button class="flow-validate-btn" id="fv-dl-scenes" style="margin:0;">🎬 Baixar Apenas Cenas</button>
                 <button class="flow-validate-btn" id="fv-dl-all" style="margin:0;">📦 Completo (Todas as Geradas)</button>
               </div>
             </div>
@@ -564,7 +561,7 @@
       </div>
     </div>
   </div>
-  <footer class="flow-footer">Feito por <a href="https://www.youtube.com/@ViníciusLinharesCANALDARK" target="_blank">Criadores Dark - Vinícius Linhares</a></footer>
+  <footer class="flow-footer">Feito por <a href="https://www.youtube.com/@Vin%C3%ADciusLinharesCANALDARK" target="_blank">Criadores Dark - Vinícius Linhares</a></footer>
 </div>
 <div id="flow-mini">
   <div class="flow-mini-header">
@@ -604,7 +601,10 @@
   <div class="flow-assign-prompt-preview" id="flow-assign-preview" style="display:none;"><span class="preview-label"></span><span class="preview-text"></span></div>
   <div class="flow-assign-reload-bar" id="flow-assign-reload-bar"><button id="flow-assign-reload">🔄 Atualizar Página</button></div>
 </div>
-`);
+    `;
+    const styleEl = document.createElement('style');
+    styleEl.textContent = css;
+    document.head.appendChild(styleEl);
 
     // ============================================================
     // CLASSE PRINCIPAL
@@ -620,36 +620,29 @@
             this.imagesPerPrompt = 3;
             this.gridCols        = 3;
             this.rowHeight       = 347;
-            // Modo: 'free' | 'refs' | 'scenes'
             this.genMode         = 'free';
-            // Reference mode
             this.refNames        = [];
-            this.refAssignments  = new Map(); // name → workflowId
-            // Scene mode
+            this.refAssignments  = new Map(); 
             this.sceneCount      = 0;
-            this.sceneAssignments = new Map(); // 'Cena X' → [{ imgNum, workflowId }]
-            // Tile tracking
-            this.tileAssignments = new Map(); // workflowId → { label, type }
-            // ── Video state ──
+            this.sceneAssignments = new Map(); 
+            this.tileAssignments = new Map(); 
+            
             this.videoIsRunning       = false;
             this.videoShouldStop      = false;
             this.videoPrompts         = [];
-            this.videoGenMode         = 'free'; // 'free' | 'scenes' | 'voice'
+            this.videoGenMode         = 'free';
             this.videoBatchSize       = 4;
             this.videoResultsPerPrompt = 3;
             this.videoSceneCount      = 0;
-            this.videoSceneAssignments = new Map(); // 'Cena X' → [{ imgNum, workflowId }]
+            this.videoSceneAssignments = new Map(); 
+            
             this.initUI();
             this.setupTextWatcher();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v4.0 inicializado!');
-            if (!_authToken) log.warn('Token ainda não capturado — faça qualquer ação na página.');
+            log.success('Flow Automation v8.0 inicializado!');
+            if (!_authToken) log.warn('Token ainda não capturado.');
         }
-
-        // ──────────────────────────────────────────────
-        // UI INIT
-        // ──────────────────────────────────────────────
 
         initUI() {
             const $ = id => document.getElementById(id);
@@ -666,7 +659,7 @@
                 panel.classList.remove('active');
                 document.getElementById('flow-assign-panel').classList.add('panel-closed');
                 sidebar.style.display = '';
-                if (this.isRunning) mini.style.display = 'flex';
+                if (this.isRunning || this.videoIsRunning) mini.style.display = 'flex';
             });
             mini.addEventListener('click', e => {
                 if (e.target.closest('#flow-mini-close')) return;
@@ -686,20 +679,11 @@
                 });
             });
 
-            // Mode selector
-            const modeDescs = {
-                free: 'Gera imagens sem atribuir nomes. Ideal para testes rápidos.',
-                refs: 'Primeira linha: [Nome1][Nome2]... Após gerar, arraste cada referência para a imagem desejada.',
-                scenes: 'Cada prompt = uma cena. Após gerar, arraste as cenas para as melhores imagens e baixe.'
-            };
             document.querySelectorAll('.flow-mode-btn[data-mode]').forEach(btn => {
                 btn.addEventListener('click', () => {
                     document.querySelectorAll('.flow-mode-btn[data-mode]').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
                     this.genMode = btn.dataset.mode;
-                    const descEl = document.getElementById('flow-mode-desc');
-                    if (descEl) descEl.textContent = modeDescs[this.genMode] || '';
-                    this.logDebug(`Modo: ${this.genMode}`, 'info');
                 });
             });
 
@@ -718,7 +702,6 @@
             $('flow-assign-close').addEventListener('click', () => this.hideAssignPanel());
             $('flow-reopen-assign').addEventListener('click', () => this.reopenAssignPanel());
             $('flow-assign-reload').addEventListener('click', () => location.reload());
-            // reload bar is the parent container
             $('flow-assign-download').addEventListener('click', () => this.downloadScenes());
             $('flow-assign-toggle').addEventListener('click', () => this.toggleAssignPanel());
             $('flow-assign-refs-btn').addEventListener('click', () => this.openAssignRefsFromDetected());
@@ -737,25 +720,14 @@
             });
 
             // ── VIDEO TAB LISTENERS ──
-
-            // Video mode selector
-            const videoModeDescs = {
-                free: 'Gera vídeos sem atribuir nomes. Ideal para testes rápidos.',
-                scenes: 'Cada prompt = uma cena. Após gerar, arraste as cenas para os melhores vídeos e baixe.',
-                voice: 'Seleciona a voz especificada com <voz: Nome> e gera a cena.'
-            };
             document.querySelectorAll('[data-vmode]').forEach(btn => {
                 btn.addEventListener('click', () => {
                     document.querySelectorAll('[data-vmode]').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
                     this.videoGenMode = btn.dataset.vmode;
-                    const descEl = document.getElementById('fv-mode-desc');
-                    if (descEl) descEl.textContent = videoModeDescs[this.videoGenMode] || '';
-                    this.logVideoDebug(`Modo: ${this.videoGenMode}`, 'info');
                 });
             });
 
-            // Video batch buttons
             document.querySelectorAll('[data-vbatch]').forEach(btn => {
                 btn.addEventListener('click', () => {
                     document.querySelectorAll('[data-vbatch]').forEach(b => b.classList.remove('active'));
@@ -777,6 +749,9 @@
             $('fv-dl-scenes').addEventListener('click', () => this.downloadProjectImages('scenes'));
             $('fv-dl-all').addEventListener('click', () => this.downloadProjectImages('all'));
             $('fv-reopen-assign').addEventListener('click', () => this.reopenAssignPanel());
+            
+            // Botão de Upscale
+            $('fv-upscale-btn').addEventListener('click', () => this.startUpscaleProcess());
         }
 
         setupTextWatcher() {
@@ -789,8 +764,10 @@
             const text    = document.getElementById('flow-prompts-input').value;
             const prompts = parsePromptsText(text);
             const refs    = extractReferences(prompts);
+            
             document.getElementById('flow-prompt-count').textContent =
                 `${prompts.length} prompt${prompts.length !== 1 ? 's' : ''} detectado${prompts.length !== 1 ? 's' : ''}`;
+                
             const list = document.getElementById('flow-ref-list');
             if (!refs.length) {
                 list.innerHTML = '<span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência. Prompts serão enviados como texto puro.</span>';
@@ -802,7 +779,6 @@
                     return `<span class="flow-ref-tag ${cls}">${icon} ${this.esc(r)}</span>`;
                 }).join('');
             }
-            // Mostra botão de atribuir se tem referências
             const assignBtn = document.getElementById('flow-assign-refs-btn');
             if (assignBtn) assignBtn.style.display = refs.length > 0 ? '' : 'none';
         }
@@ -821,6 +797,7 @@
             
             document.getElementById('fv-prompt-count').textContent =
                 `${prompts.length} prompt${prompts.length !== 1 ? 's' : ''} detectado${prompts.length !== 1 ? 's' : ''}`;
+                
             const list = document.getElementById('fv-ref-list');
             if (!refs.length && !voices.length) {
                 list.innerHTML = '<span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span>';
@@ -841,10 +818,6 @@
             }
         }
 
-        // ──────────────────────────────────────────────
-        // HELPERS
-        // ──────────────────────────────────────────────
-
         sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
         dynamicSleep(val) {
@@ -862,9 +835,126 @@
 
         esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-        // ──────────────────────────────────────────────
-        // GRID + TILES
-        // ──────────────────────────────────────────────
+        async clickDialogTab(type) {
+            let targetTab = null;
+            const selector = type === 'image' 
+                ? 'button[role="tab"][aria-controls*="IMAGE"]' 
+                : 'button[role="tab"][aria-controls*="AUDIO"]';
+
+            for (let i = 0; i < 10; i++) {
+                targetTab = document.querySelector(selector);
+                if (targetTab) break;
+                await this.dynamicSleep([200, 300]);
+            }
+
+            if (!targetTab) {
+                this.logDebug(`⚠️ Aba de ${type} não encontrada.`, 'warn');
+                return;
+            }
+
+            const isSelected = targetTab.getAttribute('aria-selected') === 'true' || targetTab.getAttribute('data-state') === 'active';
+            if (!isSelected) {
+                this.logDebug(`Migrando para a aba: ${type === 'image' ? 'Imagens' : 'Vozes'}`, 'info');
+                targetTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                targetTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                targetTab.click();
+                await this.dynamicSleep([800, 1200]); 
+            }
+        }
+
+        async searchAndSelect(name) {
+            const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
+            if (!dialog) throw new Error('Diálogo @ não aberto');
+            await this.dynamicSleep([500, 700]);
+            
+            const input = dialog.querySelector('input[placeholder*="esquisa"], input[placeholder*="earch"], input[type="text"]');
+            if (!input) throw new Error('Input de pesquisa não encontrado');
+            
+            input.focus(); await this.dynamicSleep([250, 400]);
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            setter.call(input, name);
+            input.dispatchEvent(new Event('input',  { bubbles:true }));
+            input.dispatchEvent(new Event('change', { bubbles:true }));
+            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+            
+            let target = null;
+            for (let i = 0; i < 20; i++) {
+                await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                const items = dialog.querySelectorAll('[data-item-index]');
+                if (items.length > 0) {
+                    let bestItem = null;
+                    const nameLower = name.toLowerCase().trim();
+                    for (const item of items) {
+                        const nameDiv = [...item.querySelectorAll('div')].find(d =>
+                            d.children.length === 0 && d.textContent?.trim().length > 0
+                        );
+                        const img = item.querySelector('img');
+                        const itemName = (nameDiv?.textContent || img?.alt || '').trim().toLowerCase();
+                        const cleanName = itemName.replace(/ _$/, '').trim();
+                        if (cleanName === nameLower || itemName === nameLower) {
+                            bestItem = item;
+                            break;
+                        }
+                    }
+                    const chosen = bestItem || items[0];
+                    target = chosen.querySelector('div[role="button"]') || chosen.querySelector('img')?.closest('div') || chosen.querySelector('div');
+                    if (target) break;
+                }
+            }
+            if (!target) throw new Error(`Sem resultado para "${name}"`);
+            await this.dynamicSleep([250, 400]);
+            target.click();
+            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+            for (let i = 0; i < 20; i++) {
+                await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                if (!document.querySelector('[role="dialog"]')) return;
+            }
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+        }
+
+        async searchAndSelectVoice(name) {
+            const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
+            if (!dialog) throw new Error('Diálogo @ não aberto');
+            await this.dynamicSleep([500, 700]);
+            
+            const input = dialog.querySelector('input[placeholder*="esquisa"], input[placeholder*="earch"], input[type="text"]');
+            if (!input) throw new Error('Input de pesquisa de voz não encontrado');
+            
+            input.focus(); await this.dynamicSleep([250, 400]);
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            setter.call(input, name);
+            input.dispatchEvent(new Event('input',  { bubbles:true }));
+            input.dispatchEvent(new Event('change', { bubbles:true }));
+            await this.dynamicSleep([1500, 2000]); 
+            
+            let target = null;
+            for (let i = 0; i < 20; i++) {
+                await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                const nameLower = name.toLowerCase().trim();
+                const divs = dialog.querySelectorAll('div');
+                for (const div of divs) {
+                    if (div.children.length === 0 && div.textContent && div.textContent.trim().toLowerCase() === nameLower) {
+                        target = div.closest('button, [role="option"], [role="button"], [role="menuitem"]') || div;
+                        break;
+                    }
+                }
+                if (target) break;
+            }
+            
+            if (!target) throw new Error(`Voz "${name}" não encontrada.`);
+            await this.dynamicSleep([250, 400]);
+            
+            target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            target.click();
+            
+            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+            for (let i = 0; i < 20; i++) {
+                await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                if (!document.querySelector('[role="dialog"]')) return;
+            }
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+        }
 
         async detectGrid() {
             const scroller = this.getScroller();
@@ -884,8 +974,6 @@
             }
             const msg = `Grid: ${this.gridCols} colunas × ${this.rowHeight.toFixed(0)}px/linha`;
             this.logDebug(msg, 'success');
-            const el = document.getElementById('flow-grid-info');
-            if (el) el.textContent = msg;
         }
 
         async scrollToRow(targetRow) {
@@ -927,13 +1015,11 @@
 
         getWorkflowIdFromTile(tile) {
             if (!tile) return null;
-            // O workflow ID está no href do link /edit/UUID, NÃO no data-tile-id
             const link = tile.querySelector('a[href*="/edit/"]');
             if (link) {
                 const m = link.href.match(/\/edit\/([a-f0-9-]{36})/);
                 if (m) return m[1];
             }
-            // Fallback: procura em tiles aninhados
             const inner = tile.querySelector('[data-tile-id]');
             if (inner) {
                 const innerLink = inner.querySelector('a[href*="/edit/"]');
@@ -961,34 +1047,22 @@
             return !!tile.querySelector('video[src*="getMediaUrlRedirect"]');
         }
 
-        /**
-         * Retorna a URL de download da mídia do tile.
-         * Para vídeos: retorna o src do <video> (não da thumbnail).
-         * Para imagens: retorna o src do <img>.
-         */
         getMediaSrcFromTile(tile) {
             if (!tile) return '';
-            // Vídeos: prioriza <video src>
             const video = tile.querySelector('video[src*="getMediaUrlRedirect"]');
             if (video?.src) return video.src;
-            // Imagens: <img src>
             const img = tile.querySelector('img[src*="getMediaUrlRedirect"]');
             return img?.src || '';
         }
 
-        // Alias para compatibilidade
         getImgSrcFromTile(tile) { return this.getMediaSrcFromTile(tile); }
 
         isTileLoaded(tile) {
             if (!tile) return false;
-            // Verifica thumbnail (existe em imagens e vídeos carregados)
             const img = tile.querySelector('img[src*="getMediaUrlRedirect"]');
             if (img && img.complete && parseFloat(getComputedStyle(img).opacity) >= 0.9) return true;
-            // Vídeo sem thumbnail mas com src pode estar carregado
-            // (verifica se o video tem src e NÃO tem indicador de progresso)
             const video = tile.querySelector('video[src*="getMediaUrlRedirect"]');
             if (video?.src && !this.tileHasProgress(tile)) {
-                // Checa se não é um tile "vazio" — deve ter pelo menos o play_circle icon
                 const playIcon = [...tile.querySelectorAll('i')].some(i => i.textContent?.trim() === 'play_circle');
                 if (playIcon) return true;
             }
@@ -1028,10 +1102,6 @@
             return uuids;
         }
 
-        // ──────────────────────────────────────────────
-        // MATRIZ + AGUARDAR GERAÇÃO
-        // ──────────────────────────────────────────────
-
         buildPositionMatrix(batch, imgsPerPrompt, rowOffset) {
             const C = this.gridCols, matrix = [], total = batch.length * imgsPerPrompt;
             for (let pos = 0; pos < total; pos++) {
@@ -1050,11 +1120,8 @@
             const rowsNeeded = Math.max(...matrix.map(s => s.row)) + 1;
             const start = Date.now();
             if (scroller) { scroller.scrollTop = 0; await this.sleep(500); }
-            this.logDebug(`Aguardando ${matrix.length} slot(s) em ${rowsNeeded} linha(s)...`, 'info');
 
-            // Tracking: uma vez confirmado como loaded (UUID novo), não re-verifica.
-            // Isso evita falsos "pending" quando o Virtuoso destrói/recria DOM ao scrollar.
-            const confirmedLoaded = new Set(); // índices de matrix[] já confirmados
+            const confirmedLoaded = new Set();
             const confirmedError  = new Set();
 
             const countStates = () => {
@@ -1068,24 +1135,13 @@
                     if (this.isTileLoaded(tile)) {
                         const uuid = this.getUuidFromTile(tile);
                         if (uuid && !beforeUuids.has(uuid)) {
-                            loaded++;
-                            confirmedLoaded.add(i);
-                            // Captura dados já para evitar re-scroll na Fase 3
-                            slot.uuid = uuid;
-                            slot.src = this.getImgSrcFromTile(tile);
-                            slot.workflowId = this.getWorkflowIdFromTile(tile);
-                        }
-                        else pending++;
-                    } else if (this.isTileError(tile)) {
-                        errors++;
-                        confirmedError.add(i);
-                    }
-                    else { pending++; }
+                            loaded++; confirmedLoaded.add(i); slot.uuid = uuid; slot.src = this.getImgSrcFromTile(tile); slot.workflowId = this.getWorkflowIdFromTile(tile);
+                        } else pending++;
+                    } else if (this.isTileError(tile)) { errors++; confirmedError.add(i); } else { pending++; }
                 }
                 return { loaded, errors, pending };
             };
 
-            // Fase 1: aguarda primeiro slot resolver
             let detected = false;
             while (Date.now() - start < CONFIG.GENERATION_TIMEOUT) {
                 if (this.shouldStop || this.videoShouldStop) return;
@@ -1096,7 +1152,6 @@
             }
             if (!detected) { for (const s of matrix) s.state = 'error'; return; }
 
-            // Fase 2: aguarda pending === 0 estável
             let lastPending = -1, pendingZeroAt = null;
             while (Date.now() - start < CONFIG.GENERATION_TIMEOUT) {
                 if (this.shouldStop || this.videoShouldStop) return;
@@ -1104,29 +1159,15 @@
                 if (scroller) scroller.scrollTop = 0;
                 const { loaded, errors, pending } = countStates();
                 if (pending !== lastPending) {
-                    lastPending = pending;
-                    pendingZeroAt = pending === 0 ? Date.now() : null;
-                    this.logDebug(`Progresso: ${loaded} ✅  ${errors} ❌  ${pending} ⏳`, 'info');
+                    lastPending = pending; pendingZeroAt = pending === 0 ? Date.now() : null;
                 }
-                if (pending === 0 && (Date.now() - (pendingZeroAt || Date.now())) >= CONFIG.STABILIZE_TIME) {
-                    this.logDebug(`✅ Lote finalizado: ${loaded} ok, ${errors} erros`, 'success');
-                    break;
-                }
+                if (pending === 0 && (Date.now() - (pendingZeroAt || Date.now())) >= CONFIG.STABILIZE_TIME) break;
             }
 
-            // Fase 3: classifica slots — apenas os que NÃO foram confirmados durante polling
-            this.logDebug('Classificando slots finais...', 'info');
             for (let i = 0; i < matrix.length; i++) {
                 const slot = matrix[i];
-                if (confirmedLoaded.has(i)) {
-                    slot.state = 'loaded';
-                    continue;
-                }
-                if (confirmedError.has(i)) {
-                    slot.state = 'error';
-                    continue;
-                }
-                // Slot não confirmado: tenta scroll e verificação final
+                if (confirmedLoaded.has(i)) { slot.state = 'loaded'; continue; }
+                if (confirmedError.has(i)) { slot.state = 'error'; continue; }
                 if (this.shouldStop || this.videoShouldStop) return;
                 await this.scrollToRow(slot.row);
                 const tile = this.getTileAt(slot.row, slot.col);
@@ -1134,18 +1175,12 @@
                 if (this.isTileLoaded(tile)) {
                     const uuid = this.getUuidFromTile(tile);
                     if (uuid && !beforeUuids.has(uuid)) {
-                        slot.state = 'loaded'; slot.uuid = uuid;
-                        slot.src = this.getImgSrcFromTile(tile);
-                        slot.workflowId = this.getWorkflowIdFromTile(tile);
+                        slot.state = 'loaded'; slot.uuid = uuid; slot.src = this.getImgSrcFromTile(tile); slot.workflowId = this.getWorkflowIdFromTile(tile);
                     } else { slot.state = 'error'; }
                 } else { slot.state = 'error'; }
             }
             if (scroller) { scroller.scrollTop = 0; await this.sleep(300); }
         }
-
-        // ──────────────────────────────────────────────
-        // EDITOR (Slate)
-        // ──────────────────────────────────────────────
 
         getEditor() { return document.querySelector('[data-slate-editor="true"]'); }
 
@@ -1179,7 +1214,6 @@
                     if (document.querySelector('[role="dialog"], [role="presentation"]')) { opened = true; break; }
                 }
                 if (opened) return;
-                this.logDebug(`⚠️ Diálogo @ não abriu (tentativa ${attempt}/${MAX_AT_RETRIES})`, 'error');
                 e.focus(); await this.sleep(200);
                 e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'deleteContentBackward' }));
                 await this.sleep(200);
@@ -1189,128 +1223,6 @@
                 }
             }
             throw new Error('Diálogo @ não abriu após ' + MAX_AT_RETRIES + ' tentativas');
-        }
-
-        // ============================================
-        // O SEGREDO DAS ABAS DO RADIX
-        // ============================================
-        async clickDialogTab(type) {
-            let targetTab = null;
-            const selector = type === 'image' 
-                ? 'button[role="tab"][aria-controls*="IMAGE"]' 
-                : 'button[role="tab"][aria-controls*="AUDIO"]';
-
-            for (let i = 0; i < 10; i++) {
-                targetTab = document.querySelector(selector);
-                if (targetTab) break;
-                await this.dynamicSleep([200, 300]);
-            }
-
-            if (targetTab) {
-                const isSelected = targetTab.getAttribute('aria-selected') === 'true' || targetTab.getAttribute('data-state') === 'active';
-                if (!isSelected) {
-                    this.logDebug(`Migrando para a aba: ${type === 'image' ? 'Imagens' : 'Vozes'}`, 'info');
-                    targetTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-                    targetTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-                    targetTab.click();
-                    await this.dynamicSleep([800, 1200]); 
-                }
-            }
-        }
-
-        async searchAndSelect(name) {
-            const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
-            if (!dialog) throw new Error('Diálogo @ não aberto');
-            await this.dynamicSleep([500, 700]);
-            const input = dialog.querySelector('input[placeholder*="esquisa"], input[placeholder*="earch"], input[type="text"]');
-            if (!input) throw new Error('Input de pesquisa não encontrado');
-            input.focus(); await this.dynamicSleep([250, 400]);
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-            setter.call(input, name);
-            input.dispatchEvent(new Event('input',  { bubbles:true }));
-            input.dispatchEvent(new Event('change', { bubbles:true }));
-            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-            let target = null;
-            for (let i = 0; i < 20; i++) {
-                await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                const items = dialog.querySelectorAll('[data-item-index]');
-                if (items.length > 0) {
-                    let bestItem = null;
-                    const nameLower = name.toLowerCase().trim();
-                    for (const item of items) {
-                        const nameDiv = [...item.querySelectorAll('div')].find(d =>
-                            d.children.length === 0 && d.textContent?.trim().length > 0
-                        );
-                        const img = item.querySelector('img');
-                        const itemName = (nameDiv?.textContent || img?.alt || '').trim().toLowerCase();
-                        // Comparação: tira sufixo " _" se existir
-                        const cleanName = itemName.replace(/ _$/, '').trim();
-                        if (cleanName === nameLower || itemName === nameLower) {
-                            bestItem = item;
-                            break;
-                        }
-                    }
-                    const chosen = bestItem || items[0];
-                    target = chosen.querySelector('div[role="button"]') || chosen.querySelector('img')?.closest('div') || chosen.querySelector('div');
-                    if (target) break;
-                }
-            }
-            if (!target) throw new Error(`Sem resultado para "${name}"`);
-            await this.dynamicSleep([250, 400]);
-            target.click();
-            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-            for (let i = 0; i < 20; i++) {
-                await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                if (!document.querySelector('[role="dialog"]')) return;
-            }
-            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-        }
-
-        // ============================================
-        // FUNÇÃO NOVA E DEFINITIVA PARA VOZES
-        // ============================================
-        async searchAndSelectVoice(name) {
-            const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
-            if (!dialog) throw new Error('Diálogo @ não aberto');
-            await this.dynamicSleep([500, 700]);
-            
-            const input = dialog.querySelector('input[placeholder*="esquisa"], input[placeholder*="earch"], input[type="text"]');
-            if (!input) throw new Error('Input de pesquisa de voz não encontrado');
-            
-            input.focus(); await this.dynamicSleep([250, 400]);
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-            setter.call(input, name);
-            input.dispatchEvent(new Event('input',  { bubbles:true }));
-            input.dispatchEvent(new Event('change', { bubbles:true }));
-            await this.dynamicSleep([1500, 2000]); 
-            
-            let target = null;
-            for (let i = 0; i < 20; i++) {
-                await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                const nameLower = name.toLowerCase().trim();
-                const divs = dialog.querySelectorAll('div');
-                for (const div of divs) {
-                    if (div.children.length === 0 && div.textContent && div.textContent.trim().toLowerCase() === nameLower) {
-                        target = div.closest('button, [role="option"], [role="button"], [role="menuitem"]') || div;
-                        break;
-                    }
-                }
-                if (target) break;
-            }
-            
-            if (!target) throw new Error(`Voz "${name}" não encontrada.`);
-            await this.dynamicSleep([250, 400]);
-            
-            target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-            target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-            target.click();
-            
-            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-            for (let i = 0; i < 20; i++) {
-                await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                if (!document.querySelector('[role="dialog"], [role="presentation"]')) return;
-            }
-            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
 
         async clickSubmit() {
@@ -1327,10 +1239,8 @@
 
         async prepareAndSubmit(promptObj) {
             const MAX_SUBMIT_RETRIES = 2;
-
             for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
                 try {
-                    this.logDebug(`Preparando prompt ${promptObj.promptNum}: "${promptObj.text.substring(0,50)}..."${attempt > 1 ? ` (tentativa ${attempt})` : ''}`, 'info');
                     const segs = parsePrompt(promptObj.text);
                     await this.clearEditor();
                     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
@@ -1351,10 +1261,8 @@
                         }
                     }
                     await this.clickSubmit();
-                    this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
                     return true;
                 } catch (err) {
-                    this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
                     if (attempt < MAX_SUBMIT_RETRIES) {
                         await this.resetEditor();
                         await this.dynamicSleep([2000, 3000]);
@@ -1364,299 +1272,407 @@
             return false;
         }
 
-        /**
-         * Força reset do editor: fecha dialogs, limpa conteúdo via botão "Apagar comando".
-         */
         async resetEditor() {
-            // 1. Fecha qualquer dialog aberto (seletor @)
             const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
-            if (dialog) {
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                await this.sleep(500);
-            }
-
-            // 2. Escreve algo no editor para garantir que o botão X fica disponível
+            if (dialog) { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true })); await this.sleep(500); }
             const editor = this.getEditor();
-            if (editor) {
-                editor.focus();
-                await this.sleep(200);
-                editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: ' reset' }));
-                await this.sleep(500);
-            }
-
-            // 3. Clica no botão "Apagar comando" (ícone close)
+            if (editor) { editor.focus(); await this.sleep(200); editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: ' reset' })); await this.sleep(500); }
             const closeBtn = [...document.querySelectorAll('button')].find(btn => {
                 const icon = btn.querySelector('i.google-symbols');
                 if (!icon || icon.textContent.trim() !== 'close') return false;
                 return btn.textContent.includes('Apagar') || btn.querySelector('span')?.textContent?.includes('Apagar');
             });
-            if (closeBtn) {
-                closeBtn.click();
-                this.logDebug('Editor resetado via botão Apagar', 'info');
-                await this.sleep(800);
-            } else {
-                // Fallback: selectAll + delete
-                if (editor) {
-                    editor.focus();
-                    await this.sleep(200);
-                    document.execCommand('selectAll', false, null);
-                    await this.sleep(200);
-                    document.execCommand('delete', false, null);
-                    this.logDebug('Editor resetado via selectAll+delete', 'info');
-                    await this.sleep(500);
-                }
-            }
-
-            // 4. Fecha qualquer dialog que possa ter reaberto
+            if (closeBtn) { closeBtn.click(); await this.sleep(800); } 
+            else { if (editor) { editor.focus(); await this.sleep(200); document.execCommand('selectAll', false, null); await this.sleep(200); document.execCommand('delete', false, null); await this.sleep(500); } }
             const dialog2 = document.querySelector('[role="dialog"], [role="presentation"]');
-            if (dialog2) {
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                await this.sleep(400);
-            }
+            if (dialog2) { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true })); await this.sleep(400); }
         }
-
-        // ──────────────────────────────────────────────
-        // API (rename + favorite via HTTP)
-        // ──────────────────────────────────────────────
 
         async apiRename(workflowId, newName) {
-            if (!_authToken) { this.logDebug('Token não capturado — faça uma ação na página', 'error'); return false; }
-            const projectId = this.getProjectId();
-            if (!projectId || !workflowId) return false;
-            try {
-                const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': _authToken },
-                    body: JSON.stringify({
-                        workflow: { name: workflowId, projectId, metadata: { displayName: newName } },
-                        updateMask: 'metadata.displayName'
-                    })
-                });
-                if (!res.ok) this.logDebug(`API rename falhou: ${res.status}`, 'error');
-                return res.ok;
-            } catch(e) { this.logDebug(`Erro API rename: ${e.message}`, 'error'); return false; }
-        }
-
-        async apiFavorite(workflowId, favorited) {
             if (!_authToken) return false;
-            const projectId = this.getProjectId();
-            if (!projectId || !workflowId) return false;
+            const projectId = this.getProjectId(); if (!projectId || !workflowId) return false;
             try {
                 const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': _authToken },
-                    body: JSON.stringify({
-                        workflow: { name: workflowId, projectId, metadata: { favorited: !!favorited } },
-                        updateMask: 'metadata.favorited'
-                    })
+                    body: JSON.stringify({ workflow: { name: workflowId, projectId, metadata: { displayName: newName } }, updateMask: 'metadata.displayName' })
                 });
                 return res.ok;
             } catch(e) { return false; }
         }
 
-        // ──────────────────────────────────────────────
-        // PIPELINE PRINCIPAL (sem rename automático)
-        // ──────────────────────────────────────────────
+        async apiFavorite(workflowId, favorited) {
+            if (!_authToken) return false;
+            const projectId = this.getProjectId(); if (!projectId || !workflowId) return false;
+            try {
+                const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': _authToken },
+                    body: JSON.stringify({ workflow: { name: workflowId, projectId, metadata: { favorited: !!favorited } }, updateMask: 'metadata.favorited' })
+                });
+                return res.ok;
+            } catch(e) { return false; }
+        }
+
+        // ============================================================
+        // PIPELINE DE IMAGENS (COM RESUME)
+        // ============================================================
 
         async start() {
-            if (this.videoIsRunning) { this.setStatus('warning', '⚠️ A automação de vídeos está rodando. Aguarde finalizar.'); return; }
+            if (this.videoIsRunning) { this.setStatus('warning', '⚠️ Vídeos rodando.'); return; }
             let text = document.getElementById('flow-prompts-input').value;
 
-            // Em modo referências: extrai nomes da primeira linha
             if (this.genMode === 'refs') {
                 const parsed = parseReferenceHeader(text);
-                if (!parsed.refs.length) {
-                    this.setStatus('error', 'Modo Referências: a primeira linha deve conter nomes entre [colchetes]. Ex: [Maria][José][Praia]');
-                    return;
-                }
-                this.refNames = parsed.refs;
-                this.refAssignments = new Map();
-                text = parsed.remaining;
-                this.logDebug(`Referências detectadas: ${this.refNames.join(', ')}`, 'info');
+                if (!parsed.refs.length) { this.setStatus('error', 'Ex: [Maria]'); return; }
+                this.refNames = parsed.refs; this.refAssignments = new Map(); text = parsed.remaining;
             }
 
             this.prompts = parsePromptsText(text);
-            if (!this.prompts.length) { this.setStatus('error', 'Nenhum prompt detectado.'); return; }
+            if (!this.prompts.length) { this.setStatus('error', 'Nenhum prompt.'); return; }
 
-            // Valida referências nos prompts (não as da primeira linha)
-            // Pula no modo 'refs' — ali estamos CRIANDO referências, não usando existentes
             if (this.genMode !== 'refs') {
                 const refs = extractReferences(this.prompts);
                 if (refs.length > 0) {
                     const unvalidated = refs.filter(r => this.validatedRefs[r.toLowerCase()] === undefined);
                     const missing     = refs.filter(r => this.validatedRefs[r.toLowerCase()] === false);
-                    if (unvalidated.length) { this.setStatus('warning', 'Valide as referências antes de iniciar.'); return; }
-                    if (missing.length)     { this.setStatus('error', `Referências não encontradas: ${missing.join(', ')}`); return; }
+                    if (unvalidated.length) { this.setStatus('warning', 'Valide as referências.'); return; }
+                    if (missing.length)     { this.setStatus('error', `Faltam: ${missing.join(', ')}`); return; }
                 }
             }
 
-            // Em modo cenas: sceneCount = número de prompts
             if (this.genMode === 'scenes') {
                 this.sceneCount = this.prompts.length;
                 this.sceneAssignments = new Map();
-                for (let i = 1; i <= this.sceneCount; i++) this.sceneAssignments.set(`Cena ${i}`, []);
+                for (let i = 0; i < this.prompts.length; i++) {
+                    this.sceneAssignments.set(`Cena ${this.prompts[i].promptNum}`, []);
+                }
             }
 
-            this.isRunning = true;
-            this.shouldStop = false;
-            document.getElementById('flow-start-btn').disabled = true;
-            document.getElementById('flow-stop-btn').disabled  = false;
-            document.getElementById('flow-prompts-input').disabled = true;
+            const startFromStr = document.getElementById('fi-start-from').value;
+            const startFrom = parseInt(startFromStr);
+            let promptsToRun = this.prompts;
 
-            this.buildPromptList();
-            this.setStatus('info', '🚀 Iniciando automação v4.0...');
-            this.updateProgress(0);
-            await this.detectGrid();
+            if (startFrom > 0) {
+                promptsToRun = this.prompts.filter(p => p.promptNum >= startFrom);
+                this.prompts.forEach((p, idx) => {
+                    if (p.promptNum < startFrom) this.updatePromptItemStatus(idx, 'done', 'Pulado');
+                });
+            }
+
+            if (promptsToRun.length === 0) { this.setStatus('warning', 'Todos pulados.'); return; }
+
+            this.isRunning = true; this.shouldStop = false;
+            document.getElementById('flow-start-btn').disabled = true; document.getElementById('flow-stop-btn').disabled  = false;
+            this.buildPromptList(); this.setStatus('info', '🚀 Iniciando...'); this.updateProgress(0); await this.detectGrid();
 
             const batches = [];
-            for (let i = 0; i < this.prompts.length; i += this.batchSize)
-                batches.push(this.prompts.slice(i, Math.min(i + this.batchSize, this.prompts.length)));
-            this.logDebug(`${this.prompts.length} prompts → ${batches.length} lote(s)`, 'info');
-
+            for (let i = 0; i < promptsToRun.length; i += this.batchSize) batches.push(promptsToRun.slice(i, Math.min(i + this.batchSize, promptsToRun.length)));
             const allMatrices = [];
+            const N = this.imagesPerPrompt, C = this.gridCols;
+            const retryCount = {};
 
-            try {
-                const N = this.imagesPerPrompt, C = this.gridCols;
-                const retryCount = {};
-                let cumulativeRows = 0; // linhas totais de lotes anteriores
-
-                for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+            for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+                if (this.shouldStop) break;
+                const batch = batches[bIdx];
+                batch.forEach(p => this.updatePromptItemStatus(this.prompts.findIndex(x => x.promptNum === p.promptNum), 'active'));
+                this.updateProgress(bIdx / batches.length);
+                const beforeUuids = this.snapshotImageUuids();
+                for (let pi = 0; pi < batch.length; pi++) {
                     if (this.shouldStop) break;
-                    const batch = batches[bIdx];
-                    const totalN = batch.length * N;
-                    const rowsThis = Math.ceil(totalN / C);
+                    const ok = await this.prepareAndSubmit(batch[pi]);
+                    if (!ok) break;
+                    if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
+                }
+                if (this.shouldStop) break;
+                await this.dynamicSleep([1800, 2500]);
+                const matrix = this.buildPositionMatrix(batch, N, 0);
+                await this.waitForMatrix(matrix, beforeUuids);
+                if (this.shouldStop) break;
 
-                    batch.forEach(p => this.updatePromptItemStatus(
-                        this.prompts.findIndex(x => x.promptNum === p.promptNum), 'active'
-                    ));
-                    this.updateProgress(bIdx / batches.length);
-                    this.updateMini(
-                        `Lote ${bIdx+1}/${batches.length}`,
-                        batch.map(p => `#${p.promptNum}`).join(' + '),
-                        bIdx / batches.length,
-                        `${this.genMode === 'scenes' ? 'Cenas' : this.genMode === 'refs' ? 'Referências' : 'Livre'} • ${N} imgs/prompt • ${this.batchSize} simult.`
-                    );
-                    this.logDebug(`\n╭─── LOTE ${bIdx+1}/${batches.length}: prompts ${batch.map(p=>p.promptNum).join(', ')} ───╮`, 'info');
+                const failedPrompts = [];
+                for (let bRevIdx = 0; bRevIdx < batch.length; bRevIdx++) {
+                    const prompt = batch[batch.length - 1 - bRevIdx];
+                    const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
+                    if (slots.every(s => s.state === 'error')) failedPrompts.push(prompt);
+                }
 
-                    // 1. Snapshot
-                    const beforeUuids = this.snapshotImageUuids();
-
-                    // 2. Submit com stagger
-                    this.setStatus('info', `⚡ Submetendo lote ${bIdx+1}/${batches.length}...`);
-                    for (let pi = 0; pi < batch.length; pi++) {
-                        if (this.shouldStop) break;
-                        const ok = await this.prepareAndSubmit(batch[pi]);
+                for (const fp of failedPrompts) {
+                    const key = fp.promptNum;
+                    if (!retryCount[key]) retryCount[key] = 0;
+                    const gi = this.prompts.findIndex(x => x.promptNum === key);
+                    let recovered = false;
+                    while (retryCount[key] < CONFIG.MAX_RETRIES && !this.shouldStop) {
+                        retryCount[key]++;
+                        this.updatePromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
+                        const retryBefore = this.snapshotImageUuids();
+                        const ok = await this.prepareAndSubmit(fp);
                         if (!ok) break;
-                        if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
-                    }
-                    if (this.shouldStop) break;
-                    await this.dynamicSleep([1800, 2500]);
-
-                    // 3. Monta matriz e aguarda geração
-                    const matrix = this.buildPositionMatrix(batch, N, 0);
-                    this.setStatus('info', `⏳ Lote ${bIdx+1}/${batches.length} — aguardando geração...`);
-                    await this.waitForMatrix(matrix, beforeUuids);
-                    if (this.shouldStop) break;
-
-                    // 4. Retry falhas
-                    const failedPrompts = [];
-                    for (let bRevIdx = 0; bRevIdx < batch.length; bRevIdx++) {
-                        const bIdx2 = batch.length - 1 - bRevIdx;
-                        const prompt = batch[bIdx2];
-                        const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
-                        if (slots.every(s => s.state === 'error')) failedPrompts.push(prompt);
-                    }
-
-                    for (const fp of failedPrompts) {
-                        const key = fp.promptNum;
-                        if (!retryCount[key]) retryCount[key] = 0;
-                        const gi = this.prompts.findIndex(x => x.promptNum === key);
-                        let recovered = false;
-                        while (retryCount[key] < CONFIG.MAX_RETRIES && !this.shouldStop) {
-                            retryCount[key]++;
-                            this.logDebug(`🔄 Regerar prompt ${key} — tentativa ${retryCount[key]}`, 'info');
-                            this.updatePromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
-                            const retryBefore = this.snapshotImageUuids();
-                            const ok = await this.prepareAndSubmit(fp);
-                            if (!ok) break;
-                            await this.dynamicSleep([1800, 2500]);
-                            const retryMatrix = this.buildPositionMatrix([fp], N, 0);
-                            await this.waitForMatrix(retryMatrix, retryBefore);
-                            if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
-                                this.updatePromptItemStatus(gi, 'done');
-                                recovered = true;
-                                allMatrices.push(retryMatrix);
-                                break;
-                            }
+                        await this.dynamicSleep([1800, 2500]);
+                        const retryMatrix = this.buildPositionMatrix([fp], N, 0);
+                        await this.waitForMatrix(retryMatrix, retryBefore);
+                        if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
+                            this.updatePromptItemStatus(gi, 'done'); recovered = true; allMatrices.push(retryMatrix); break;
                         }
-                        if (!recovered) this.updatePromptItemStatus(gi, 'error', `falhou`);
                     }
-
-                    // Marca prompts do lote como done
-                    batch.forEach(p => {
-                        const gi = this.prompts.findIndex(x => x.promptNum === p.promptNum);
-                        const slots = matrix.filter(s => s.promptNum === p.promptNum);
-                        if (slots.some(s => s.state === 'loaded')) this.updatePromptItemStatus(gi, 'done');
-                    });
-
-                    allMatrices.push(matrix);
-
-                    if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
+                    if (!recovered) this.updatePromptItemStatus(gi, 'error', `falhou`);
                 }
 
-                if (!this.shouldStop) {
-                    this.updateProgress(1);
-                    const doneCount = document.querySelectorAll('.flow-prompt-item.done').length;
-                    const errCount = document.querySelectorAll('.flow-prompt-item.error').length;
-                    const failedList = this.prompts.filter((_, i) =>
-                        document.querySelector(`.flow-prompt-item[data-index="${i}"]`)?.classList.contains('error')
-                    );
-
-                    let statusMsg = `✅ Geração concluída! ${doneCount} sucesso(s)`;
-                    if (errCount) statusMsg += `, ${errCount} falha(s)`;
-                    statusMsg += '.';
-                    if (this.genMode !== 'free') statusMsg += ' Arraste os nomes para atribuir às imagens.';
-                    this.setStatus('success', statusMsg);
-
-                    // Mostra painel de atribuição se não é modo livre
-                    if (this.genMode === 'refs' || this.genMode === 'scenes') {
-                        this.showAssignPanel(allMatrices);
-                    }
-
-                    // Popup com detalhes de falhas
-                    let popupMsg = `${doneCount} prompt(s) gerado(s) com sucesso.`;
-                    if (this.genMode === 'refs') popupMsg += '\n\nArraste as referências do painel superior para as imagens desejadas.';
-                    else if (this.genMode === 'scenes') popupMsg += '\n\nArraste as cenas do painel superior para as imagens desejadas.';
-
-                    // Coleta mídias geradas nesta execução
-                    this._lastRunMedia = allMatrices.flatMap(m =>
-                        m.filter(s => s.state === 'loaded' && s.src).map(s => ({
-                            src: s.src, workflowId: s.workflowId, uuid: s.uuid, promptNum: s.promptNum, isVideo: false
-                        }))
-                    );
-                    this.showCompletionPopup(popupMsg, failedList.length > 0 ? failedList : null);
-                } else {
-                    this.setStatus('warning', '⏹ Automação interrompida.');
-                }
-
-            } catch (err) {
-                this.setStatus('error', '❌ Erro: ' + err.message);
-                log.error('Pipeline error:', err);
+                batch.forEach(p => {
+                    const gi = this.prompts.findIndex(x => x.promptNum === p.promptNum);
+                    const slots = matrix.filter(s => s.promptNum === p.promptNum);
+                    if (slots.some(s => s.state === 'loaded')) this.updatePromptItemStatus(gi, 'done');
+                });
+                allMatrices.push(matrix);
+                if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
             }
 
+            if (!this.shouldStop) {
+                this.updateProgress(1);
+                this.setStatus('success', '✅ Geração concluída!');
+                if (this.genMode === 'refs' || this.genMode === 'scenes') this.showAssignPanel(allMatrices);
+            }
             this.isRunning = false;
-            document.getElementById('flow-start-btn').disabled = false;
-            document.getElementById('flow-stop-btn').disabled  = true;
-            document.getElementById('flow-prompts-input').disabled = false;
-            document.getElementById('flow-mini').style.display = 'none';
-            document.getElementById('flow-sidebar').style.display = '';
+            document.getElementById('flow-start-btn').disabled = false; document.getElementById('flow-stop-btn').disabled  = true;
         }
 
         stop() { this.shouldStop = true; this.setStatus('warning', '⏹ Parando...'); }
 
-        // ──────────────────────────────────────────────
+        // ============================================================
+        // PIPELINE DE VÍDEOS (COM RESUME E CENA CERTA NO PAINEL)
+        // ============================================================
+
+        async startVideo() {
+            if (this.isRunning) { this.setVideoStatus('warning', '⚠️ Imagens rodando.'); return; }
+            if (this.videoIsRunning) return;
+
+            const text = document.getElementById('fv-prompts-input').value;
+            this.videoPrompts = parsePromptsText(text);
+            if (!this.videoPrompts.length) { this.setVideoStatus('error', 'Nenhum prompt.'); return; }
+
+            const refs = extractReferences(this.videoPrompts);
+            if (refs.length > 0) {
+                const unvalidated = refs.filter(r => this.validatedRefs[r.toLowerCase()] === undefined);
+                const missing     = refs.filter(r => this.validatedRefs[r.toLowerCase()] === false);
+                if (unvalidated.length) { this.setVideoStatus('warning', 'Valide as referências.'); return; }
+                if (missing.length)     { this.setVideoStatus('error', `Faltam: ${missing.join(', ')}`); return; }
+            }
+
+            if (this.videoGenMode === 'scenes') {
+                this.videoSceneCount = this.videoPrompts.length;
+                this.videoSceneAssignments = new Map();
+                for (let i = 0; i < this.videoPrompts.length; i++) {
+                    this.videoSceneAssignments.set(`Cena ${this.videoPrompts[i].promptNum}`, []);
+                }
+            }
+
+            const startFromStr = document.getElementById('fv-start-from').value;
+            const startFrom = parseInt(startFromStr);
+            let promptsToRun = this.videoPrompts;
+
+            if (startFrom > 0) {
+                promptsToRun = this.videoPrompts.filter(p => p.promptNum >= startFrom);
+                this.videoPrompts.forEach((p, idx) => {
+                    if (p.promptNum < startFrom) this.updateVideoPromptItemStatus(idx, 'done', 'Pulado');
+                });
+            }
+
+            if (promptsToRun.length === 0) { this.setVideoStatus('warning', 'Todos pulados.'); return; }
+
+            this.videoIsRunning = true; this.videoShouldStop = false;
+            document.getElementById('fv-start-btn').disabled = true; document.getElementById('fv-stop-btn').disabled  = false;
+            this.buildVideoPromptList(); this.setVideoStatus('info', '🚀 Iniciando vídeos...'); this.updateVideoProgress(0); await this.detectGrid();
+
+            const N = this.videoResultsPerPrompt; const C = this.gridCols;
+            const batches = [];
+            for (let i = 0; i < promptsToRun.length; i += this.videoBatchSize)
+                batches.push(promptsToRun.slice(i, Math.min(i + this.videoBatchSize, promptsToRun.length)));
+
+            const allMatrices = [];
+            const retryCount = {};
+
+            for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+                if (this.videoShouldStop) break;
+                const batch = batches[bIdx];
+                batch.forEach(p => this.updateVideoPromptItemStatus(this.videoPrompts.findIndex(x => x.promptNum === p.promptNum), 'active'));
+                this.updateVideoProgress(bIdx / batches.length);
+                const beforeUuids = this.snapshotImageUuids();
+                
+                for (let pi = 0; pi < batch.length; pi++) {
+                    if (this.videoShouldStop) break;
+                    const ok = await this.prepareAndSubmit(batch[pi]);
+                    if (!ok) break;
+                    if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
+                }
+                if (this.videoShouldStop) break;
+                await this.dynamicSleep([1800, 2500]);
+                const matrix = this.buildPositionMatrix(batch, N, 0);
+                const origShouldStop = this.shouldStop; this.shouldStop = this.videoShouldStop;
+                await this.waitForMatrix(matrix, beforeUuids);
+                this.shouldStop = origShouldStop;
+                if (this.videoShouldStop) break;
+
+                const failedPrompts = [];
+                for (let bRevIdx = 0; bRevIdx < batch.length; bRevIdx++) {
+                    const prompt = batch[batch.length - 1 - bRevIdx];
+                    const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
+                    if (slots.every(s => s.state === 'error')) failedPrompts.push(prompt);
+                }
+
+                for (const fp of failedPrompts) {
+                    const key = fp.promptNum;
+                    if (!retryCount[key]) retryCount[key] = 0;
+                    const gi = this.videoPrompts.findIndex(x => x.promptNum === key);
+                    let recovered = false;
+                    while (retryCount[key] < CONFIG.MAX_RETRIES && !this.videoShouldStop) {
+                        retryCount[key]++;
+                        this.updateVideoPromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
+                        const retryBefore = this.snapshotImageUuids();
+                        const ok = await this.prepareAndSubmit(fp);
+                        if (!ok) break;
+                        await this.dynamicSleep([1800, 2500]);
+                        const retryMatrix = this.buildPositionMatrix([fp], N, 0);
+                        this.shouldStop = this.videoShouldStop;
+                        await this.waitForMatrix(retryMatrix, retryBefore);
+                        this.shouldStop = origShouldStop;
+                        if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
+                            this.updateVideoPromptItemStatus(gi, 'done'); recovered = true; allMatrices.push(retryMatrix); break;
+                        }
+                    }
+                    if (!recovered) this.updateVideoPromptItemStatus(gi, 'error', `falhou`);
+                }
+
+                batch.forEach(p => {
+                    const gi = this.videoPrompts.findIndex(x => x.promptNum === p.promptNum);
+                    const slots = matrix.filter(s => s.promptNum === p.promptNum);
+                    if (slots.some(s => s.state === 'loaded')) this.updateVideoPromptItemStatus(gi, 'done');
+                });
+                allMatrices.push(matrix);
+                if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
+            }
+
+            if (!this.videoShouldStop) {
+                this.updateVideoProgress(1);
+                this.setVideoStatus('success', '✅ Geração de vídeos concluída!');
+                if (this.videoGenMode === 'scenes') this.showVideoAssignPanel(allMatrices);
+            }
+            this.videoIsRunning = false;
+            document.getElementById('fv-start-btn').disabled = false; document.getElementById('fv-stop-btn').disabled  = true;
+        }
+
+        stopVideo() { this.videoShouldStop = true; this.setVideoStatus('warning', '⏹ Parando...'); }
+
+        // ============================================================
+        // O PODEROSO SISTEMA DE UPSCALE 1080P EM LOTE
+        // ============================================================
+
+        async startUpscaleProcess() {
+            const btn = document.getElementById('fv-upscale-btn');
+            btn.disabled = true;
+
+            let allIds = [];
+            for (const [scene, arr] of this.videoSceneAssignments.entries()) {
+                for (const item of arr) {
+                    if (item.workflowId) allIds.push(item.workflowId);
+                }
+            }
+
+            if (allIds.length === 0) {
+                this.setVideoStatus('warning', 'Nenhum vídeo atribuído para fazer upscale.');
+                btn.disabled = false;
+                return;
+            }
+
+            this.setVideoStatus('info', `Iniciando upscale de ${allIds.length} vídeos (em lotes de 6)...`);
+
+            const batchSize = 6;
+            for (let i = 0; i < allIds.length; i += batchSize) {
+                if (this.videoShouldStop) break;
+                
+                const batch = allIds.slice(i, i + batchSize);
+                this.setVideoStatus('info', `⏳ Upscale: Lote ${Math.floor(i/batchSize)+1} de ${Math.ceil(allIds.length/batchSize)}... aguarde.`);
+
+                let initiatedCount = 0;
+
+                for (const wfId of batch) {
+                    if (this.videoShouldStop) break; 
+                    
+                    const link = document.querySelector(`a[href*="/edit/${wfId}"]`);
+                    if (!link) continue;
+                    const tile = link.closest('[data-tile-id]');
+                    if (!tile) continue;
+
+                    try {
+                        tile.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                        tile.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                        await this.sleep(400);
+
+                        const menuIcon = [...tile.querySelectorAll('i')].find(icon => icon.textContent.trim() === 'more_vert');
+                        if (!menuIcon) continue;
+                        const menuBtn = menuIcon.closest('button');
+                        if (!menuBtn) continue;
+                        
+                        menuBtn.click();
+                        await this.sleep(800);
+
+                        const upscaleBtn = [...document.querySelectorAll('button[role="menuitem"]')].find(b => b.textContent.includes('1080p'));
+                        if (upscaleBtn) {
+                            upscaleBtn.click();
+                            initiatedCount++;
+                            await this.sleep(1000); 
+                        } else {
+                            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                            await this.sleep(400);
+                        }
+                        tile.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+                    } catch (err) {
+                        this.logVideoDebug(`Erro ao iniciar upscale: ${err.message}`, 'error');
+                    }
+                }
+
+                if (initiatedCount > 0 && !this.videoShouldStop) {
+                    await this.waitForUpscaleBatch(initiatedCount);
+                }
+            }
+
+            if (!this.videoShouldStop) {
+                this.setVideoStatus('success', '✅ Upscale de todas as cenas concluído! Já pode baixar.');
+            }
+            btn.disabled = false;
+            btn.textContent = '🚀 Iniciar Upscale 1080p (Cenas Atribuídas)';
+        }
+
+        async waitForUpscaleBatch(targetCount) {
+            let completed = 0;
+            const maxWaitMs = 15 * 60 * 1000; 
+            const startWait = Date.now();
+
+            while (completed < targetCount && (Date.now() - startWait) < maxWaitMs) {
+                if (this.videoShouldStop) break;
+                
+                await this.sleep(3000);
+                
+                const toasts = [...document.querySelectorAll('li[data-sonner-toast]')];
+                for (const toast of toasts) {
+                    const text = toast.textContent || '';
+                    if (text.includes('Upscaling complete!')) {
+                        completed++;
+                        const dismissBtn = toast.querySelector('button');
+                        if (dismissBtn) dismissBtn.click();
+                        await this.sleep(500);
+                    } else if (text.includes('Failed') || text.includes('Error')) {
+                        completed++; 
+                        const dismissBtn = toast.querySelector('button');
+                        if (dismissBtn) dismissBtn.click();
+                        await this.sleep(500);
+                    }
+                }
+            }
+        }
+
+        // ============================================================
         // VALIDAÇÃO DE REFERÊNCIAS
-        // ──────────────────────────────────────────────
+        // ============================================================
 
         async validateReferences(source = 'images') {
             const isVideo = source === 'video';
@@ -1740,9 +1756,9 @@
             return nome;
         }
 
-        // ──────────────────────────────────────────────
+        // ============================================================
         // PAINEL DE ATRIBUIÇÃO (Drag & Drop)
-        // ──────────────────────────────────────────────
+        // ============================================================
 
         showAssignPanel(allMatrices) {
             this._videoAssignActive = false;
@@ -1780,15 +1796,17 @@
                 dlBtn.style.display = 'inline-flex';
                 dlBtn.disabled = true;
                 const rlBar2 = document.getElementById('flow-assign-reload-bar'); if (rlBar2) rlBar2.classList.remove('visible');
-                for (let i = 1; i <= this.sceneCount; i++) {
-                    const sceneName = `Cena ${i}`;
-                    const promptText = this.prompts[i-1]?.text || '';
+                
+                // Mapeia todas as cenas da this.prompts (Corrigido os numeros)
+                for (const p of this.prompts) {
+                    const sceneName = `Cena ${p.promptNum}`;
+                    const promptText = p.text || '';
                     const item = document.createElement('div');
                     item.className = 'flow-assign-item';
                     item.draggable = true;
                     item.dataset.type = 'scene';
                     item.dataset.scene = sceneName;
-                    item.dataset.sceneNum = i;
+                    item.dataset.sceneNum = p.promptNum;
                     item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
                     item.addEventListener('mouseenter', () => {
                         const preview = document.getElementById('flow-assign-preview');
@@ -1803,7 +1821,7 @@
                         if (preview) preview.style.display = 'none';
                     });
                     item.addEventListener('dragstart', e => {
-                        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum: i, sceneName }));
+                        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum: p.promptNum, sceneName }));
                         e.dataTransfer.effectAllowed = 'copy';
                     });
                     items.appendChild(item);
@@ -1819,9 +1837,69 @@
             this.updateScrollerPadding();
         }
 
+        showVideoAssignPanel(allMatrices) {
+            const panel = document.getElementById('flow-assign-panel');
+            const title = document.getElementById('flow-assign-title');
+            const items = document.getElementById('flow-assign-items');
+            const dlBtn = document.getElementById('flow-assign-download');
+
+            items.innerHTML = '';
+            title.textContent = 'Atribuir Cenas (Vídeos)';
+
+            const previewEl = document.getElementById('flow-assign-preview');
+            if (previewEl) previewEl.style.display = 'none';
+
+            dlBtn.style.display = 'inline-flex';
+            dlBtn.disabled = true;
+
+            const rlBar = document.getElementById('flow-assign-reload-bar');
+            if (rlBar) rlBar.classList.remove('visible');
+
+            // Usa videoSceneAssignments e videoPrompts para pegar a ordem certa dos numeros
+            for (const [sceneName] of this.videoSceneAssignments) {
+                const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
+                const prompt = this.videoPrompts.find(p => p.promptNum === sceneNum);
+                const promptText = prompt?.text || '';
+
+                const item = document.createElement('div');
+                item.className = 'flow-assign-item';
+                item.draggable = true;
+                item.dataset.type = 'scene';
+                item.dataset.scene = sceneName;
+                item.dataset.sceneNum = sceneNum;
+                item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
+                item.addEventListener('mouseenter', () => {
+                    const preview = document.getElementById('flow-assign-preview');
+                    if (preview) {
+                        preview.style.display = '';
+                        preview.querySelector('.preview-label').textContent = sceneName + ': ';
+                        preview.querySelector('.preview-text').textContent = promptText.substring(0, 300) + (promptText.length > 300 ? '...' : '');
+                    }
+                });
+                item.addEventListener('mouseleave', () => {
+                    const preview = document.getElementById('flow-assign-preview');
+                    if (preview) preview.style.display = 'none';
+                });
+                item.addEventListener('dragstart', e => {
+                    e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum, sceneName }));
+                    e.dataTransfer.effectAllowed = 'copy';
+                });
+                items.appendChild(item);
+            }
+
+            panel.classList.add('active');
+            panel.classList.remove('minimized');
+            document.getElementById('flow-assign-toggle').textContent = '▲';
+            const reopenBtn = document.getElementById('fv-reopen-assign');
+            if (reopenBtn) reopenBtn.style.display = 'none';
+            
+            this._videoAssignActive = true;
+            this.updateAssignCount();
+            this.updateScrollerPadding();
+        }
+
         hideAssignPanel() {
             document.getElementById('flow-assign-panel').classList.remove('active');
-            // Mostra o botão reopen correto
             if (this._videoAssignActive) {
                 const reopenBtn = document.getElementById('fv-reopen-assign');
                 if (reopenBtn) reopenBtn.style.display = '';
@@ -1839,7 +1917,6 @@
             this.updateScrollerPadding();
         }
 
-        /** Abre painel de atribuição com referências detectadas nos prompts */
         openAssignRefsFromDetected() {
             const text = document.getElementById('flow-prompts-input').value;
             const prompts = parsePromptsText(text);
@@ -1865,10 +1942,6 @@
             this.updateScrollerPadding();
         }
 
-        /**
-         * Ajusta padding-top do scroller da galeria para que a primeira
-         * linha de imagens não fique escondida atrás do painel de atribuição.
-         */
         updateScrollerPadding() {
             setTimeout(() => {
                 const panel = document.getElementById('flow-assign-panel');
@@ -1899,7 +1972,6 @@
                     if (rlBar) rlBar.classList.remove('visible');
                 }
             } else if (this._videoAssignActive) {
-                // Vídeo scenes
                 const total = this.videoSceneAssignments.size;
                 const done = [...this.videoSceneAssignments.values()].filter(arr => arr.length > 0).length;
                 el.textContent = `${done}/${total}`;
@@ -1914,18 +1986,12 @@
             }
         }
 
-        // ──────────────────────────────────────────────
-        // DRAG & DROP (event delegation no scroller)
-        // ──────────────────────────────────────────────
-
         setupDragDrop() {
-            // Usa delegação global — tiles são virtualizados
             document.addEventListener('dragover', e => {
                 const tile = e.target.closest('[data-tile-id]');
                 if (tile) {
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'copy';
-                    // Highlight só no tile que tem imagem
                     const inner = tile.querySelector('[data-tile-id]') || tile;
                     document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
                     inner.classList.add('drop-hover');
@@ -1933,7 +1999,6 @@
             });
 
             document.addEventListener('dragleave', e => {
-                // Só remove se saiu do tile completamente
                 const related = e.relatedTarget?.closest('[data-tile-id]');
                 const current = e.target.closest('[data-tile-id]');
                 if (current && current !== related) current.classList.remove('drop-hover');
@@ -1949,7 +2014,6 @@
                 try { data = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
                 if (!data?.type) return;
 
-                // Encontra inner tile (com imagem) e outer tile (para label)
                 const innerTile = tile.querySelector('[data-tile-id]') || tile;
                 const workflowId = this.getWorkflowIdFromTile(innerTile);
                 const outerTile = tile;
@@ -1963,7 +2027,6 @@
                 }
             });
 
-            // Click handler para labels X (delegação)
             document.addEventListener('click', async e => {
                 const xBtn = e.target.closest('.label-x');
                 if (!xBtn) return;
@@ -1973,7 +2036,6 @@
                 const type = label.dataset.type;
                 if (!wfId) return;
 
-                // Remove atribuição
                 await this.apiRename(wfId, 'Imagem gerada');
                 await this.apiFavorite(wfId, false);
                 label.remove();
@@ -1984,12 +2046,11 @@
                     this.updateAssignItemUI(name, false);
                 } else if (type === 'scene') {
                     const sceneName = label.dataset.scene;
-                    const arr = this.sceneAssignments.get(sceneName);
+                    const arr = this.sceneAssignments.get(sceneName) || this.videoSceneAssignments.get(sceneName);
                     if (arr) {
                         const idx = arr.findIndex(a => a.workflowId === wfId);
                         if (idx >= 0) arr.splice(idx, 1);
                     }
-                    // Atualiza UI do item no painel
                     this.updateAssignItemUI(sceneName, (arr?.length || 0) > 0);
                 }
                 this.tileAssignments.delete(wfId);
@@ -1998,14 +2059,8 @@
             });
         }
 
-        // ──────────────────────────────────────────────
-        // ATRIBUIR REFERÊNCIA
-        // ──────────────────────────────────────────────
-
         async assignReference(name, workflowId, tileEl) {
             this.logDebug(`Atribuindo referência "${name}" → ${workflowId.substring(0,8)}...`, 'info');
-
-            // Se esta referência já estava atribuída a outro tile: remove
             const prevWfId = this.refAssignments.get(name);
             if (prevWfId && prevWfId !== workflowId) {
                 await this.apiRename(prevWfId, 'Imagem gerada');
@@ -2014,14 +2069,12 @@
                 this.tileAssignments.delete(prevWfId);
             }
 
-            // Se o tile destino já tinha outra atribuição: remove
             const prevAssign = this.tileAssignments.get(workflowId);
             if (prevAssign) {
                 if (prevAssign.type === 'ref') this.refAssignments.delete(prevAssign.name);
                 this.removeLabelFromTile(workflowId);
             }
 
-            // Renomeia com sufixo " _"
             const apiName = name + CONFIG.REF_SUFFIX;
             const ok1 = await this.apiRename(workflowId, apiName);
             const ok2 = await this.apiFavorite(workflowId, true);
@@ -2039,17 +2092,12 @@
             }
         }
 
-        // ──────────────────────────────────────────────
-        // ATRIBUIR CENA
-        // ──────────────────────────────────────────────
-
         async assignScene(sceneNum, sceneName, workflowId, tileEl) {
             const assignments = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
             const arr = assignments.get(sceneName) || [];
             const itemLabel = this._videoAssignActive ? 'Vídeo' : 'Imagem';
             const logFn = this._videoAssignActive ? (m, t) => this.logVideoDebug(m, t) : (m, t) => this.logDebug(m, t);
 
-            // Se tile já tem atribuição: sobrescreve
             const prevAssign = this.tileAssignments.get(workflowId);
             if (prevAssign) {
                 if (prevAssign.type === 'scene') {
@@ -2088,15 +2136,8 @@
             }
         }
 
-        // ──────────────────────────────────────────────
-        // LABELS NOS TILES
-        // ──────────────────────────────────────────────
-
         addLabelToTile(tileEl, text, workflowId, type, extraData) {
-            // Remove label anterior se existir
             this.removeLabelFromTile(workflowId);
-
-            // Encontra o outerTile para posicionar
             const outer = tileEl.closest('[data-tile-id]') || tileEl;
             outer.style.position = 'relative';
 
@@ -2114,12 +2155,7 @@
             document.querySelectorAll(`.flow-tile-label[data-wf="${workflowId}"]`).forEach(l => l.remove());
         }
 
-        /**
-         * Inicia polling que re-aplica labels em tiles visíveis.
-         * Necessário porque o Virtuoso destrói/recria DOM ao scrollar.
-         */
         startLabelObserver() {
-            // Mostra seção de download se há atribuições
             const dlSection = document.getElementById('flow-download-section');
             if (dlSection && this.tileAssignments.size > 0) dlSection.style.display = '';
             if (this._labelObserverId) return;
@@ -2164,10 +2200,6 @@
             }
         }
 
-        // ──────────────────────────────────────────────
-        // DOWNLOAD DE CENAS
-        // ──────────────────────────────────────────────
-
         async downloadScenes() {
             const btn = document.getElementById('flow-assign-download');
             btn.disabled = true; btn.textContent = '⏳ Baixando...';
@@ -2185,7 +2217,6 @@
                     const sorted = imgs.sort((a,b) => a.imgNum - b.imgNum);
                     for (let i = 0; i < sorted.length; i++) {
                         const fileName = i === 0 ? `cena_${sceneNum}.${ext}` : `cena_${sceneNum}_${i+1}.${ext}`;
-                        // Tenta pegar src fresco do tile
                         let src = sorted[i].src;
                         if (!src) {
                             const link = document.querySelector(`a[href*="/edit/${sorted[i].workflowId}"]`);
@@ -2212,14 +2243,6 @@
             btn.disabled = false; btn.textContent = '⬇️ Baixar Cenas';
         }
 
-        // ──────────────────────────────────────────────
-        // DOWNLOAD DE IMAGENS DO PROJETO
-        // ──────────────────────────────────────────────
-
-        /**
-         * Baixa imagens do projeto com base no tileAssignments e/ou galeria.
-         * @param {'identified'|'scenes'|'refs'|'all'} mode
-         */
         async downloadProjectImages(mode) {
             const btnId = { identified: 'flow-dl-identified', scenes: 'flow-dl-scenes', refs: 'flow-dl-refs', all: 'flow-dl-all' }[mode] || { identified: 'fv-dl-identified', scenes: 'fv-dl-scenes', all: 'fv-dl-all' }[mode];
             const btn = document.getElementById(btnId);
@@ -2228,10 +2251,8 @@
 
             try {
                 if (mode === 'all') {
-                    // Baixa TODAS as imagens da galeria
                     await this.downloadAllGalleryImages(btn);
                 } else {
-                    // Baixa baseado no tileAssignments
                     if (this.tileAssignments.size === 0) {
                         this.setStatus('warning', 'Nenhuma imagem identificada. Execute "Analisar projeto" primeiro.');
                         if (btn) { btn.disabled = false; btn.textContent = origText; }
@@ -2251,16 +2272,13 @@
                         return;
                     }
 
-                    this.logDebug(`Baixando ${entries.length} imagem(ns) (${mode})...`, 'info');
                     let count = 0;
-                    const pending = new Map(entries); // wfId → data
+                    const pending = new Map(entries); 
                     const scroller = this.getScroller();
 
                     if (scroller) {
                         scroller.scrollTop = 0;
                         await this.sleep(600);
-
-                        // Scroll pela galeria procurando os tiles
                         for (let iter = 0; iter < 500 && pending.size > 0; iter++) {
                             const links = document.querySelectorAll('a[href*="/edit/"]');
                             for (const link of links) {
@@ -2302,9 +2320,7 @@
                                     pending.delete(wfId);
                                     if (btn) btn.textContent = `⏳ ${count}/${entries.length}...`;
                                     await this.sleep(400);
-                                } catch(e) {
-                                    this.logDebug(`Erro download ${fileName}: ${e.message}`, 'error');
-                                }
+                                } catch(e) {}
                             }
 
                             if (pending.size === 0) break;
@@ -2313,24 +2329,14 @@
                             await this.sleep(400);
                             if (scroller.scrollTop === prev) break;
                         }
-
                         scroller.scrollTop = 0;
                     }
-
-                    this.logDebug(`✅ ${count}/${entries.length} imagem(ns) baixada(s)`, 'success');
-                    this.setStatus('success', `✅ ${count} imagem(ns) baixada(s)!`);
                 }
-            } catch(e) {
-                this.logDebug(`Erro: ${e.message}`, 'error');
-            }
+            } catch(e) {}
 
             if (btn) { btn.disabled = false; btn.textContent = origText; }
         }
 
-        /**
-         * Baixa apenas as mídias geradas na última execução.
-         * Usa o array _lastRunMedia que é populado no final de start() e startVideo().
-         */
         async downloadLastRunMedia() {
             const media = this._lastRunMedia || [];
             if (!media.length) return;
@@ -2340,12 +2346,11 @@
 
             const scroller = this.getScroller();
             let count = 0;
-            const pending = new Map(); // uuid → media item
+            const pending = new Map(); 
             for (const item of media) {
                 if (item.uuid) pending.set(item.uuid, item);
             }
 
-            // Scroll pela galeria procurando os tiles
             if (scroller) {
                 scroller.scrollTop = 0;
                 await this.sleep(600);
@@ -2377,9 +2382,7 @@
                             pending.delete(uuid);
                             if (btn) btn.textContent = `⏳ ${count}/${media.length}...`;
                             await this.sleep(400);
-                        } catch(e) {
-                            this.logDebug(`Erro download ${fileName}: ${e.message}`, 'error');
-                        }
+                        } catch(e) {}
                     }
 
                     if (pending.size === 0) break;
@@ -2391,13 +2394,12 @@
                 scroller.scrollTop = 0;
             }
 
-            this.logDebug(`✅ ${count}/${media.length} mídia(s) baixada(s)`, 'success');
             if (btn) { btn.disabled = false; btn.textContent = `✅ ${count} baixada(s)!`; }
         }
 
         async downloadAllGalleryImages(btn) {
             const scroller = this.getScroller();
-            if (!scroller) { this.setStatus('error', 'Scroller não encontrado'); return; }
+            if (!scroller) return;
 
             const downloaded = new Set();
             let count = 0;
@@ -2405,7 +2407,6 @@
             await this.sleep(600);
 
             for (let iter = 0; iter < 500; iter++) {
-                // Itera por todos os tiles visíveis
                 const tiles = [...document.querySelectorAll('[data-tile-id]')].filter(el => el.parentElement.closest('[data-tile-id]'));
                 for (const tile of tiles) {
                     if (!this.isTileLoaded(tile)) continue;
@@ -2417,7 +2418,6 @@
                     if (!mediaSrc) continue;
                     const tileIsVideo = this.isVideoTile(tile);
 
-                    // Determina nome baseado no tileAssignment se existir
                     const link = tile.querySelector('a[href*="/edit/"]');
                     const wfId = link?.href.match(/\/edit\/([a-f0-9-]{36})/)?.[1];
                     const data = wfId ? this.tileAssignments.get(wfId) : null;
@@ -2447,7 +2447,7 @@
                         count++;
                         if (btn) btn.textContent = `⏳ ${count} baixada(s)...`;
                         await this.sleep(300);
-                    } catch(e) { this.logDebug(`Erro: ${e.message}`, 'error'); }
+                    } catch(e) {}
                 }
 
                 const prev = scroller.scrollTop;
@@ -2457,26 +2457,17 @@
             }
 
             scroller.scrollTop = 0;
-            this.logDebug(`✅ ${count} mídia(s) baixada(s) (completo)`, 'success');
-            this.setStatus('success', `✅ Download completo: ${count} mídia(s)!`);
         }
-
-        // ──────────────────────────────────────────────
-        // ANALISAR PROJETO EXISTENTE
-        // ──────────────────────────────────────────────
 
         async analyzeProject(source = 'images') {
             const isVideo = source === 'video';
             const btnId = isVideo ? 'fv-analyze-btn' : 'flow-analyze-btn';
             const dlSectionId = isVideo ? 'fv-download-section' : 'flow-download-section';
             const statusFn = isVideo ? (t, m) => this.setVideoStatus(t, m) : (t, m) => this.setStatus(t, m);
-            const logFn = isVideo ? (m, t) => this.logVideoDebug(m, t) : (m, t) => this.logDebug(m, t);
-
+            
             const btn = document.getElementById(btnId);
             btn.disabled = true; btn.textContent = '⏳ Analisando...';
-            logFn('Analisando projeto...', 'info');
 
-            // Remove labels anteriores
             document.querySelectorAll('.flow-tile-label').forEach(l => l.remove());
             this.tileAssignments.clear();
 
@@ -2486,7 +2477,6 @@
             let labelsFound = 0;
             const checkedIds = new Set();
 
-            // Scroll do topo ao fundo
             scroller.scrollTop = 0;
             await this.sleep(600);
 
@@ -2503,14 +2493,12 @@
                     const wfId = this.getWorkflowIdFromTile(tile);
                     let labelText = null, type = null, extra = null;
 
-                    // Match "Cena X - Imagem Y" ou "Cena X - Vídeo Y"
                     const sceneMatch = name.match(/^Cena\s+(\d+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)$/i);
                     if (sceneMatch) {
                         labelText = name;
                         type = 'scene';
                         extra = `Cena ${sceneMatch[1]}`;
                     }
-                    // Match referência (termina com " _")
                     else if (name.endsWith(CONFIG.REF_SUFFIX)) {
                         const cleanName = name.slice(0, -CONFIG.REF_SUFFIX.length);
                         labelText = cleanName;
@@ -2535,291 +2523,23 @@
             scroller.scrollTop = 0; await this.sleep(300);
             if (labelsFound > 0) this.startLabelObserver();
             statusFn('success', `✅ Análise concluída: ${labelsFound} item(ns) identificado(s).`);
-            logFn(`Análise: ${labelsFound} labels, ${checkedIds.size} tiles verificados`, 'success');
             const dlSection = document.getElementById(dlSectionId);
             if (dlSection) dlSection.style.display = '';
             btn.disabled = false; btn.textContent = '🔍 Analisar projeto existente';
         }
 
-        // ──────────────────────────────────────────────
-        // VIDEO PIPELINE
-        // ──────────────────────────────────────────────
-
-        async startVideo() {
-            if (this.isRunning) { this.setVideoStatus('warning', '⚠️ A automação de imagens está rodando. Aguarde finalizar.'); return; }
-            if (this.videoIsRunning) return;
-
-            const text = document.getElementById('fv-prompts-input').value;
-            this.videoPrompts = parsePromptsText(text);
-            if (!this.videoPrompts.length) { this.setVideoStatus('error', 'Nenhum prompt detectado.'); return; }
-
-            // Valida referências nos prompts
-            const refs = extractReferences(this.videoPrompts);
-            if (refs.length > 0) {
-                const unvalidated = refs.filter(r => this.validatedRefs[r.toLowerCase()] === undefined);
-                const missing     = refs.filter(r => this.validatedRefs[r.toLowerCase()] === false);
-                if (unvalidated.length) { this.setVideoStatus('warning', 'Valide as referências antes de iniciar.'); return; }
-                if (missing.length)     { this.setVideoStatus('error', `Referências não encontradas: ${missing.join(', ')}`); return; }
-            }
-
-            // Em modo cenas: sceneCount = número de prompts
-            if (this.videoGenMode === 'scenes') {
-                this.videoSceneCount = this.videoPrompts.length;
-                this.videoSceneAssignments = new Map();
-                for (let i = 0; i < this.videoPrompts.length; i++) {
-                    this.videoSceneAssignments.set(`Cena ${this.videoPrompts[i].promptNum}`, []);
-                }
-            }
-
-            this.videoIsRunning = true;
-            this.videoShouldStop = false;
-            document.getElementById('fv-start-btn').disabled = true;
-            document.getElementById('fv-stop-btn').disabled  = false;
-            document.getElementById('fv-prompts-input').disabled = true;
-
-            this.buildVideoPromptList();
-            this.setVideoStatus('info', '🚀 Iniciando automação de vídeos v4.0...');
-            this.updateVideoProgress(0);
-            await this.detectGrid();
-
-            const N = this.videoResultsPerPrompt;
-            const batches = [];
-            for (let i = 0; i < this.videoPrompts.length; i += this.videoBatchSize)
-                batches.push(this.videoPrompts.slice(i, Math.min(i + this.videoBatchSize, this.videoPrompts.length)));
-            this.logVideoDebug(`${this.videoPrompts.length} prompts → ${batches.length} lote(s)`, 'info');
-
-            const allMatrices = [];
-
-            try {
-                const C = this.gridCols;
-                const retryCount = {};
-
-                for (let bIdx = 0; bIdx < batches.length; bIdx++) {
-                    if (this.videoShouldStop) break;
-                    const batch = batches[bIdx];
-                    const totalN = batch.length * N;
-                    const rowsThis = Math.ceil(totalN / C);
-
-                    batch.forEach(p => this.updateVideoPromptItemStatus(
-                        this.videoPrompts.findIndex(x => x.promptNum === p.promptNum), 'active'
-                    ));
-                    this.updateVideoProgress(bIdx / batches.length);
-                    this.updateMini(
-                        `Vídeo ${bIdx+1}/${batches.length}`,
-                        batch.map(p => `#${p.promptNum}`).join(' + '),
-                        bIdx / batches.length,
-                        `${this.videoGenMode === 'scenes' ? 'Cenas' : 'Livre'} • ${N} resultado(s)/prompt • ${this.videoBatchSize} simult.`
-                    );
-                    this.logVideoDebug(`\n╭─── LOTE ${bIdx+1}/${batches.length}: prompts ${batch.map(p=>p.promptNum).join(', ')} ───╮`, 'info');
-
-                    // 1. Snapshot
-                    const beforeUuids = this.snapshotImageUuids();
-
-                    // 2. Submit com stagger
-                    this.setVideoStatus('info', `⚡ Submetendo lote ${bIdx+1}/${batches.length}...`);
-                    for (let pi = 0; pi < batch.length; pi++) {
-                        if (this.videoShouldStop) break;
-                        const ok = await this.prepareAndSubmit(batch[pi]);
-                        if (!ok) break;
-                        if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
-                    }
-                    if (this.videoShouldStop) break;
-                    await this.dynamicSleep([1800, 2500]);
-
-                    // 3. Monta matriz e aguarda geração
-                    const matrix = this.buildPositionMatrix(batch, N, 0);
-                    this.setVideoStatus('info', `⏳ Lote ${bIdx+1}/${batches.length} — aguardando geração...`);
-                    // Override shouldStop temporariamente para usar videoShouldStop
-                    const origShouldStop = this.shouldStop;
-                    this.shouldStop = this.videoShouldStop;
-                    await this.waitForMatrix(matrix, beforeUuids);
-                    this.shouldStop = origShouldStop;
-                    if (this.videoShouldStop) break;
-
-                    // 4. Retry falhas
-                    const failedPrompts = [];
-                    for (let bRevIdx = 0; bRevIdx < batch.length; bRevIdx++) {
-                        const bIdx2 = batch.length - 1 - bRevIdx;
-                        const prompt = batch[bIdx2];
-                        const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
-                        if (slots.every(s => s.state === 'error')) failedPrompts.push(prompt);
-                    }
-
-                    for (const fp of failedPrompts) {
-                        const key = fp.promptNum;
-                        if (!retryCount[key]) retryCount[key] = 0;
-                        const gi = this.videoPrompts.findIndex(x => x.promptNum === key);
-                        let recovered = false;
-                        while (retryCount[key] < CONFIG.MAX_RETRIES && !this.videoShouldStop) {
-                            retryCount[key]++;
-                            this.logVideoDebug(`🔄 Regerar prompt ${key} — tentativa ${retryCount[key]}`, 'info');
-                            this.updateVideoPromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
-                            const retryBefore = this.snapshotImageUuids();
-                            const ok = await this.prepareAndSubmit(fp);
-                            if (!ok) break;
-                            await this.dynamicSleep([1800, 2500]);
-                            const retryMatrix = this.buildPositionMatrix([fp], N, 0);
-                            this.shouldStop = this.videoShouldStop;
-                            await this.waitForMatrix(retryMatrix, retryBefore);
-                            this.shouldStop = origShouldStop;
-                            if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
-                                this.updateVideoPromptItemStatus(gi, 'done');
-                                recovered = true;
-                                allMatrices.push(retryMatrix);
-                                break;
-                            }
-                        }
-                        if (!recovered) this.updateVideoPromptItemStatus(gi, 'error', `falhou`);
-                    }
-
-                    // Marca prompts do lote como done
-                    batch.forEach(p => {
-                        const gi = this.videoPrompts.findIndex(x => x.promptNum === p.promptNum);
-                        const slots = matrix.filter(s => s.promptNum === p.promptNum);
-                        if (slots.some(s => s.state === 'loaded')) this.updateVideoPromptItemStatus(gi, 'done');
-                    });
-
-                    allMatrices.push(matrix);
-
-                    if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
-                }
-
-                if (!this.videoShouldStop) {
-                    this.updateVideoProgress(1);
-                    const doneCount = document.querySelectorAll('#fv-prompt-list .flow-prompt-item.done').length;
-                    const errCount = document.querySelectorAll('#fv-prompt-list .flow-prompt-item.error').length;
-                    const failedList = this.videoPrompts.filter((_, i) =>
-                        document.querySelector(`#fv-prompt-list .flow-prompt-item[data-index="${i}"]`)?.classList.contains('error')
-                    );
-
-                    let statusMsg = `✅ Geração concluída! ${doneCount} sucesso(s)`;
-                    if (errCount) statusMsg += `, ${errCount} falha(s)`;
-                    statusMsg += '.';
-                    if (this.videoGenMode === 'scenes') statusMsg += ' Arraste as cenas para atribuir aos vídeos.';
-                    this.setVideoStatus('success', statusMsg);
-
-                    // Mostra painel de atribuição se modo cenas
-                    if (this.videoGenMode === 'scenes') {
-                        this.showVideoAssignPanel(allMatrices);
-                    }
-
-                    // Popup com detalhes
-                    let popupMsg = `${doneCount} prompt(s) de vídeo gerado(s) com sucesso.`;
-                    if (this.videoGenMode === 'scenes') popupMsg += '\n\nArraste as cenas do painel superior para os melhores vídeos.';
-
-                    // Coleta mídias geradas nesta execução
-                    this._lastRunMedia = allMatrices.flatMap(m =>
-                        m.filter(s => s.state === 'loaded' && s.src).map(s => ({
-                            src: s.src, workflowId: s.workflowId, uuid: s.uuid, promptNum: s.promptNum, isVideo: true
-                        }))
-                    );
-                    this.showCompletionPopup(popupMsg, failedList.length > 0 ? failedList : null);
-                } else {
-                    this.setVideoStatus('warning', '⏹ Automação de vídeos interrompida.');
-                }
-
-            } catch (err) {
-                this.setVideoStatus('error', '❌ Erro: ' + err.message);
-                log.error('Video pipeline error:', err);
-            }
-
-            this.videoIsRunning = false;
-            document.getElementById('fv-start-btn').disabled = false;
-            document.getElementById('fv-stop-btn').disabled  = true;
-            document.getElementById('fv-prompts-input').disabled = false;
-            document.getElementById('flow-mini').style.display = 'none';
-            document.getElementById('flow-sidebar').style.display = '';
-        }
-
-        stopVideo() { this.videoShouldStop = true; this.setVideoStatus('warning', '⏹ Parando...'); }
-
-        /**
-         * Mostra painel de atribuição para vídeos (modo cenas).
-         * Reutiliza o mesmo painel de assign do DOM, mas com estado de vídeo.
-         */
-        showVideoAssignPanel(allMatrices) {
-            const panel = document.getElementById('flow-assign-panel');
-            const title = document.getElementById('flow-assign-title');
-            const items = document.getElementById('flow-assign-items');
-            const dlBtn = document.getElementById('flow-assign-download');
-
-            items.innerHTML = '';
-            title.textContent = 'Atribuir Cenas (Vídeos)';
-
-            const previewEl = document.getElementById('flow-assign-preview');
-            if (previewEl) previewEl.style.display = 'none';
-
-            dlBtn.style.display = 'inline-flex';
-            dlBtn.disabled = true;
-
-            const rlBar = document.getElementById('flow-assign-reload-bar');
-            if (rlBar) rlBar.classList.remove('visible');
-
-            // Usa videoSceneAssignments e videoPrompts
-            for (const [sceneName] of this.videoSceneAssignments) {
-                const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
-                const prompt = this.videoPrompts.find(p => p.promptNum === sceneNum);
-                const promptText = prompt?.text || '';
-
-                const item = document.createElement('div');
-                item.className = 'flow-assign-item';
-                item.draggable = true;
-                item.dataset.type = 'scene';
-                item.dataset.scene = sceneName;
-                item.dataset.sceneNum = sceneNum;
-                item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
-                item.addEventListener('mouseenter', () => {
-                    const preview = document.getElementById('flow-assign-preview');
-                    if (preview) {
-                        preview.style.display = '';
-                        preview.querySelector('.preview-label').textContent = sceneName + ': ';
-                        preview.querySelector('.preview-text').textContent = promptText.substring(0, 300) + (promptText.length > 300 ? '...' : '');
-                    }
-                });
-                item.addEventListener('mouseleave', () => {
-                    const preview = document.getElementById('flow-assign-preview');
-                    if (preview) preview.style.display = 'none';
-                });
-                item.addEventListener('dragstart', e => {
-                    e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum, sceneName }));
-                    e.dataTransfer.effectAllowed = 'copy';
-                });
-                items.appendChild(item);
-            }
-
-            panel.classList.add('active');
-            panel.classList.remove('minimized');
-            document.getElementById('flow-assign-toggle').textContent = '▲';
-            const reopenBtn = document.getElementById('fv-reopen-assign');
-            if (reopenBtn) reopenBtn.style.display = 'none';
-            // Atualiza contadores usando videoSceneAssignments
-            this._videoAssignActive = true;
-            this.updateAssignCount();
-            this.updateScrollerPadding();
-        }
-
-        /** Comunicação com background via bridge */
-        sendToBackground(action, data = {}) {
-            return new Promise((resolve) => {
-                const id = 'cd_' + Date.now() + '_' + Math.random();
-                const handler = (event) => {
-                    if (event.data?.type === 'CD_FROM_BACKGROUND' && event.data.id === id) {
-                        window.removeEventListener('message', handler);
-                        resolve(event.data.result);
-                    }
-                };
-                window.addEventListener('message', handler);
-                window.postMessage({ type: 'CD_TO_BACKGROUND', action, data, id }, '*');
-                setTimeout(() => { window.removeEventListener('message', handler); resolve({ success: false, error: 'Timeout' }); }, 30000);
-            });
-        }
-
-        // ──────────────────────────────────────────────
-        // UI HELPERS
-        // ──────────────────────────────────────────────
+        // ============================================================
+        // Helpers UI Visuais
+        // ============================================================
 
         setStatus(type, msg) {
             const el = document.getElementById('flow-status');
+            el.className = 'flow-status ' + type;
+            el.innerHTML = msg;
+        }
+
+        setVideoStatus(type, msg) {
+            const el = document.getElementById('fv-status');
             el.className = 'flow-status ' + type;
             el.innerHTML = msg;
         }
@@ -2830,8 +2550,13 @@
             document.getElementById('flow-mini-progress-bar').style.width = pct + '%';
         }
 
+        updateVideoProgress(fraction) {
+            const pct = Math.round(fraction * 100);
+            document.getElementById('fv-progress-bar').style.width = pct + '%';
+            document.getElementById('flow-mini-progress-bar').style.width = pct + '%';
+        }
+
         updateMini(title, sub, fraction, details) {
-            // Só mostra mini se o painel principal está fechado
             const panelOpen = document.getElementById('flow-panel').classList.contains('active');
             if (!panelOpen) {
                 document.getElementById('flow-mini').style.display = 'flex';
@@ -2856,8 +2581,46 @@
             }).join('');
         }
 
+        buildVideoPromptList() {
+            document.getElementById('fv-prompts-preview-card').style.display = 'block';
+            document.getElementById('fv-queue-info').textContent = `${this.videoPrompts.length} prompts na fila`;
+            document.getElementById('fv-prompt-list').innerHTML = this.videoPrompts.map((p, i) => {
+                const refs = (p.text.match(/\[([^\]]+)\]/g) || []).map(m => m.slice(1,-1));
+                const voices = (p.text.match(/<voz:\s*([^>]+)>/gi) || []).map(m => m.replace(/<voz:\s*/i, '').replace(/>/, '').trim());
+                return `<div class="flow-prompt-item" data-index="${i}">
+                    <span class="num">${p.promptNum}</span>
+                    <span class="text">${this.esc(p.text.replace(/\[([^\]]+)\]/g, '●$1').replace(/<voz:\s*([^>]+)>/gi, '🎙️$1'))}</span>
+                    <span class="refs">
+                        ${refs.map(r => `<span class="ref-badge">${this.esc(r)}</span>`).join('')}
+                        ${voices.map(v => `<span class="voice-badge">🎙️ ${this.esc(v)}</span>`).join('')}
+                    </span>
+                </div>`;
+            }).join('');
+        }
+
         updatePromptItemStatus(index, status, extra = '') {
             const item = document.querySelector(`.flow-prompt-item[data-index="${index}"]`);
+            if (!item) return;
+            item.className = `flow-prompt-item ${status}`;
+            let badge = item.querySelector('.status-badge');
+            const icons  = { active:'⚡', done:'✅', error:'❌', retrying:'🔄' };
+            const labels = { active:'Gerando', done:'Concluído', error:'Falhou', retrying:'Retentando' };
+            const colors = {
+                active:   { bg:'#e0f2fe', fg:'#0369a1' },
+                done:     { bg:'#d1fae5', fg:'#065f46' },
+                error:    { bg:'#fee2e2', fg:'#991b1b' },
+                retrying: { bg:'#fef9c3', fg:'#78350f' },
+            };
+            if (status !== 'active' || extra) {
+                if (!badge) { badge = document.createElement('span'); badge.className = 'status-badge'; item.appendChild(badge); }
+                badge.textContent = `${icons[status] || ''} ${extra || labels[status] || status}`;
+                const clr = colors[status] || colors.active;
+                badge.style.background = clr.bg; badge.style.color = clr.fg;
+            } else if (badge) { badge.remove(); }
+        }
+
+        updateVideoPromptItemStatus(index, status, extra = '') {
+            const item = document.querySelector(`#fv-prompt-list .flow-prompt-item[data-index="${index}"]`);
             if (!item) return;
             item.className = `flow-prompt-item ${status}`;
             let badge = item.querySelector('.status-badge');
@@ -2891,7 +2654,6 @@
                     failedEl.innerHTML = '';
                 }
             }
-            // Botão de download das mídias geradas nesta execução
             const dlBtn = document.getElementById('flow-popup-download');
             if (dlBtn) {
                 const media = this._lastRunMedia || [];
@@ -2923,56 +2685,6 @@
             if      (type === 'error')   log.error(msg);
             else if (type === 'success') log.success(msg);
             else                         log.info(msg);
-        }
-
-        // ──────────────────────────────────────────────
-        // VIDEO UI HELPERS
-        // ──────────────────────────────────────────────
-
-        setVideoStatus(type, msg) {
-            const el = document.getElementById('fv-status');
-            el.className = 'flow-status ' + type;
-            el.innerHTML = msg;
-        }
-
-        updateVideoProgress(fraction) {
-            const pct = Math.round(fraction * 100);
-            document.getElementById('fv-progress-bar').style.width = pct + '%';
-            document.getElementById('flow-mini-progress-bar').style.width = pct + '%';
-        }
-
-        buildVideoPromptList() {
-            document.getElementById('fv-prompts-preview-card').style.display = 'block';
-            document.getElementById('fv-queue-info').textContent = `${this.videoPrompts.length} prompts na fila`;
-            document.getElementById('fv-prompt-list').innerHTML = this.videoPrompts.map((p, i) => {
-                const refs = (p.text.match(/\[([^\]]+)\]/g) || []).map(m => m.slice(1,-1));
-                return `<div class="flow-prompt-item" data-index="${i}">
-                    <span class="num">${p.promptNum}</span>
-                    <span class="text">${this.esc(p.text.replace(/\[([^\]]+)\]/g, '●$1'))}</span>
-                    ${refs.length ? `<span class="refs">${refs.map(r => `<span class="ref-badge">${this.esc(r)}</span>`).join('')}</span>` : ''}
-                </div>`;
-            }).join('');
-        }
-
-        updateVideoPromptItemStatus(index, status, extra = '') {
-            const item = document.querySelector(`#fv-prompt-list .flow-prompt-item[data-index="${index}"]`);
-            if (!item) return;
-            item.className = `flow-prompt-item ${status}`;
-            let badge = item.querySelector('.status-badge');
-            const icons  = { active:'⚡', done:'✅', error:'❌', retrying:'🔄' };
-            const labels = { active:'Gerando', done:'Concluído', error:'Falhou', retrying:'Retentando' };
-            const colors = {
-                active:   { bg:'#e0f2fe', fg:'#0369a1' },
-                done:     { bg:'#d1fae5', fg:'#065f46' },
-                error:    { bg:'#fee2e2', fg:'#991b1b' },
-                retrying: { bg:'#fef9c3', fg:'#78350f' },
-            };
-            if (status !== 'active' || extra) {
-                if (!badge) { badge = document.createElement('span'); badge.className = 'status-badge'; item.appendChild(badge); }
-                badge.textContent = `${icons[status] || ''} ${extra || labels[status] || status}`;
-                const clr = colors[status] || colors.active;
-                badge.style.background = clr.bg; badge.style.color = clr.fg;
-            } else if (badge) { badge.remove(); }
         }
 
         logVideoDebug(msg, type = 'info') {
