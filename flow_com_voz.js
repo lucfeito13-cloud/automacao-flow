@@ -1,6 +1,6 @@
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
-// Versão 4.0 - Drag & Drop + API Rename (Flow Voz)
+// Versão 8.1 - Fix Visual (Resume + Logs)
 // ==========================================
 //
 // ARQUITETURA:
@@ -72,7 +72,7 @@
         MAX_RETRIES:            3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.0 (Flow Voz)',
+        VERSION: '8.1 (Flow Voz + Fixes)',
     };
 
     // ============================================================
@@ -226,7 +226,7 @@
 .flow-status.warning{display:block;background:#fffbeb;color:#92400e;border:1px solid #fde68a;}
 .flow-progress{height:4px;background:var(--cd-border-light);border-radius:4px;overflow:hidden;margin-bottom:10px;}
 .flow-progress-bar{height:100%;background:linear-gradient(90deg,var(--cd-primary),var(--cd-primary-light));border-radius:4px;transition:width .4s;width:0%;}
-.flow-logs-container{display:none;}
+.flow-logs-container{display:none; margin-top: 10px;}
 .flow-logs-container.visible{display:block;}
 .flow-debug-panel{max-height:180px;overflow-y:auto;font-family:monospace;font-size:11px;background:#0f172a;color:#e2e8f0;border-radius:var(--cd-radius-xs);padding:12px;line-height:1.5;}
 .flow-debug-panel::-webkit-scrollbar{width:4px;}
@@ -389,6 +389,12 @@
               </div>
               <div id="flow-mode-desc" style="font-size:11px;color:var(--cd-text-light);line-height:1.4;min-height:16px;">Gera imagens sem atribuir nomes. Ideal para testes rápidos.</div>
             </div>
+            
+            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;border-top:1px solid var(--cd-border-light);padding-top:12px;">
+              <div class="flow-option-title">Retomar de (Pular Cenas)</div>
+              <input type="number" id="fi-start-from" placeholder="Ex: 20 (Deixe vazio para todas)" style="width:100%; padding:6px; border-radius:4px; border:1px solid var(--cd-border); font-family:inherit; font-size:12px;">
+            </div>
+
             <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;">
               <div class="flow-option-text">
                 <div class="flow-option-title">Prompts simultâneos</div>
@@ -566,7 +572,6 @@
                 <button class="flow-validate-btn" id="fv-dl-all" style="margin:0;">📦 Completo (Todas as Geradas)</button>
               </div>
             </div>
-
           </div>
         </div>
         <div id="fv-logs-container" class="flow-logs-container"><div id="fv-debug-panel" class="flow-debug-panel"></div></div>
@@ -649,7 +654,7 @@
             this.setupTextWatcher();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v4.0 inicializado!');
+            log.success('Flow Automation v8.1 inicializado!');
             if (!_authToken) log.warn('Token ainda não capturado.');
         }
 
@@ -700,12 +705,18 @@
                     this.genMode = btn.dataset.mode;
                     const descEl = document.getElementById('flow-mode-desc');
                     if (descEl) descEl.textContent = modeDescs[this.genMode] || '';
-                    this.logDebug(`Modo: ${this.genMode}`, 'info');
                 });
             });
 
+            // FIX 2: Checkboxes dos logs usando style.display diretamente para não falhar
+            $('flow-show-logs').addEventListener('change', e => {
+                $('flow-logs-container').style.display = e.target.checked ? 'block' : 'none';
+            });
+            $('fv-show-logs').addEventListener('change', e => {
+                $('fv-logs-container').style.display = e.target.checked ? 'block' : 'none';
+            });
+
             $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
-            $('flow-show-logs').addEventListener('change', e => $('flow-logs-container').classList.toggle('visible', e.target.checked));
             $('flow-start-btn').addEventListener('click', () => this.start());
             $('flow-stop-btn').addEventListener('click',  () => this.stop());
             $('flow-close-popup').addEventListener('click', () => { $('flow-popup').style.display='none'; $('flow-popup-overlay').style.display='none'; });
@@ -765,7 +776,6 @@
             });
 
             $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
-            $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
             $('fv-start-btn').addEventListener('click', () => this.startVideo());
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
             $('fv-analyze-btn').addEventListener('click', () => this.analyzeProject('video'));
@@ -774,7 +784,6 @@
             $('fv-dl-all').addEventListener('click', () => this.downloadProjectImages('all'));
             $('fv-reopen-assign').addEventListener('click', () => this.reopenAssignPanel());
             
-            // Event Listener para o Upscale 1080p
             $('fv-upscale-btn').addEventListener('click', () => this.startUpscaleProcess());
         }
 
@@ -871,14 +880,10 @@
                 await this.dynamicSleep([200, 300]);
             }
 
-            if (!targetTab) {
-                this.logDebug(`⚠️ Aba de ${type} não encontrada.`, 'warn');
-                return;
-            }
+            if (!targetTab) return;
 
             const isSelected = targetTab.getAttribute('aria-selected') === 'true' || targetTab.getAttribute('data-state') === 'active';
             if (!isSelected) {
-                this.logDebug(`Migrando para a aba: ${type === 'image' ? 'Imagens' : 'Vozes'}`, 'info');
                 targetTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
                 targetTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
                 targetTab.click();
@@ -996,8 +1001,6 @@
                 const h = parseFloat(anyRow.getAttribute('data-known-size'));
                 if (h > 0) this.rowHeight = h;
             }
-            const msg = `Grid: ${this.gridCols} colunas × ${this.rowHeight.toFixed(0)}px/linha`;
-            this.logDebug(msg, 'success');
         }
 
         async scrollToRow(targetRow) {
@@ -1338,7 +1341,7 @@
         }
 
         // ============================================================
-        // PIPELINE DE IMAGENS 
+        // PIPELINE DE IMAGENS (COM RESUME CORRIGIDO)
         // ============================================================
 
         async start() {
@@ -1372,6 +1375,14 @@
                 }
             }
 
+            this.isRunning = true; this.shouldStop = false;
+            document.getElementById('flow-start-btn').disabled = true; document.getElementById('flow-stop-btn').disabled  = false;
+            
+            // FIX 1: Monta a lista primeiro, para depois poder marcá-la visualmente
+            this.buildPromptList(); 
+            this.setStatus('info', '🚀 Iniciando...'); 
+            this.updateProgress(0); 
+
             const startFromStr = document.getElementById('fi-start-from').value;
             const startFrom = parseInt(startFromStr);
             let promptsToRun = this.prompts;
@@ -1383,11 +1394,9 @@
                 });
             }
 
-            if (promptsToRun.length === 0) { this.setStatus('warning', 'Todos pulados.'); return; }
+            if (promptsToRun.length === 0) { this.setStatus('warning', 'Todos pulados.'); this.isRunning = false; document.getElementById('flow-start-btn').disabled = false; document.getElementById('flow-stop-btn').disabled = true; return; }
 
-            this.isRunning = true; this.shouldStop = false;
-            document.getElementById('flow-start-btn').disabled = true; document.getElementById('flow-stop-btn').disabled  = false;
-            this.buildPromptList(); this.setStatus('info', '🚀 Iniciando...'); this.updateProgress(0); await this.detectGrid();
+            await this.detectGrid();
 
             const batches = [];
             for (let i = 0; i < promptsToRun.length; i += this.batchSize) batches.push(promptsToRun.slice(i, Math.min(i + this.batchSize, promptsToRun.length)));
@@ -1462,7 +1471,7 @@
         stop() { this.shouldStop = true; this.setStatus('warning', '⏹ Parando...'); }
 
         // ============================================================
-        // PIPELINE DE VÍDEOS (VOZ, RESUME E UPSCALE)
+        // PIPELINE DE VÍDEOS (COM RESUME CORRIGIDO E UPSCALE)
         // ============================================================
 
         async startVideo() {
@@ -1489,6 +1498,14 @@
                 }
             }
 
+            this.videoIsRunning = true; this.videoShouldStop = false;
+            document.getElementById('fv-start-btn').disabled = true; document.getElementById('fv-stop-btn').disabled  = false;
+            
+            // FIX 1: Monta a lista primeiro, para depois poder marcá-la visualmente
+            this.buildVideoPromptList(); 
+            this.setVideoStatus('info', '🚀 Iniciando vídeos...'); 
+            this.updateVideoProgress(0); 
+
             const startFromStr = document.getElementById('fv-start-from').value;
             const startFrom = parseInt(startFromStr);
             let promptsToRun = this.videoPrompts;
@@ -1500,11 +1517,9 @@
                 });
             }
 
-            if (promptsToRun.length === 0) { this.setVideoStatus('warning', 'Todos pulados.'); return; }
+            if (promptsToRun.length === 0) { this.setVideoStatus('warning', 'Todos pulados.'); this.videoIsRunning = false; document.getElementById('fv-start-btn').disabled = false; document.getElementById('fv-stop-btn').disabled = true; return; }
 
-            this.videoIsRunning = true; this.videoShouldStop = false;
-            document.getElementById('fv-start-btn').disabled = true; document.getElementById('fv-stop-btn').disabled  = false;
-            this.buildVideoPromptList(); this.setVideoStatus('info', '🚀 Iniciando vídeos...'); this.updateVideoProgress(0); await this.detectGrid();
+            await this.detectGrid();
 
             const N = this.videoResultsPerPrompt; const C = this.gridCols;
             const batches = [];
@@ -1877,7 +1892,6 @@
             const rlBar = document.getElementById('flow-assign-reload-bar');
             if (rlBar) rlBar.classList.remove('visible');
 
-            // Usa videoSceneAssignments e videoPrompts
             for (const [sceneName] of this.videoSceneAssignments) {
                 const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
                 const prompt = this.videoPrompts.find(p => p.promptNum === sceneNum);
