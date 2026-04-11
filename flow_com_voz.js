@@ -1,6 +1,6 @@
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
-// Versão 4.1 - Drag & Drop + Voz + Upscale + Resume Inteligente
+// Versão 4.1 - Drag & Drop + API Rename (Flow Voz + Upscale + Resume Inteligente)
 // ==========================================
 //
 // ARQUITETURA:
@@ -132,7 +132,6 @@
         return result;
     }
 
-    /** Extrai nomes de referência da primeira linha: [Maria][José][Praia] */
     function parseReferenceHeader(text) {
         const lines = text.split('\n');
         const firstLine = lines[0].trim();
@@ -140,7 +139,6 @@
         const re = /\[([^\]]+)\]/g;
         let m;
         while ((m = re.exec(firstLine)) !== null) refs.push(m[1].trim());
-        // Primeira linha é SOMENTE referências?
         const stripped = firstLine.replace(/\[([^\]]+)\]/g, '').trim();
         if (refs.length > 0 && stripped === '') {
             let startIdx = 1;
@@ -389,6 +387,12 @@
               </div>
               <div id="flow-mode-desc" style="font-size:11px;color:var(--cd-text-light);line-height:1.4;min-height:16px;">Gera imagens sem atribuir nomes. Ideal para testes rápidos.</div>
             </div>
+            
+            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;border-top:1px solid var(--cd-border-light);padding-top:12px;">
+              <div class="flow-option-title">Retomar de (Pular Cenas)</div>
+              <input type="number" id="fi-start-from" placeholder="Ex: 20 (Use 0 para carregar painel direto)" style="width:100%; padding:6px; border-radius:4px; border:1px solid var(--cd-border); font-family:inherit; font-size:12px;">
+            </div>
+
             <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;">
               <div class="flow-option-text">
                 <div class="flow-option-title">Prompts simultâneos</div>
@@ -469,7 +473,7 @@
             <p class="flow-card-description">Um prompt por linha. Use <strong>{cena X}</strong> para numerar cenas, <strong>[nome]</strong> para referências e <strong>&lt;voz: Nome&gt;</strong> para vozes.</p>
           </div>
           <div class="flow-card-content">
-            <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:&#10;{cena 10} [Maria] caminhando no [Parque] com vento forte <voz: Algebra> &#10;{cena 13} Close-up de [João] olhando para o horizonte&#10;&#10;Ou sem numeração:&#10;Paisagem noturna com lua cheia&#10;Carro andando na estrada"></textarea>
+            <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:&#10;{cena 10} [Maria] caminhando no [Parque] com vento forte <voz: Algebra> &#10;{cena 13} Close-up de [João] olhando para o horizonte&#10;&#10;Ou sem numeração:&#10;Paisagem noturna com lua cheia <voz: Aoede>"></textarea>
             <div id="fv-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
@@ -706,8 +710,11 @@
                 });
             });
 
-            $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
+            // LOGS RESTAURADOS EXATAMENTE COMO NO ORIGINAL
             $('flow-show-logs').addEventListener('change', e => $('flow-logs-container').classList.toggle('visible', e.target.checked));
+            $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
+
+            $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
             $('flow-start-btn').addEventListener('click', () => this.start());
             $('flow-stop-btn').addEventListener('click',  () => this.stop());
             $('flow-close-popup').addEventListener('click', () => { $('flow-popup').style.display='none'; $('flow-popup-overlay').style.display='none'; });
@@ -768,7 +775,6 @@
             });
 
             $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
-            $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
             $('fv-start-btn').addEventListener('click', () => this.startVideo());
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
             $('fv-analyze-btn').addEventListener('click', () => this.analyzeProject('video'));
@@ -777,7 +783,7 @@
             $('fv-dl-all').addEventListener('click', () => this.downloadProjectImages('all'));
             $('fv-reopen-assign').addEventListener('click', () => this.reopenAssignPanel());
             
-            // NOVO: Adicionado listener para botão Upscale
+            // NOVO: Listener de Upscale
             $('fv-upscale-btn').addEventListener('click', () => this.startUpscaleProcess());
         }
 
@@ -999,10 +1005,6 @@
                 const h = parseFloat(anyRow.getAttribute('data-known-size'));
                 if (h > 0) this.rowHeight = h;
             }
-            const msg = `Grid: ${this.gridCols} colunas × ${this.rowHeight.toFixed(0)}px/linha`;
-            this.logDebug(msg, 'success');
-            const el = document.getElementById('flow-grid-info');
-            if (el) el.textContent = msg;
         }
 
         async scrollToRow(targetRow) {
@@ -1149,7 +1151,6 @@
             const rowsNeeded = Math.max(...matrix.map(s => s.row)) + 1;
             const start = Date.now();
             if (scroller) { scroller.scrollTop = 0; await this.sleep(500); }
-            this.logDebug(`Aguardando ${matrix.length} slot(s) em ${rowsNeeded} linha(s)...`, 'info');
 
             const confirmedLoaded = new Set();
             const confirmedError  = new Set();
@@ -1165,18 +1166,9 @@
                     if (this.isTileLoaded(tile)) {
                         const uuid = this.getUuidFromTile(tile);
                         if (uuid && !beforeUuids.has(uuid)) {
-                            loaded++;
-                            confirmedLoaded.add(i);
-                            slot.uuid = uuid;
-                            slot.src = this.getImgSrcFromTile(tile);
-                            slot.workflowId = this.getWorkflowIdFromTile(tile);
-                        }
-                        else pending++;
-                    } else if (this.isTileError(tile)) {
-                        errors++;
-                        confirmedError.add(i);
-                    }
-                    else { pending++; }
+                            loaded++; confirmedLoaded.add(i); slot.uuid = uuid; slot.src = this.getImgSrcFromTile(tile); slot.workflowId = this.getWorkflowIdFromTile(tile);
+                        } else pending++;
+                    } else if (this.isTileError(tile)) { errors++; confirmedError.add(i); } else { pending++; }
                 }
                 return { loaded, errors, pending };
             };
@@ -1198,27 +1190,15 @@
                 if (scroller) scroller.scrollTop = 0;
                 const { loaded, errors, pending } = countStates();
                 if (pending !== lastPending) {
-                    lastPending = pending;
-                    pendingZeroAt = pending === 0 ? Date.now() : null;
-                    this.logDebug(`Progresso: ${loaded} ✅  ${errors} ❌  ${pending} ⏳`, 'info');
+                    lastPending = pending; pendingZeroAt = pending === 0 ? Date.now() : null;
                 }
-                if (pending === 0 && (Date.now() - (pendingZeroAt || Date.now())) >= CONFIG.STABILIZE_TIME) {
-                    this.logDebug(`✅ Lote finalizado: ${loaded} ok, ${errors} erros`, 'success');
-                    break;
-                }
+                if (pending === 0 && (Date.now() - (pendingZeroAt || Date.now())) >= CONFIG.STABILIZE_TIME) break;
             }
 
-            this.logDebug('Classificando slots finais...', 'info');
             for (let i = 0; i < matrix.length; i++) {
                 const slot = matrix[i];
-                if (confirmedLoaded.has(i)) {
-                    slot.state = 'loaded';
-                    continue;
-                }
-                if (confirmedError.has(i)) {
-                    slot.state = 'error';
-                    continue;
-                }
+                if (confirmedLoaded.has(i)) { slot.state = 'loaded'; continue; }
+                if (confirmedError.has(i)) { slot.state = 'error'; continue; }
                 if (this.shouldStop || this.videoShouldStop) return;
                 await this.scrollToRow(slot.row);
                 const tile = this.getTileAt(slot.row, slot.col);
@@ -1226,9 +1206,7 @@
                 if (this.isTileLoaded(tile)) {
                     const uuid = this.getUuidFromTile(tile);
                     if (uuid && !beforeUuids.has(uuid)) {
-                        slot.state = 'loaded'; slot.uuid = uuid;
-                        slot.src = this.getImgSrcFromTile(tile);
-                        slot.workflowId = this.getWorkflowIdFromTile(tile);
+                        slot.state = 'loaded'; slot.uuid = uuid; slot.src = this.getImgSrcFromTile(tile); slot.workflowId = this.getWorkflowIdFromTile(tile);
                     } else { slot.state = 'error'; }
                 } else { slot.state = 'error'; }
             }
@@ -1267,7 +1245,6 @@
                     if (document.querySelector('[role="dialog"], [role="presentation"]')) { opened = true; break; }
                 }
                 if (opened) return;
-                this.logDebug(`⚠️ Diálogo @ não abriu (tentativa ${attempt}/${MAX_AT_RETRIES})`, 'error');
                 e.focus(); await this.sleep(200);
                 e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'deleteContentBackward' }));
                 await this.sleep(200);
@@ -1276,7 +1253,7 @@
                     e.focus(); e.click(); await this.dynamicSleep([500, 800]);
                 }
             }
-            throw new Error('Diálogo @ não abriu');
+            throw new Error('Diálogo @ não abriu após ' + MAX_AT_RETRIES + ' tentativas');
         }
 
         async clickSubmit() {
@@ -1295,7 +1272,6 @@
             const MAX_SUBMIT_RETRIES = 2;
             for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
                 try {
-                    this.logDebug(`Preparando prompt ${promptObj.promptNum}: "${promptObj.text.substring(0,50)}..."${attempt > 1 ? ` (tentativa ${attempt})` : ''}`, 'info');
                     const segs = parsePrompt(promptObj.text);
                     await this.clearEditor();
                     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
@@ -1316,10 +1292,8 @@
                         }
                     }
                     await this.clickSubmit();
-                    this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
                     return true;
                 } catch (err) {
-                    this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
                     if (attempt < MAX_SUBMIT_RETRIES) {
                         await this.resetEditor();
                         await this.dynamicSleep([2000, 3000]);
@@ -1339,14 +1313,14 @@
                 if (!icon || icon.textContent.trim() !== 'close') return false;
                 return btn.textContent.includes('Apagar') || btn.querySelector('span')?.textContent?.includes('Apagar');
             });
-            if (closeBtn) { closeBtn.click(); this.logDebug('Editor resetado via botão Apagar', 'info'); await this.sleep(800); } 
-            else { if (editor) { editor.focus(); await this.sleep(200); document.execCommand('selectAll', false, null); await this.sleep(200); document.execCommand('delete', false, null); this.logDebug('Editor resetado via selectAll+delete', 'info'); await this.sleep(500); } }
+            if (closeBtn) { closeBtn.click(); await this.sleep(800); } 
+            else { if (editor) { editor.focus(); await this.sleep(200); document.execCommand('selectAll', false, null); await this.sleep(200); document.execCommand('delete', false, null); await this.sleep(500); } }
             const dialog2 = document.querySelector('[role="dialog"], [role="presentation"]');
             if (dialog2) { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true })); await this.sleep(400); }
         }
 
         async apiRename(workflowId, newName) {
-            if (!_authToken) { this.logDebug('Token não capturado — faça uma ação na página', 'error'); return false; }
+            if (!_authToken) return false;
             const projectId = this.getProjectId(); if (!projectId || !workflowId) return false;
             try {
                 const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, {
@@ -1354,9 +1328,8 @@
                     headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': _authToken },
                     body: JSON.stringify({ workflow: { name: workflowId, projectId, metadata: { displayName: newName } }, updateMask: 'metadata.displayName' })
                 });
-                if (!res.ok) this.logDebug(`API rename falhou: ${res.status}`, 'error');
                 return res.ok;
-            } catch(e) { this.logDebug(`Erro API rename: ${e.message}`, 'error'); return false; }
+            } catch(e) { return false; }
         }
 
         async apiFavorite(workflowId, favorited) {
@@ -1373,208 +1346,172 @@
         }
 
         // ============================================================
-        // PIPELINE DE IMAGENS
+        // PIPELINE DE IMAGENS 
         // ============================================================
 
         async start() {
-            if (this.videoIsRunning) { this.setStatus('warning', '⚠️ A automação de vídeos está rodando. Aguarde finalizar.'); return; }
+            if (this.videoIsRunning) { this.setStatus('warning', '⚠️ Vídeos rodando.'); return; }
             let text = document.getElementById('flow-prompts-input').value;
 
             if (this.genMode === 'refs') {
                 const parsed = parseReferenceHeader(text);
-                if (!parsed.refs.length) {
-                    this.setStatus('error', 'Modo Referências: a primeira linha deve conter nomes entre [colchetes]. Ex: [Maria][José][Praia]');
-                    return;
-                }
-                this.refNames = parsed.refs;
-                this.refAssignments = new Map();
-                text = parsed.remaining;
-                this.logDebug(`Referências detectadas: ${this.refNames.join(', ')}`, 'info');
+                if (!parsed.refs.length) { this.setStatus('error', 'Ex: [Maria]'); return; }
+                this.refNames = parsed.refs; this.refAssignments = new Map(); text = parsed.remaining;
             }
 
             this.prompts = parsePromptsText(text);
-            if (!this.prompts.length) { this.setStatus('error', 'Nenhum prompt detectado.'); return; }
+            if (!this.prompts.length) { this.setStatus('error', 'Nenhum prompt.'); return; }
 
             if (this.genMode !== 'refs') {
                 const refs = extractReferences(this.prompts);
                 if (refs.length > 0) {
                     const unvalidated = refs.filter(r => this.validatedRefs[r.toLowerCase()] === undefined);
                     const missing     = refs.filter(r => this.validatedRefs[r.toLowerCase()] === false);
-                    if (unvalidated.length) { this.setStatus('warning', 'Valide as referências antes de iniciar.'); return; }
-                    if (missing.length)     { this.setStatus('error', `Referências não encontradas: ${missing.join(', ')}`); return; }
+                    if (unvalidated.length) { this.setStatus('warning', 'Valide as referências.'); return; }
+                    if (missing.length)     { this.setStatus('error', `Faltam: ${missing.join(', ')}`); return; }
                 }
             }
 
             if (this.genMode === 'scenes') {
                 this.sceneCount = this.prompts.length;
                 this.sceneAssignments = new Map();
-                for (let i = 1; i <= this.sceneCount; i++) this.sceneAssignments.set(`Cena ${i}`, []);
+                for (let i = 0; i < this.prompts.length; i++) {
+                    this.sceneAssignments.set(`Cena ${this.prompts[i].promptNum}`, []);
+                }
             }
 
-            this.isRunning = true;
-            this.shouldStop = false;
-            document.getElementById('flow-start-btn').disabled = true;
-            document.getElementById('flow-stop-btn').disabled  = false;
-            document.getElementById('flow-prompts-input').disabled = true;
+            this.isRunning = true; this.shouldStop = false;
+            document.getElementById('flow-start-btn').disabled = true; document.getElementById('flow-stop-btn').disabled  = false;
+            
+            this.buildPromptList(); 
+            this.setStatus('info', '🚀 Iniciando...'); 
+            this.updateProgress(0); 
 
-            this.buildPromptList();
-            this.setStatus('info', '🚀 Iniciando automação v4.1...');
-            this.updateProgress(0);
+            const startFromStr = document.getElementById('fi-start-from').value;
+            let promptsToRun = this.prompts;
+
+            if (startFromStr.trim() !== '') {
+                const startFrom = parseInt(startFromStr);
+                if (startFrom === 0) {
+                    this.prompts.forEach((p, idx) => {
+                        this.updatePromptItemStatus(idx, 'done', 'Concluído');
+                    });
+                    this.setStatus('success', '✅ Todos os prompts carregados diretamente no painel de atribuição.');
+                    this.updateProgress(1);
+                    if (this.genMode === 'refs' || this.genMode === 'scenes') {
+                        this.showAssignPanel([]);
+                    }
+                    this.isRunning = false;
+                    document.getElementById('flow-start-btn').disabled = false;
+                    document.getElementById('flow-stop-btn').disabled = true;
+                    return;
+                } else if (startFrom > 0) {
+                    promptsToRun = this.prompts.filter(p => p.promptNum >= startFrom);
+                    this.prompts.forEach((p, idx) => {
+                        if (p.promptNum < startFrom) this.updatePromptItemStatus(idx, 'done', 'Concluído');
+                    });
+                    if (promptsToRun.length === 0) { 
+                        this.setStatus('warning', 'Todos pulados.'); 
+                        this.isRunning = false; 
+                        document.getElementById('flow-start-btn').disabled = false; 
+                        document.getElementById('flow-stop-btn').disabled = true; 
+                        return; 
+                    }
+                }
+            }
+
             await this.detectGrid();
 
             const batches = [];
-            for (let i = 0; i < this.prompts.length; i += this.batchSize)
-                batches.push(this.prompts.slice(i, Math.min(i + this.batchSize, this.prompts.length)));
-            this.logDebug(`${this.prompts.length} prompts → ${batches.length} lote(s)`, 'info');
-
+            for (let i = 0; i < promptsToRun.length; i += this.batchSize) batches.push(promptsToRun.slice(i, Math.min(i + this.batchSize, promptsToRun.length)));
             const allMatrices = [];
+            const N = this.imagesPerPrompt, C = this.gridCols;
+            const retryCount = {};
 
-            try {
-                const N = this.imagesPerPrompt, C = this.gridCols;
-                const retryCount = {};
-
-                for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+            for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+                if (this.shouldStop) break;
+                const batch = batches[bIdx];
+                batch.forEach(p => this.updatePromptItemStatus(this.prompts.findIndex(x => x.promptNum === p.promptNum), 'active'));
+                this.updateProgress(bIdx / batches.length);
+                const beforeUuids = this.snapshotImageUuids();
+                for (let pi = 0; pi < batch.length; pi++) {
                     if (this.shouldStop) break;
-                    const batch = batches[bIdx];
+                    const ok = await this.prepareAndSubmit(batch[pi]);
+                    if (!ok) break;
+                    if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
+                }
+                if (this.shouldStop) break;
+                await this.dynamicSleep([1800, 2500]);
+                const matrix = this.buildPositionMatrix(batch, N, 0);
+                await this.waitForMatrix(matrix, beforeUuids);
+                if (this.shouldStop) break;
 
-                    batch.forEach(p => this.updatePromptItemStatus(
-                        this.prompts.findIndex(x => x.promptNum === p.promptNum), 'active'
-                    ));
-                    this.updateProgress(bIdx / batches.length);
-                    this.updateMini(
-                        `Lote ${bIdx+1}/${batches.length}`,
-                        batch.map(p => `#${p.promptNum}`).join(' + '),
-                        bIdx / batches.length,
-                        `${this.genMode === 'scenes' ? 'Cenas' : this.genMode === 'refs' ? 'Referências' : 'Livre'} • ${N} imgs/prompt • ${this.batchSize} simult.`
-                    );
-                    this.logDebug(`\n╭─── LOTE ${bIdx+1}/${batches.length}: prompts ${batch.map(p=>p.promptNum).join(', ')} ───╮`, 'info');
+                const failedPrompts = [];
+                for (let bRevIdx = 0; bRevIdx < batch.length; bRevIdx++) {
+                    const prompt = batch[batch.length - 1 - bRevIdx];
+                    const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
+                    if (slots.every(s => s.state === 'error')) failedPrompts.push(prompt);
+                }
 
-                    const beforeUuids = this.snapshotImageUuids();
-
-                    this.setStatus('info', `⚡ Submetendo lote ${bIdx+1}/${batches.length}...`);
-                    for (let pi = 0; pi < batch.length; pi++) {
-                        if (this.shouldStop) break;
-                        const ok = await this.prepareAndSubmit(batch[pi]);
+                for (const fp of failedPrompts) {
+                    const key = fp.promptNum;
+                    if (!retryCount[key]) retryCount[key] = 0;
+                    const gi = this.prompts.findIndex(x => x.promptNum === key);
+                    let recovered = false;
+                    while (retryCount[key] < CONFIG.MAX_RETRIES && !this.shouldStop) {
+                        retryCount[key]++;
+                        this.updatePromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
+                        const retryBefore = this.snapshotImageUuids();
+                        const ok = await this.prepareAndSubmit(fp);
                         if (!ok) break;
-                        if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
-                    }
-                    if (this.shouldStop) break;
-                    await this.dynamicSleep([1800, 2500]);
-
-                    const matrix = this.buildPositionMatrix(batch, N, 0);
-                    this.setStatus('info', `⏳ Lote ${bIdx+1}/${batches.length} — aguardando geração...`);
-                    await this.waitForMatrix(matrix, beforeUuids);
-                    if (this.shouldStop) break;
-
-                    const failedPrompts = [];
-                    for (let bRevIdx = 0; bRevIdx < batch.length; bRevIdx++) {
-                        const bIdx2 = batch.length - 1 - bRevIdx;
-                        const prompt = batch[bIdx2];
-                        const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
-                        if (slots.every(s => s.state === 'error')) failedPrompts.push(prompt);
-                    }
-
-                    for (const fp of failedPrompts) {
-                        const key = fp.promptNum;
-                        if (!retryCount[key]) retryCount[key] = 0;
-                        const gi = this.prompts.findIndex(x => x.promptNum === key);
-                        let recovered = false;
-                        while (retryCount[key] < CONFIG.MAX_RETRIES && !this.shouldStop) {
-                            retryCount[key]++;
-                            this.logDebug(`🔄 Regerar prompt ${key} — tentativa ${retryCount[key]}`, 'info');
-                            this.updatePromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
-                            const retryBefore = this.snapshotImageUuids();
-                            const ok = await this.prepareAndSubmit(fp);
-                            if (!ok) break;
-                            await this.dynamicSleep([1800, 2500]);
-                            const retryMatrix = this.buildPositionMatrix([fp], N, 0);
-                            await this.waitForMatrix(retryMatrix, retryBefore);
-                            if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
-                                this.updatePromptItemStatus(gi, 'done');
-                                recovered = true;
-                                allMatrices.push(retryMatrix);
-                                break;
-                            }
+                        await this.dynamicSleep([1800, 2500]);
+                        const retryMatrix = this.buildPositionMatrix([fp], N, 0);
+                        await this.waitForMatrix(retryMatrix, retryBefore);
+                        if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
+                            this.updatePromptItemStatus(gi, 'done'); recovered = true; allMatrices.push(retryMatrix); break;
                         }
-                        if (!recovered) this.updatePromptItemStatus(gi, 'error', `falhou`);
                     }
-
-                    batch.forEach(p => {
-                        const gi = this.prompts.findIndex(x => x.promptNum === p.promptNum);
-                        const slots = matrix.filter(s => s.promptNum === p.promptNum);
-                        if (slots.some(s => s.state === 'loaded')) this.updatePromptItemStatus(gi, 'done');
-                    });
-
-                    allMatrices.push(matrix);
-
-                    if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
+                    if (!recovered) this.updatePromptItemStatus(gi, 'error', `falhou`);
                 }
 
-                if (!this.shouldStop) {
-                    this.updateProgress(1);
-                    const doneCount = document.querySelectorAll('.flow-prompt-item.done').length;
-                    const errCount = document.querySelectorAll('.flow-prompt-item.error').length;
-                    const failedList = this.prompts.filter((_, i) =>
-                        document.querySelector(`.flow-prompt-item[data-index="${i}"]`)?.classList.contains('error')
-                    );
-
-                    let statusMsg = `✅ Geração concluída! ${doneCount} sucesso(s)`;
-                    if (errCount) statusMsg += `, ${errCount} falha(s)`;
-                    statusMsg += '.';
-                    if (this.genMode !== 'free') statusMsg += ' Arraste os nomes para atribuir às imagens.';
-                    this.setStatus('success', statusMsg);
-
-                    if (this.genMode === 'refs' || this.genMode === 'scenes') {
-                        this.showAssignPanel(allMatrices);
-                    }
-
-                    let popupMsg = `${doneCount} prompt(s) gerado(s) com sucesso.`;
-                    if (this.genMode === 'refs') popupMsg += '\n\nArraste as referências do painel superior para as imagens desejadas.';
-                    else if (this.genMode === 'scenes') popupMsg += '\n\nArraste as cenas do painel superior para as imagens desejadas.';
-
-                    this._lastRunMedia = allMatrices.flatMap(m =>
-                        m.filter(s => s.state === 'loaded' && s.src).map(s => ({
-                            src: s.src, workflowId: s.workflowId, uuid: s.uuid, promptNum: s.promptNum, isVideo: false
-                        }))
-                    );
-                    this.showCompletionPopup(popupMsg, failedList.length > 0 ? failedList : null);
-                } else {
-                    this.setStatus('warning', '⏹ Automação interrompida.');
-                }
-
-            } catch (err) {
-                this.setStatus('error', '❌ Erro: ' + err.message);
-                log.error('Pipeline error:', err);
+                batch.forEach(p => {
+                    const gi = this.prompts.findIndex(x => x.promptNum === p.promptNum);
+                    const slots = matrix.filter(s => s.promptNum === p.promptNum);
+                    if (slots.some(s => s.state === 'loaded')) this.updatePromptItemStatus(gi, 'done');
+                });
+                allMatrices.push(matrix);
+                if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
             }
 
+            if (!this.shouldStop) {
+                this.updateProgress(1);
+                this.setStatus('success', '✅ Geração concluída!');
+                if (this.genMode === 'refs' || this.genMode === 'scenes') this.showAssignPanel(allMatrices);
+            }
             this.isRunning = false;
-            document.getElementById('flow-start-btn').disabled = false;
-            document.getElementById('flow-stop-btn').disabled  = true;
-            document.getElementById('flow-prompts-input').disabled = false;
-            document.getElementById('flow-mini').style.display = 'none';
-            document.getElementById('flow-sidebar').style.display = '';
+            document.getElementById('flow-start-btn').disabled = false; document.getElementById('flow-stop-btn').disabled  = true;
         }
 
         stop() { this.shouldStop = true; this.setStatus('warning', '⏹ Parando...'); }
 
         // ============================================================
-        // PIPELINE DE VÍDEOS (Voz + Resume + Upscale)
+        // PIPELINE DE VÍDEOS (COM RESUME CORRIGIDO)
         // ============================================================
 
         async startVideo() {
-            if (this.isRunning) { this.setVideoStatus('warning', '⚠️ A automação de imagens está rodando. Aguarde finalizar.'); return; }
+            if (this.isRunning) { this.setVideoStatus('warning', '⚠️ Imagens rodando.'); return; }
             if (this.videoIsRunning) return;
 
             const text = document.getElementById('fv-prompts-input').value;
             this.videoPrompts = parsePromptsText(text);
-            if (!this.videoPrompts.length) { this.setVideoStatus('error', 'Nenhum prompt detectado.'); return; }
+            if (!this.videoPrompts.length) { this.setVideoStatus('error', 'Nenhum prompt.'); return; }
 
             const refs = extractReferences(this.videoPrompts);
             if (refs.length > 0) {
                 const unvalidated = refs.filter(r => this.validatedRefs[r.toLowerCase()] === undefined);
                 const missing     = refs.filter(r => this.validatedRefs[r.toLowerCase()] === false);
-                if (unvalidated.length) { this.setVideoStatus('warning', 'Valide as referências antes de iniciar.'); return; }
-                if (missing.length)     { this.setVideoStatus('error', `Referências não encontradas: ${missing.join(', ')}`); return; }
+                if (unvalidated.length) { this.setVideoStatus('warning', 'Valide as referências.'); return; }
+                if (missing.length)     { this.setVideoStatus('error', `Faltam: ${missing.join(', ')}`); return; }
             }
 
             if (this.videoGenMode === 'scenes') {
@@ -1585,54 +1522,46 @@
                 }
             }
 
-            this.videoIsRunning = true;
-            this.videoShouldStop = false;
-            document.getElementById('fv-start-btn').disabled = true;
-            document.getElementById('fv-stop-btn').disabled  = false;
-            document.getElementById('fv-prompts-input').disabled = true;
+            this.videoIsRunning = true; this.videoShouldStop = false;
+            document.getElementById('fv-start-btn').disabled = true; document.getElementById('fv-stop-btn').disabled  = false;
+            
+            this.buildVideoPromptList(); 
+            this.setVideoStatus('info', '🚀 Iniciando vídeos...'); 
+            this.updateVideoProgress(0); 
 
-            this.buildVideoPromptList();
-            this.setVideoStatus('info', '🚀 Iniciando automação de vídeos...');
-            this.updateVideoProgress(0);
-
-            // NOVO: SISTEMA "RETOMAR DE"
             const startFromStr = document.getElementById('fv-start-from').value;
             let promptsToRun = this.videoPrompts;
 
             if (startFromStr.trim() !== '') {
                 const startFrom = parseInt(startFromStr);
                 
-                // Se usuário digitou 0, apenas abre o distribuidor e finaliza
                 if (startFrom === 0) {
                     this.videoPrompts.forEach((p, idx) => {
                         this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
                     });
-                    this.setVideoStatus('success', '✅ Todos os prompts carregados diretamente no painel de atribuição.');
+                    this.setVideoStatus('success', '✅ Todos os prompts carregados diretamente no painel de atribuição.'); 
                     this.updateVideoProgress(1);
                     if (this.videoGenMode === 'scenes') {
                         this.showVideoAssignPanel([]);
                     }
-                    this.videoIsRunning = false;
-                    document.getElementById('fv-start-btn').disabled = false;
-                    document.getElementById('fv-stop-btn').disabled = true;
-                    document.getElementById('fv-prompts-input').disabled = false;
-                    return;
+                    this.videoIsRunning = false; 
+                    document.getElementById('fv-start-btn').disabled = false; 
+                    document.getElementById('fv-stop-btn').disabled = true; 
+                    return; 
                 } else if (startFrom > 0) {
-                    // Se digitou X, pula todos os anteriores e continua
                     promptsToRun = this.videoPrompts.filter(p => p.promptNum >= startFrom);
                     this.videoPrompts.forEach((p, idx) => {
-                        if (p.promptNum < startFrom) {
-                            this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
-                        }
+                        if (p.promptNum < startFrom) this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
                     });
                     if (promptsToRun.length === 0) {
-                        this.setVideoStatus('warning', 'Nenhum prompt restante para gerar.');
+                        this.setVideoStatus('warning', 'Todos os prompts anteriores foram marcados como concluídos.');
                         this.updateVideoProgress(1);
-                        if (this.videoGenMode === 'scenes') this.showVideoAssignPanel([]);
+                        if (this.videoGenMode === 'scenes') {
+                            this.showVideoAssignPanel([]);
+                        }
                         this.videoIsRunning = false;
                         document.getElementById('fv-start-btn').disabled = false;
                         document.getElementById('fv-stop-btn').disabled = true;
-                        document.getElementById('fv-prompts-input').disabled = false;
                         return;
                     }
                 }
@@ -1640,149 +1569,89 @@
 
             await this.detectGrid();
 
-            const N = this.videoResultsPerPrompt;
+            const N = this.videoResultsPerPrompt; const C = this.gridCols;
             const batches = [];
             for (let i = 0; i < promptsToRun.length; i += this.videoBatchSize)
                 batches.push(promptsToRun.slice(i, Math.min(i + this.videoBatchSize, promptsToRun.length)));
-            this.logVideoDebug(`${promptsToRun.length} prompts → ${batches.length} lote(s)`, 'info');
 
             const allMatrices = [];
+            const retryCount = {};
 
-            try {
-                const C = this.gridCols;
-                const retryCount = {};
-
-                for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+            for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+                if (this.videoShouldStop) break;
+                const batch = batches[bIdx];
+                batch.forEach(p => this.updateVideoPromptItemStatus(this.videoPrompts.findIndex(x => x.promptNum === p.promptNum), 'active'));
+                this.updateVideoProgress(bIdx / batches.length);
+                const beforeUuids = this.snapshotImageUuids();
+                
+                for (let pi = 0; pi < batch.length; pi++) {
                     if (this.videoShouldStop) break;
-                    const batch = batches[bIdx];
+                    const ok = await this.prepareAndSubmit(batch[pi]);
+                    if (!ok) break;
+                    if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
+                }
+                if (this.videoShouldStop) break;
+                await this.dynamicSleep([1800, 2500]);
+                const matrix = this.buildPositionMatrix(batch, N, 0);
+                const origShouldStop = this.shouldStop; this.shouldStop = this.videoShouldStop;
+                await this.waitForMatrix(matrix, beforeUuids);
+                this.shouldStop = origShouldStop;
+                if (this.videoShouldStop) break;
 
-                    batch.forEach(p => this.updateVideoPromptItemStatus(
-                        this.videoPrompts.findIndex(x => x.promptNum === p.promptNum), 'active'
-                    ));
-                    this.updateVideoProgress(bIdx / batches.length);
-                    this.updateMini(
-                        `Vídeo ${bIdx+1}/${batches.length}`,
-                        batch.map(p => `#${p.promptNum}`).join(' + '),
-                        bIdx / batches.length,
-                        `${this.videoGenMode === 'scenes' ? 'Cenas' : 'Livre'} • ${N} resultado(s)/prompt • ${this.videoBatchSize} simult.`
-                    );
-                    this.logVideoDebug(`\n╭─── LOTE ${bIdx+1}/${batches.length}: prompts ${batch.map(p=>p.promptNum).join(', ')} ───╮`, 'info');
+                const failedPrompts = [];
+                for (let bRevIdx = 0; bRevIdx < batch.length; bRevIdx++) {
+                    const prompt = batch[batch.length - 1 - bRevIdx];
+                    const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
+                    if (slots.every(s => s.state === 'error')) failedPrompts.push(prompt);
+                }
 
-                    const beforeUuids = this.snapshotImageUuids();
-
-                    this.setVideoStatus('info', `⚡ Submetendo lote ${bIdx+1}/${batches.length}...`);
-                    for (let pi = 0; pi < batch.length; pi++) {
-                        if (this.videoShouldStop) break;
-                        const ok = await this.prepareAndSubmit(batch[pi]);
+                for (const fp of failedPrompts) {
+                    const key = fp.promptNum;
+                    if (!retryCount[key]) retryCount[key] = 0;
+                    const gi = this.videoPrompts.findIndex(x => x.promptNum === key);
+                    let recovered = false;
+                    while (retryCount[key] < CONFIG.MAX_RETRIES && !this.videoShouldStop) {
+                        retryCount[key]++;
+                        this.updateVideoPromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
+                        const retryBefore = this.snapshotImageUuids();
+                        const ok = await this.prepareAndSubmit(fp);
                         if (!ok) break;
-                        if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
-                    }
-                    if (this.videoShouldStop) break;
-                    await this.dynamicSleep([1800, 2500]);
-
-                    const matrix = this.buildPositionMatrix(batch, N, 0);
-                    this.setVideoStatus('info', `⏳ Lote ${bIdx+1}/${batches.length} — aguardando geração...`);
-                    const origShouldStop = this.shouldStop;
-                    this.shouldStop = this.videoShouldStop;
-                    await this.waitForMatrix(matrix, beforeUuids);
-                    this.shouldStop = origShouldStop;
-                    if (this.videoShouldStop) break;
-
-                    const failedPrompts = [];
-                    for (let bRevIdx = 0; bRevIdx < batch.length; bRevIdx++) {
-                        const bIdx2 = batch.length - 1 - bRevIdx;
-                        const prompt = batch[bIdx2];
-                        const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
-                        if (slots.every(s => s.state === 'error')) failedPrompts.push(prompt);
-                    }
-
-                    for (const fp of failedPrompts) {
-                        const key = fp.promptNum;
-                        if (!retryCount[key]) retryCount[key] = 0;
-                        const gi = this.videoPrompts.findIndex(x => x.promptNum === key);
-                        let recovered = false;
-                        while (retryCount[key] < CONFIG.MAX_RETRIES && !this.videoShouldStop) {
-                            retryCount[key]++;
-                            this.logVideoDebug(`🔄 Regerar prompt ${key} — tentativa ${retryCount[key]}`, 'info');
-                            this.updateVideoPromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
-                            const retryBefore = this.snapshotImageUuids();
-                            const ok = await this.prepareAndSubmit(fp);
-                            if (!ok) break;
-                            await this.dynamicSleep([1800, 2500]);
-                            const retryMatrix = this.buildPositionMatrix([fp], N, 0);
-                            this.shouldStop = this.videoShouldStop;
-                            await this.waitForMatrix(retryMatrix, retryBefore);
-                            this.shouldStop = origShouldStop;
-                            if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
-                                this.updateVideoPromptItemStatus(gi, 'done');
-                                recovered = true;
-                                allMatrices.push(retryMatrix);
-                                break;
-                            }
+                        await this.dynamicSleep([1800, 2500]);
+                        const retryMatrix = this.buildPositionMatrix([fp], N, 0);
+                        this.shouldStop = this.videoShouldStop;
+                        await this.waitForMatrix(retryMatrix, retryBefore);
+                        this.shouldStop = origShouldStop;
+                        if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
+                            this.updateVideoPromptItemStatus(gi, 'done'); recovered = true; allMatrices.push(retryMatrix); break;
                         }
-                        if (!recovered) this.updateVideoPromptItemStatus(gi, 'error', `falhou`);
                     }
-
-                    batch.forEach(p => {
-                        const gi = this.videoPrompts.findIndex(x => x.promptNum === p.promptNum);
-                        const slots = matrix.filter(s => s.promptNum === p.promptNum);
-                        if (slots.some(s => s.state === 'loaded')) this.updateVideoPromptItemStatus(gi, 'done');
-                    });
-
-                    allMatrices.push(matrix);
-
-                    if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
+                    if (!recovered) this.updateVideoPromptItemStatus(gi, 'error', `falhou`);
                 }
 
-                if (!this.videoShouldStop) {
-                    this.updateVideoProgress(1);
-                    const doneCount = document.querySelectorAll('#fv-prompt-list .flow-prompt-item.done').length;
-                    const errCount = document.querySelectorAll('#fv-prompt-list .flow-prompt-item.error').length;
-                    const failedList = this.videoPrompts.filter((_, i) =>
-                        document.querySelector(`#fv-prompt-list .flow-prompt-item[data-index="${i}"]`)?.classList.contains('error')
-                    );
-
-                    let statusMsg = `✅ Geração concluída! ${doneCount} sucesso(s)`;
-                    if (errCount) statusMsg += `, ${errCount} falha(s)`;
-                    statusMsg += '.';
-                    if (this.videoGenMode === 'scenes') statusMsg += ' Arraste as cenas para atribuir aos vídeos.';
-                    this.setVideoStatus('success', statusMsg);
-
-                    if (this.videoGenMode === 'scenes') {
-                        this.showVideoAssignPanel(allMatrices);
-                    }
-
-                    let popupMsg = `${doneCount} prompt(s) de vídeo gerado(s) com sucesso.`;
-                    if (this.videoGenMode === 'scenes') popupMsg += '\n\nArraste as cenas do painel superior para os melhores vídeos.';
-
-                    this._lastRunMedia = allMatrices.flatMap(m =>
-                        m.filter(s => s.state === 'loaded' && s.src).map(s => ({
-                            src: s.src, workflowId: s.workflowId, uuid: s.uuid, promptNum: s.promptNum, isVideo: true
-                        }))
-                    );
-                    this.showCompletionPopup(popupMsg, failedList.length > 0 ? failedList : null);
-                } else {
-                    this.setVideoStatus('warning', '⏹ Automação de vídeos interrompida.');
-                }
-
-            } catch (err) {
-                this.setVideoStatus('error', '❌ Erro: ' + err.message);
-                log.error('Video pipeline error:', err);
+                batch.forEach(p => {
+                    const gi = this.videoPrompts.findIndex(x => x.promptNum === p.promptNum);
+                    const slots = matrix.filter(s => s.promptNum === p.promptNum);
+                    if (slots.some(s => s.state === 'loaded')) this.updateVideoPromptItemStatus(gi, 'done');
+                });
+                allMatrices.push(matrix);
+                if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
             }
 
+            if (!this.videoShouldStop) {
+                this.updateVideoProgress(1);
+                this.setVideoStatus('success', '✅ Geração de vídeos concluída!');
+                if (this.videoGenMode === 'scenes') this.showVideoAssignPanel(allMatrices);
+            }
             this.videoIsRunning = false;
-            document.getElementById('fv-start-btn').disabled = false;
-            document.getElementById('fv-stop-btn').disabled  = true;
-            document.getElementById('fv-prompts-input').disabled = false;
-            document.getElementById('flow-mini').style.display = 'none';
-            document.getElementById('flow-sidebar').style.display = '';
+            document.getElementById('fv-start-btn').disabled = false; document.getElementById('fv-stop-btn').disabled  = true;
         }
 
         stopVideo() { this.videoShouldStop = true; this.setVideoStatus('warning', '⏹ Parando...'); }
 
         // ============================================================
-        // NOVO: SISTEMA DE UPSCALE 1080P EM LOTE
+        // O PODEROSO SISTEMA DE UPSCALE 1080P EM LOTE
         // ============================================================
+
         async startUpscaleProcess() {
             const btn = document.getElementById('fv-upscale-btn');
             btn.disabled = true;
@@ -1843,7 +1712,7 @@
                         }
                         tile.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
                     } catch (err) {
-                        this.logVideoDebug(`Erro ao iniciar upscale: ${err.message}`, 'error');
+                        
                     }
                 }
 
@@ -1886,10 +1755,172 @@
             }
         }
 
-        /**
-         * Mostra painel de atribuição para vídeos (modo cenas).
-         * Reutiliza o mesmo painel de assign do DOM, mas com estado de vídeo.
-         */
+        // ============================================================
+        // VALIDAÇÃO DE REFERÊNCIAS
+        // ============================================================
+
+        async validateReferences(source = 'images') {
+            const isVideo = source === 'video';
+            const btnId = isVideo ? 'fv-validate-btn' : 'flow-validate-btn';
+            const inputId = isVideo ? 'fv-prompts-input' : 'flow-prompts-input';
+            const statusFn = isVideo ? (t, m) => this.setVideoStatus(t, m) : (t, m) => this.setStatus(t, m);
+            const updateFn = isVideo ? () => this.updateVideoReferences() : () => this.updateReferences();
+
+            const btn = document.getElementById(btnId);
+            btn.disabled = true; btn.textContent = '⏳ Escaneando galeria...';
+            try {
+                const text = document.getElementById(inputId).value;
+                const prompts = parsePromptsText(text);
+                const refs = extractReferences(prompts);
+                if (!refs.length) { this.validatedRefs = {}; updateFn(); btn.disabled = false; btn.textContent = '🔍 Validar referências na galeria'; return; }
+                const pending = new Set(refs.map(r => r.toLowerCase().trim()));
+                const found = new Set();
+                const checkedTileIds = new Set();
+                const scroller = this.getScroller();
+                if (!scroller) throw new Error('Scroller não encontrado');
+                scroller.scrollTop = scroller.scrollHeight; await this.sleep(600);
+                for (let iter = 0; iter < 200 && pending.size > 0; iter++) {
+                    const tiles = [...document.querySelectorAll('[data-tile-id]')].filter(el => el.parentElement.closest('[data-tile-id]'));
+                    for (const tile of tiles) {
+                        if (!pending.size) break;
+                        const id = tile.getAttribute('data-tile-id');
+                        if (checkedTileIds.has(id)) continue;
+                        checkedTileIds.add(id);
+                        const name = await this.getTileName(tile);
+                        if (!name) continue;
+                        const lc = name.toLowerCase().trim().replace(/ _$/, '');
+                        if (pending.has(lc)) {
+                            pending.delete(lc); found.add(lc);
+                            btn.textContent = `⏳ ${found.size}/${refs.length}`;
+                            const wfId = this.getWorkflowIdFromTile(tile);
+                            const originalName = refs.find(r => r.toLowerCase().trim() === lc) || name.replace(/ _$/, '');
+                            if (wfId) {
+                                const outer = tile.closest('[data-tile-id]') || tile;
+                                this.tileAssignments.set(wfId, { label: originalName, type: 'ref', name: originalName });
+                                this.addLabelToTile(outer, originalName, wfId, 'ref', originalName);
+                            }
+                        }
+                    }
+                    const prev = scroller.scrollTop;
+                    scroller.scrollTop = Math.max(0, scroller.scrollTop - 350); await this.sleep(400);
+                    if (scroller.scrollTop === 0 && prev === 0) break;
+                }
+                this.validatedRefs = {};
+                for (const ref of refs) this.validatedRefs[ref.toLowerCase()] = found.has(ref.toLowerCase().trim());
+                updateFn();
+                if (!pending.size) statusFn('success', `✅ Todas as ${refs.length} referências encontradas!`);
+                else statusFn('error', `❌ Não encontradas: ${refs.filter(r => pending.has(r.toLowerCase().trim())).join(', ')}`);
+                scroller.scrollTop = 0;
+                if (found.size > 0) this.startLabelObserver();
+            } catch (err) { statusFn('error', 'Erro: ' + err.message); }
+            btn.disabled = false; btn.textContent = '🔍 Validar referências na galeria';
+        }
+
+        async getTileName(tile) {
+            tile.dispatchEvent(new MouseEvent('mouseover', { bubbles:true }));
+            tile.dispatchEvent(new MouseEvent('mouseenter', { bubbles:true }));
+            await this.sleep(350);
+            const UI = ['favorite','redo','more_vert','image','warning','refresh','delete_forever','undo','play_arrow','pause','download',
+                         'Adicionar aos favoritos','Reutilizar comando','Mais','Add to favorites','Reuse prompt','More','Falha','Ops!',
+                         'Tentar novamente','Excluir','Failed','Oops!','Retry','Delete'];
+            let nome = null;
+            for (let t = 0; t < 5; t++) {
+                for (const div of tile.querySelectorAll('div')) {
+                    const text = div.textContent?.trim();
+                    if (!text || text.length < 1 || text.length > 80) continue;
+                    if ([...div.querySelectorAll('div')].some(c => c.textContent?.trim())) continue;
+                    if (div.querySelector('i, svg, button')) continue;
+                    if (UI.some(u => text === u)) continue;
+                    nome = text; break;
+                }
+                if (nome) break; await this.sleep(100);
+            }
+            tile.dispatchEvent(new MouseEvent('mouseleave', { bubbles:true }));
+            tile.dispatchEvent(new MouseEvent('mouseout', { bubbles:true }));
+            await this.sleep(80);
+            return nome;
+        }
+
+        // ============================================================
+        // PAINEL DE ATRIBUIÇÃO (Drag & Drop)
+        // ============================================================
+
+        showAssignPanel(allMatrices) {
+            this._videoAssignActive = false;
+            const panel = document.getElementById('flow-assign-panel');
+            const title = document.getElementById('flow-assign-title');
+            const items = document.getElementById('flow-assign-items');
+            const dlBtn = document.getElementById('flow-assign-download');
+
+            items.innerHTML = '';
+
+            if (this.genMode === 'refs') {
+                title.textContent = 'Atribuir Referências';
+                const previewEl = document.getElementById('flow-assign-preview');
+                if (previewEl) previewEl.style.display = 'none';
+                const rlBar = document.getElementById('flow-assign-reload-bar');
+                if (rlBar) rlBar.classList.remove('visible');
+                dlBtn.style.display = 'none';
+                for (const name of this.refNames) {
+                    const item = document.createElement('div');
+                    item.className = 'flow-assign-item';
+                    item.draggable = true;
+                    item.dataset.type = 'ref';
+                    item.dataset.name = name;
+                    item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(name)}</span><span class="assign-status">⏳</span>`;
+                    item.addEventListener('dragstart', e => {
+                        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'ref', name }));
+                        e.dataTransfer.effectAllowed = 'copy';
+                    });
+                    items.appendChild(item);
+                }
+            } else if (this.genMode === 'scenes') {
+                title.textContent = 'Atribuir Cenas';
+                const previewEl = document.getElementById('flow-assign-preview');
+                if (previewEl) { previewEl.style.display = 'none'; }
+                dlBtn.style.display = 'inline-flex';
+                dlBtn.disabled = true;
+                const rlBar2 = document.getElementById('flow-assign-reload-bar'); if (rlBar2) rlBar2.classList.remove('visible');
+                
+                for (const p of this.prompts) {
+                    const sceneName = `Cena ${p.promptNum}`;
+                    const promptText = p.text || '';
+                    const item = document.createElement('div');
+                    item.className = 'flow-assign-item';
+                    item.draggable = true;
+                    item.dataset.type = 'scene';
+                    item.dataset.scene = sceneName;
+                    item.dataset.sceneNum = p.promptNum;
+                    item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
+                    item.addEventListener('mouseenter', () => {
+                        const preview = document.getElementById('flow-assign-preview');
+                        if (preview) {
+                            preview.style.display = '';
+                            preview.querySelector('.preview-label').textContent = sceneName + ': ';
+                            preview.querySelector('.preview-text').textContent = promptText.substring(0, 300) + (promptText.length > 300 ? '...' : '');
+                        }
+                    });
+                    item.addEventListener('mouseleave', () => {
+                        const preview = document.getElementById('flow-assign-preview');
+                        if (preview) preview.style.display = 'none';
+                    });
+                    item.addEventListener('dragstart', e => {
+                        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum: p.promptNum, sceneName }));
+                        e.dataTransfer.effectAllowed = 'copy';
+                    });
+                    items.appendChild(item);
+                }
+            }
+
+            panel.classList.add('active');
+            panel.classList.remove('minimized');
+            document.getElementById('flow-assign-toggle').textContent = '▲';
+            const reopenBtn = document.getElementById('flow-reopen-assign');
+            if (reopenBtn) reopenBtn.style.display = 'none';
+            this.updateAssignCount();
+            this.updateScrollerPadding();
+        }
+
         showVideoAssignPanel(allMatrices) {
             const panel = document.getElementById('flow-assign-panel');
             const title = document.getElementById('flow-assign-title');
@@ -1908,7 +1939,7 @@
             const rlBar = document.getElementById('flow-assign-reload-bar');
             if (rlBar) rlBar.classList.remove('visible');
 
-            // Usa videoSceneAssignments e videoPrompts
+            // Usa videoSceneAssignments e videoPrompts para pegar a ordem certa dos numeros
             for (const [sceneName] of this.videoSceneAssignments) {
                 const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
                 const prompt = this.videoPrompts.find(p => p.promptNum === sceneNum);
@@ -2071,7 +2102,7 @@
                 const workflowId = this.getWorkflowIdFromTile(innerTile);
                 const outerTile = tile;
                 document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
-                if (!workflowId) { this.logDebug('Drop: workflowId não encontrado', 'error'); return; }
+                if (!workflowId) return;
 
                 if (data.type === 'ref') {
                     await this.assignReference(data.name, workflowId, outerTile);
@@ -2108,12 +2139,10 @@
                 }
                 this.tileAssignments.delete(wfId);
                 this.updateAssignCount();
-                this.logDebug(`Removida atribuição de ${wfId}`, 'info');
             });
         }
 
         async assignReference(name, workflowId, tileEl) {
-            this.logDebug(`Atribuindo referência "${name}" → ${workflowId.substring(0,8)}...`, 'info');
             const prevWfId = this.refAssignments.get(name);
             if (prevWfId && prevWfId !== workflowId) {
                 await this.apiRename(prevWfId, 'Imagem gerada');
@@ -2139,9 +2168,6 @@
                 this.updateAssignItemUI(name, true);
                 this.updateAssignCount();
                 this.startLabelObserver();
-                this.logDebug(`✅ "${name}" atribuída`, 'success');
-            } else {
-                this.logDebug(`❌ Falha ao atribuir "${name}"`, 'error');
             }
         }
 
@@ -2149,7 +2175,6 @@
             const assignments = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
             const arr = assignments.get(sceneName) || [];
             const itemLabel = this._videoAssignActive ? 'Vídeo' : 'Imagem';
-            const logFn = this._videoAssignActive ? (m, t) => this.logVideoDebug(m, t) : (m, t) => this.logDebug(m, t);
 
             const prevAssign = this.tileAssignments.get(workflowId);
             if (prevAssign) {
@@ -2170,8 +2195,6 @@
             const imgNum = arr.length + 1;
             const fullName = `Cena ${sceneNum} - ${itemLabel} ${imgNum}`;
 
-            logFn(`Atribuindo "${fullName}" → ${workflowId.substring(0,8)}...`, 'info');
-
             const ok1 = await this.apiRename(workflowId, fullName);
             const ok2 = await this.apiFavorite(workflowId, true);
 
@@ -2183,9 +2206,6 @@
                 this.updateAssignItemUI(sceneName, true);
                 this.updateAssignCount();
                 this.startLabelObserver();
-                logFn(`✅ "${fullName}" atribuída`, 'success');
-            } else {
-                logFn(`❌ Falha ao atribuir "${fullName}"`, 'error');
             }
         }
 
@@ -2258,7 +2278,6 @@
             btn.disabled = true; btn.textContent = '⏳ Baixando...';
             const assignments = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
             const ext = this._videoAssignActive ? 'mp4' : 'jpg';
-            const logFn = this._videoAssignActive ? (m, t) => this.logVideoDebug(m, t) : (m, t) => this.logDebug(m, t);
             let count = 0;
             try {
                 for (const [sceneName, imgs] of [...assignments.entries()].sort((a,b) => {
@@ -2288,11 +2307,10 @@
                             document.body.appendChild(a); a.click(); document.body.removeChild(a);
                             URL.revokeObjectURL(url);
                             count++; await this.sleep(400);
-                        } catch(e) { logFn(`Erro download ${fileName}: ${e.message}`, 'error'); }
+                        } catch(e) { }
                     }
                 }
-                logFn(`✅ ${count} arquivo(s) baixado(s)`, 'success');
-            } catch(e) { logFn(`Erro: ${e.message}`, 'error'); }
+            } catch(e) {}
             btn.disabled = false; btn.textContent = '⬇️ Baixar Cenas';
         }
 
