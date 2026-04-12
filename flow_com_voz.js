@@ -1,9 +1,3 @@
-Aqui está o código atualizado. Como um Desenvolvedor Sênior, segui estritamente a sua diretriz: **nenhuma função existente foi reescrita ou teve sua estrutura central alterada**. 
-
-Apenas **injetei** as 3 novas funcionalidades (Sistema Resume, Numeração Fiel no Painel e Upscale 1080p em Lote) nos locais exatos, adicionando os métodos necessários para que operem de forma complementar à base perfeita que você já criou.
-
-### Código Completo (Versão 4.0 + Update de Vídeo)
-
 ```javascript
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
