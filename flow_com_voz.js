@@ -1,4 +1,3 @@
-```javascript
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
 // Versão 4.0 - Drag & Drop + API Rename (Flow Voz)
@@ -3199,4 +3198,3 @@
     }
 
 })();
-```
