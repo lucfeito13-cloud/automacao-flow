@@ -2908,122 +2908,259 @@
             this.updateScrollerPadding();
         }
 
-        /**
+               /**
          * --- INJEÇÃO ADD-ON: Sistema Automático de Upscale 1080p (Vídeos) ---
-         * Otimizado para não esperar terminar, apenas solicitar e seguir (como download)
+         * Versão reforçada: menu do tile -> Download -> 1080p -> toast -> próximo vídeo
          */
+        async waitFor(conditionFn, timeout = 8000, interval = 150) {
+            const start = Date.now();
+            while (Date.now() - start < timeout) {
+                try {
+                    const result = await conditionFn();
+                    if (result) return result;
+                } catch (_) {}
+                await this.sleep(interval);
+            }
+            return null;
+        }
+
+        isVisible(el) {
+            if (!el || !el.isConnected) return false;
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+        }
+
+        async getTileMenuButton(tile) {
+            if (!tile) return null;
+
+            // força hover no tile
+            tile.dispatchEvent(new MouseEvent('pointerenter', { bubbles: true, view: window }));
+            tile.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, view: window }));
+            tile.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, view: window }));
+            tile.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, view: window }));
+            await this.sleep(350);
+
+            const candidates = [
+                ...tile.querySelectorAll('button'),
+                ...tile.querySelectorAll('[role="button"]')
+            ];
+
+            for (const btn of candidates) {
+                const text = btn.textContent?.trim() || '';
+                const aria = btn.getAttribute('aria-label') || '';
+                const title = btn.getAttribute('title') || '';
+
+                if (
+                    /more|mais/i.test(text) ||
+                    /more|mais/i.test(aria) ||
+                    /more|mais/i.test(title)
+                ) {
+                    if (this.isVisible(btn)) return btn;
+                }
+
+                const icon = btn.querySelector('i, span');
+                const iconText = icon?.textContent?.trim() || '';
+                if ((iconText === 'more_vert' || iconText === 'more_horiz') && this.isVisible(btn)) {
+                    return btn;
+                }
+            }
+
+            return null;
+        }
+
+        async openTileMenu(tile) {
+            const menuBtn = await this.getTileMenuButton(tile);
+            if (!menuBtn) return false;
+
+            menuBtn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, view: window }));
+            menuBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, view: window }));
+            menuBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, view: window }));
+            menuBtn.click();
+
+            const opened = await this.waitFor(() => {
+                const menuItems = [...document.querySelectorAll('button[role="menuitem"], [role="menuitem"]')];
+                return menuItems.length ? menuItems : null;
+            }, 5000);
+
+            return !!opened;
+        }
+
+        async openDownloadSubmenu() {
+            const downloadBtn = await this.waitFor(() => {
+                const items = [...document.querySelectorAll('button[role="menuitem"], [role="menuitem"]')];
+                return items.find(el => /download|baixar/i.test(el.textContent || ''));
+            }, 5000);
+
+            if (!downloadBtn) return false;
+
+            downloadBtn.dispatchEvent(new MouseEvent('pointerenter', { bubbles: true, view: window }));
+            downloadBtn.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, view: window }));
+            downloadBtn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, view: window }));
+            downloadBtn.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, view: window }));
+            downloadBtn.click();
+
+            const submenu = await this.waitFor(() => {
+                const items = [...document.querySelectorAll('button[role="menuitem"], [role="menuitem"]')];
+                return items.find(el => /1080p/i.test(el.textContent || ''));
+            }, 5000);
+
+            return !!submenu;
+        }
+
+        async click1080pOption() {
+            const upscaleBtn = await this.waitFor(() => {
+                const items = [...document.querySelectorAll('button[role="menuitem"], [role="menuitem"]')];
+                return items.find(el => {
+                    const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+                    return /1080p/i.test(text);
+                });
+            }, 5000);
+
+            if (!upscaleBtn) return { ok: false, reason: '1080p_not_found' };
+
+            upscaleBtn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, view: window }));
+            upscaleBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, view: window }));
+            upscaleBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, view: window }));
+            upscaleBtn.click();
+
+            return { ok: true };
+        }
+
+        async waitForUpscaleToast() {
+            const toast = await this.waitFor(() => {
+                const toasts = [...document.querySelectorAll('li[data-sonner-toast], li[data-sonner-toast="true"]')];
+                return toasts.find(el =>
+                    /Upscaling your video/i.test(el.textContent || '')
+                );
+            }, 6000, 200);
+
+            if (!toast) return false;
+
+            const dismissBtn = [...toast.querySelectorAll('button')].find(btn =>
+                /dismiss/i.test(btn.textContent || '')
+            );
+
+            if (dismissBtn) dismissBtn.click();
+            return true;
+        }
+
+        getUpscaleRequestedSet() {
+            if (!this._upscaleRequestedWfIds) this._upscaleRequestedWfIds = new Set();
+            return this._upscaleRequestedWfIds;
+        }
+
         async startUpscaleProcess() {
             const btn = document.getElementById('fv-upscale-btn');
-            if (btn) { btn.disabled = true; btn.textContent = '⏳ Iniciando Upscale...'; }
+            const requested = this.getUpscaleRequestedSet();
+
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '⏳ Iniciando Upscale 1080p...';
+            }
 
             const wfIdsToUpscale = [];
-            // Varre o que foi identificado como cena na MEMÓRIA PRINCIPAL DA TELA
             for (const [wfId, data] of this.tileAssignments.entries()) {
-                if (data.type === 'scene') {
+                if (data.type === 'scene' && !requested.has(wfId)) {
                     wfIdsToUpscale.push(wfId);
                 }
             }
 
             if (!wfIdsToUpscale.length) {
-                this.setVideoStatus('warning', 'Nenhuma cena atribuída/identificada para fazer upscale.');
-                if (btn) { btn.disabled = false; btn.textContent = '🚀 Iniciar Upscale 1080p (Cenas Atribuídas)'; }
+                this.setVideoStatus('warning', 'Nenhuma cena atribuída pendente para upscale.');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '🚀 Iniciar Upscale 1080p (Cenas Atribuídas)';
+                }
                 return;
             }
 
-            this.logVideoDebug(`Iniciando upscale de ${wfIdsToUpscale.length} vídeos...`, 'info');
-            this.setVideoStatus('info', `🚀 Iniciando upscale de ${wfIdsToUpscale.length} vídeos...`);
+            this.logVideoDebug(`Iniciando upscale de ${wfIdsToUpscale.length} vídeo(s)...`, 'info');
+            this.setVideoStatus('info', `🚀 Solicitando upscale de ${wfIdsToUpscale.length} vídeo(s)...`);
 
             let count = 0;
+            let fail = 0;
 
             for (const wfId of wfIdsToUpscale) {
                 if (this.videoShouldStop) break;
 
-                const tile = await this.scrollToWorkflow(wfId);
-                if (!tile) {
-                    this.logVideoDebug(`❌ Tile não encontrado para ${wfId.substring(0,8)}`, 'error');
-                    continue;
-                }
+                try {
+                    const tile = await this.scrollToWorkflow(wfId);
+                    if (!tile) {
+                        this.logVideoDebug(`❌ Tile não encontrado para ${wfId.substring(0, 8)}`, 'error');
+                        fail++;
+                        continue;
+                    }
 
-                // Simulando o hover no tile para o botão "more_vert" aparecer
-                tile.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, view: window }));
-                tile.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, view: window }));
-                await this.sleep(400);
+                    const menuOpened = await this.openTileMenu(tile);
+                    if (!menuOpened) {
+                        this.logVideoDebug(`❌ Menu não abriu para ${wfId.substring(0, 8)}`, 'error');
+                        fail++;
+                        continue;
+                    }
 
-                // Tenta encontrar o botão more_vert
-                const moreBtn = [...tile.querySelectorAll('button, div, i')].find(el =>
-                    el.textContent?.trim() === 'more_vert' &&
-                    (el.classList.contains('google-symbols') || el.closest('button'))
-                );
+                    const submenuOpened = await this.openDownloadSubmenu();
+                    if (!submenuOpened) {
+                        this.logVideoDebug(`❌ Submenu Download não abriu para ${wfId.substring(0, 8)}`, 'error');
+                        document.dispatchEvent(new KeyboardEvent('keydown', {
+                            key: 'Escape',
+                            code: 'Escape',
+                            keyCode: 27,
+                            bubbles: true
+                        }));
+                        fail++;
+                        continue;
+                    }
 
-                let clickSuccess = false;
+                    const clickResult = await this.click1080pOption();
+                    if (!clickResult.ok) {
+                        this.logVideoDebug(`⚠️ Opção 1080p não encontrada para ${wfId.substring(0, 8)}`, 'warning');
+                        document.dispatchEvent(new KeyboardEvent('keydown', {
+                            key: 'Escape',
+                            code: 'Escape',
+                            keyCode: 27,
+                            bubbles: true
+                        }));
+                        fail++;
+                        continue;
+                    }
 
-                if (moreBtn) {
-                    // Clica no botão de 3 pontos
-                    const clickable = moreBtn.closest('button') || moreBtn;
-                    clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, view: window }));
-                    clickable.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, view: window }));
-                    clickable.click();
-                    await this.sleep(600);
-
-                    // IMPORTANTE: O menu Radix abre no final do <body>, não dentro do tile.
-                    const menuItems = document.querySelectorAll('[role="menuitem"]');
-                    const upscaleBtn = [...menuItems].find(el => el.textContent?.includes('1080p'));
-
-                    if (upscaleBtn) {
-                        upscaleBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, view: window }));
-                        upscaleBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, view: window }));
-                        upscaleBtn.click();
-                        this.logVideoDebug(`Upscale solicitado para ${wfId.substring(0,8)}`, 'info');
-                        clickSuccess = true;
-                        await this.sleep(500);
+                    const toastOk = await this.waitForUpscaleToast();
+                    if (toastOk) {
+                        requested.add(wfId);
+                        count++;
+                        this.logVideoDebug(`✅ Upscale solicitado para ${wfId.substring(0, 8)}`, 'success');
                     } else {
-                        this.logVideoDebug(`⚠️ Botão 1080p não encontrado para ${wfId.substring(0,8)}. Pode já estar em 1080p.`, 'warning');
-                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                        // em alguns casos o clique pega mesmo sem o toast aparecer
+                        requested.add(wfId);
+                        count++;
+                        this.logVideoDebug(`⚠️ Clique em 1080p executado, mas toast não apareceu para ${wfId.substring(0, 8)}`, 'warning');
                     }
-                } else {
-                    this.logVideoDebug(`⚠️ Botão de opções (3 pontos) não encontrado no tile.`, 'error');
+
+                    if (btn) btn.textContent = `⏳ Upscale ${count}/${wfIdsToUpscale.length}`;
+                    await this.sleep(1200);
+
+                } catch (err) {
+                    fail++;
+                    this.logVideoDebug(`❌ Erro no upscale ${wfId.substring(0, 8)}: ${err.message}`, 'error');
+                    document.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: 'Escape',
+                        code: 'Escape',
+                        keyCode: 27,
+                        bubbles: true
+                    }));
+                    await this.sleep(500);
                 }
-
-                // Se clicou com sucesso, aguarda o toast específico que o usuário mostrou
-                if (clickSuccess) {
-                    let toastFound = false;
-                    for (let t = 0; t < 15; t++) { // Aguarda até 3 segundos pelo toast
-                        const toasts = document.querySelectorAll('li[data-sonner-toast="true"]');
-                        const targetToast = [...toasts].find(el => el.textContent?.includes('Upscaling your video'));
-
-                        if (targetToast) {
-                            toastFound = true;
-                            // Procura o botão Dismiss
-                            const dismissBtn = [...targetToast.querySelectorAll('button')].find(b => b.textContent?.includes('Dismiss')) || targetToast.querySelector('button');
-                            if (dismissBtn) {
-                                dismissBtn.click();
-                                this.logVideoDebug(`✅ Upscale em andamento para ${wfId.substring(0,8)}`, 'success');
-                                count++;
-                            }
-                            break;
-                        }
-                        await this.sleep(200);
-                    }
-                    if (!toastFound) {
-                        this.logVideoDebug(`⚠️ Toast de confirmação não detectado, mas clique foi feito.`, 'warning');
-                        count++; // Assume sucesso se clicou
-                    }
-                }
-
-                // Limpa o hover
-                tile.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true, view: window }));
-                tile.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, view: window }));
-
-                // Atualiza UI
-                if (btn) btn.textContent = `⏳ Upscale... ${count}/${wfIdsToUpscale.length}`;
-                await this.sleep(1000); // Pausa entre vídeos para não travar a UI
             }
 
-            this.logVideoDebug(`✅ Processo de envio de upscale concluído. Total: ${count} vídeos.`, 'success');
-            this.setVideoStatus('success', `✅ Envio para upscale concluído: ${count} vídeos.`);
-            if (btn) { btn.disabled = false; btn.textContent = '🚀 Iniciar Upscale 1080p (Cenas Atribuídas)'; }
-        }
+            this.setVideoStatus('success', `✅ Upscale solicitado para ${count} vídeo(s). Falhas: ${fail}.`);
+            this.logVideoDebug(`✅ Processo concluído. Upscale solicitado: ${count}. Falhas: ${fail}.`, 'success');
 
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '🚀 Iniciar Upscale 1080p (Cenas Atribuídas)';
+            }
+        }
         async scrollToWorkflow(wfId) {
             const scroller = this.getScroller();
             if (!scroller) return null;
