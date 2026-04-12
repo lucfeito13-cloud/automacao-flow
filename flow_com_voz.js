@@ -1,7 +1,7 @@
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
 // Versão 4.0 - Drag & Drop + API Rename (Flow Voz)
-// + ADD-ONS: Resume Video, Fidelidade Numérica e Upscale 1080p
+// + ADD-ONS: Resume, Numeração Fiel (Imagens & Vídeos) e Upscale 1080p (Vídeos)
 // ==========================================
 //
 // ARQUITETURA:
@@ -73,7 +73,7 @@
         MAX_RETRIES:              3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.0 (Flow Voz + Addons)',
+        VERSION: '4.0 (Flow Voz + Addons Full)',
     };
 
     // ============================================================
@@ -364,6 +364,7 @@
           </div>
           <div class="flow-card-content">
             <textarea class="flow-textarea" id="flow-prompts-input" placeholder="Ex:&#10;Imagem de [Maria] sentada na [Sala]&#10;[João] caminhando no [Parque]"></textarea>
+            <input type="number" id="flow-start-from" class="flow-select-imgs" style="margin-top:8px;width:100%;box-sizing:border-box;" placeholder="Retomar de (Prompt/Cena X). Ex: 20 (Use 0 para carregar painel direto)">
             <div id="flow-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
@@ -1482,6 +1483,13 @@
             this.prompts = parsePromptsText(text);
             if (!this.prompts.length) { this.setStatus('error', 'Nenhum prompt detectado.'); return; }
 
+            // --- FUNCIONALIDADE 1: Sistema "Retomar de" (Imagens) ---
+            const resumeInput = document.getElementById('flow-start-from').value.trim();
+            let resumeFrom = -1;
+            if (resumeInput !== '') {
+                resumeFrom = parseInt(resumeInput, 10);
+            }
+
             // Valida referências nos prompts (não as da primeira linha)
             // Pula no modo 'refs' — ali estamos CRIANDO referências, não usando existentes
             if (this.genMode !== 'refs') {
@@ -1494,11 +1502,13 @@
                 }
             }
 
-            // Em modo cenas: sceneCount = número de prompts
+            // Em modo cenas: sceneCount = número de prompts. Usando promptNum do objeto para manter Fidelidade.
             if (this.genMode === 'scenes') {
                 this.sceneCount = this.prompts.length;
                 this.sceneAssignments = new Map();
-                for (let i = 1; i <= this.sceneCount; i++) this.sceneAssignments.set(`Cena ${i}`, []);
+                for (let i = 0; i < this.prompts.length; i++) {
+                    this.sceneAssignments.set(`Cena ${this.prompts[i].promptNum}`, []);
+                }
             }
 
             this.isRunning = true;
@@ -1510,12 +1520,44 @@
             this.buildPromptList();
             this.setStatus('info', '🚀 Iniciando automação v4.0...');
             this.updateProgress(0);
+
+            // --- Regra do 0: Pular geração ---
+            if (resumeFrom === 0) {
+                this.logDebug('Regra do 0: Pulando geração e abrindo painel de atribuição...', 'success');
+                this.prompts.forEach((p, idx) => {
+                    this.updatePromptItemStatus(idx, 'done', 'Pulado');
+                });
+                this.updateProgress(1);
+                this.setStatus('success', '✅ Geração pulada. Atribua as imagens.');
+                this.isRunning = false;
+                document.getElementById('flow-start-btn').disabled = false;
+                document.getElementById('flow-stop-btn').disabled  = true;
+                document.getElementById('flow-prompts-input').disabled = false;
+                if (this.genMode === 'scenes' || this.genMode === 'refs') {
+                    this.showAssignPanel([]);
+                }
+                return;
+            }
+
+            // --- Resume > 0 ---
+            let promptsToProcess = this.prompts;
+            if (resumeFrom > 0) {
+                promptsToProcess = this.prompts.filter(p => p.promptNum >= resumeFrom);
+                const skipped = this.prompts.filter(p => p.promptNum < resumeFrom);
+                skipped.forEach(p => {
+                    const idx = this.prompts.findIndex(x => x.promptNum === p.promptNum);
+                    this.updatePromptItemStatus(idx, 'done', 'Pulado');
+                });
+                this.logDebug(`Retomando da cena/prompt ${resumeFrom}. ${skipped.length} prompts pulados.`, 'info');
+            }
+
             await this.detectGrid();
 
             const batches = [];
-            for (let i = 0; i < this.prompts.length; i += this.batchSize)
-                batches.push(this.prompts.slice(i, Math.min(i + this.batchSize, this.prompts.length)));
-            this.logDebug(`${this.prompts.length} prompts → ${batches.length} lote(s)`, 'info');
+            // Aqui usamos promptsToProcess para obedecer ao Resume sem quebrar as rotinas base
+            for (let i = 0; i < promptsToProcess.length; i += this.batchSize)
+                batches.push(promptsToProcess.slice(i, Math.min(i + this.batchSize, promptsToProcess.length)));
+            this.logDebug(`${promptsToProcess.length} prompts → ${batches.length} lote(s)`, 'info');
 
             const allMatrices = [];
 
@@ -1784,15 +1826,19 @@
                 dlBtn.style.display = 'inline-flex';
                 dlBtn.disabled = true;
                 const rlBar2 = document.getElementById('flow-assign-reload-bar'); if (rlBar2) rlBar2.classList.remove('visible');
-                for (let i = 1; i <= this.sceneCount; i++) {
-                    const sceneName = `Cena ${i}`;
-                    const promptText = this.prompts[i-1]?.text || '';
+                
+                // Usa sceneAssignments e prompts (FUNCIONALIDADE 2 - Fidelidade ao ler Cena do Map para Imagens)
+                for (const [sceneName] of this.sceneAssignments) {
+                    const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
+                    const prompt = this.prompts.find(p => p.promptNum === sceneNum);
+                    const promptText = prompt?.text || '';
+
                     const item = document.createElement('div');
                     item.className = 'flow-assign-item';
                     item.draggable = true;
                     item.dataset.type = 'scene';
                     item.dataset.scene = sceneName;
-                    item.dataset.sceneNum = i;
+                    item.dataset.sceneNum = sceneNum;
                     item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
                     item.addEventListener('mouseenter', () => {
                         const preview = document.getElementById('flow-assign-preview');
@@ -1807,7 +1853,7 @@
                         if (preview) preview.style.display = 'none';
                     });
                     item.addEventListener('dragstart', e => {
-                        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum: i, sceneName }));
+                        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum, sceneName }));
                         e.dataTransfer.effectAllowed = 'copy';
                     });
                     items.appendChild(item);
@@ -1910,7 +1956,7 @@
                 const dlBtn = document.getElementById('flow-assign-download');
                 dlBtn.disabled = done < total;
             } else if (this.genMode === 'scenes') {
-                const total = this.sceneCount;
+                const total = this.sceneAssignments.size;
                 const done = [...this.sceneAssignments.values()].filter(arr => arr.length > 0).length;
                 el.textContent = `${done}/${total}`;
                 const dlBtn = document.getElementById('flow-assign-download');
