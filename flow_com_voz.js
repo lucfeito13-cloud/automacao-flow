@@ -1,7 +1,7 @@
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
 // Versão 4.0 - Drag & Drop + API Rename (Flow Voz)
-// + ADD-ONS: Resume, Numeração Fiel e Upscale 1080p Super-Rápido
+// + ADD-ONS: Resume, Numeração Fiel e Upscale 1080p Sincronizado
 // ==========================================
 //
 // ARQUITETURA:
@@ -558,6 +558,7 @@
               <div style="display:flex;flex-direction:column;gap:6px;">
                 <button class="flow-validate-btn" id="fv-dl-identified" style="margin:0;">📋 Todas as Identificadas</button>
                 <button class="flow-validate-btn" id="fv-dl-scenes" style="margin:0;">🎬 Apenas Cenas</button>
+                <button class="flow-validate-btn" id="fv-dl-refs" style="margin:0;">🖼️ Apenas Referências</button>
                 <button class="flow-validate-btn" id="fv-dl-all" style="margin:0;">📦 Completo (Todas as Geradas)</button>
                 <button class="flow-validate-btn" id="fv-upscale-btn" style="margin:0; background:linear-gradient(135deg, #8b5cf6, #6d28d9); color:#fff; border:none; margin-top: 6px;">🚀 Iniciar Upscale 1080p (Cenas Atribuídas)</button>
               </div>
@@ -779,6 +780,7 @@
             $('fv-analyze-btn').addEventListener('click', () => this.analyzeProject('video'));
             $('fv-dl-identified').addEventListener('click', () => this.downloadProjectImages('identified'));
             $('fv-dl-scenes').addEventListener('click', () => this.downloadProjectImages('scenes'));
+            $('fv-dl-refs').addEventListener('click', () => this.downloadProjectImages('refs')); // NOVO BOTÃO
             $('fv-dl-all').addEventListener('click', () => this.downloadProjectImages('all'));
             $('fv-reopen-assign').addEventListener('click', () => this.reopenAssignPanel());
             $('fv-upscale-btn').addEventListener('click', () => this.startUpscaleProcess());
@@ -2271,7 +2273,7 @@
          * @param {'identified'|'scenes'|'refs'|'all'} mode
          */
         async downloadProjectImages(mode) {
-            const btnId = { identified: 'flow-dl-identified', scenes: 'flow-dl-scenes', refs: 'flow-dl-refs', all: 'flow-dl-all' }[mode] || { identified: 'fv-dl-identified', scenes: 'fv-dl-scenes', all: 'fv-dl-all' }[mode];
+            const btnId = { identified: 'flow-dl-identified', scenes: 'flow-dl-scenes', refs: 'flow-dl-refs', all: 'flow-dl-all' }[mode] || { identified: 'fv-dl-identified', scenes: 'fv-dl-scenes', refs: 'fv-dl-refs', all: 'fv-dl-all' }[mode];
             const btn = document.getElementById(btnId);
             const origText = btn?.textContent;
             if (btn) { btn.disabled = true; btn.textContent = '⏳ Baixando...'; }
@@ -2301,7 +2303,7 @@
                         return;
                     }
 
-                    this.logDebug(`Baixando ${entries.length} imagem(ns) (${mode})...`, 'info');
+                    this.logDebug(`Baixando ${entries.length} arquivo(s) (${mode})...`, 'info');
                     let count = 0;
                     const pending = new Map(entries); // wfId → data
                     const scroller = this.getScroller();
@@ -2367,8 +2369,8 @@
                         scroller.scrollTop = 0;
                     }
 
-                    this.logDebug(`✅ ${count}/${entries.length} imagem(ns) baixada(s)`, 'success');
-                    this.setStatus('success', `✅ ${count} imagem(ns) baixada(s)!`);
+                    this.logDebug(`✅ ${count}/${entries.length} arquivo(s) baixado(s)`, 'success');
+                    this.setStatus('success', `✅ ${count} arquivo(s) baixado(s)!`);
                 }
             } catch(e) {
                 this.logDebug(`Erro: ${e.message}`, 'error');
@@ -2528,7 +2530,12 @@
 
             // Remove labels anteriores
             document.querySelectorAll('.flow-tile-label').forEach(l => l.remove());
+            
+            // Limpa as memórias
             this.tileAssignments.clear();
+            if (isVideo) this.videoSceneAssignments.clear();
+            else this.sceneAssignments.clear();
+            this.refAssignments.clear();
 
             const scroller = this.getScroller();
             if (!scroller) { btn.disabled = false; btn.textContent = '🔍 Analisar projeto existente'; return; }
@@ -2551,10 +2558,10 @@
                     if (!name) continue;
 
                     const wfId = this.getWorkflowIdFromTile(tile);
-                    let labelText = null, type = null, extra = null;
+                    let labelText = null, type = null, extra = null, sceneMatch = null;
 
                     // Match "Cena X - Imagem Y" ou "Cena X - Vídeo Y"
-                    const sceneMatch = name.match(/^Cena\s+(\d+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)$/i);
+                    sceneMatch = name.match(/^Cena\s+(\d+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)$/i);
                     if (sceneMatch) {
                         labelText = name;
                         type = 'scene';
@@ -2572,6 +2579,19 @@
                         const outer = tile.closest('[data-tile-id]') || tile;
                         this.addLabelToTile(outer, labelText, wfId, type, extra);
                         this.tileAssignments.set(wfId, { label: labelText, type, name: extra, scene: extra });
+                        
+                        // SINCRONIZA COM A MEMÓRIA DOS PAINÉIS / UPSCALE
+                        if (type === 'scene') {
+                            const sceneName = extra;
+                            const assignmentsMap = isVideo ? this.videoSceneAssignments : this.sceneAssignments;
+                            if (!assignmentsMap.has(sceneName)) assignmentsMap.set(sceneName, []);
+                            
+                            const imgNum = sceneMatch ? parseInt(sceneMatch[2], 10) : 1;
+                            assignmentsMap.get(sceneName).push({ imgNum, workflowId: wfId, src: this.getMediaSrcFromTile(tile) });
+                        } else if (type === 'ref') {
+                            this.refAssignments.set(extra, wfId);
+                        }
+
                         labelsFound++;
                         btn.textContent = `⏳ ${labelsFound} encontrada(s)...`;
                     }
@@ -2896,12 +2916,15 @@
             if (btn) { btn.disabled = true; btn.textContent = '⏳ Iniciando Upscale...'; }
 
             const wfIdsToUpscale = [];
-            for (const [scene, arr] of this.videoSceneAssignments.entries()) {
-                arr.forEach(item => { if (item.workflowId) wfIdsToUpscale.push(item.workflowId); });
+            // Agora varre TUDO que foi identificado como cena na MEMÓRIA PRINCIPAL DA TELA
+            for (const [wfId, data] of this.tileAssignments.entries()) {
+                if (data.type === 'scene') {
+                    wfIdsToUpscale.push(wfId);
+                }
             }
 
             if (!wfIdsToUpscale.length) {
-                this.setVideoStatus('warning', 'Nenhuma cena atribuída para fazer upscale.');
+                this.setVideoStatus('warning', 'Nenhuma cena atribuída/identificada para fazer upscale.');
                 if (btn) { btn.disabled = false; btn.textContent = '🚀 Iniciar Upscale 1080p (Cenas Atribuídas)'; }
                 return;
             }
