@@ -1,7 +1,7 @@
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
 // Versão 4.0 - Drag & Drop + API Rename (Flow Voz)
-// + ADD-ONS: Resume, Numeração Fiel e Upscale 1080p Sincronizado
+// + ADD-ONS: Resume, Numeração Fiel e Upscale (Base Antiga Mantida)
 // ==========================================
 //
 // ARQUITETURA:
@@ -73,7 +73,7 @@
         MAX_RETRIES:              3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.0 (Flow Voz + Addons Full)',
+        VERSION: '4.0 (Flow Voz + Add-ons)',
     };
 
     // ============================================================
@@ -364,7 +364,7 @@
           </div>
           <div class="flow-card-content">
             <textarea class="flow-textarea" id="flow-prompts-input" placeholder="Ex:&#10;Imagem de [Maria] sentada na [Sala]&#10;[João] caminhando no [Parque]"></textarea>
-            <input type="number" id="flow-start-from" class="flow-select-imgs" style="margin-top:8px;width:100%;box-sizing:border-box;" placeholder="Retomar de (Prompt/Cena X). Ex: 20 (Use 0 para carregar painel direto)">
+            <input type="number" id="flow-start-from" class="flow-select-imgs" style="margin-top:8px;width:100%;box-sizing:border-box;" placeholder="Retomar de (Cena X). Ex: 20 (Use 0 para pular)">
             <div id="flow-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
@@ -472,7 +472,7 @@
           </div>
           <div class="flow-card-content">
             <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:&#10;{cena 10} [Maria] caminhando no [Parque] com vento forte &lt;voz: Algebra&gt;&#10;{cena 13} Close-up de [João] olhando para o horizonte&#10;&#10;Ou sem numeração:&#10;Paisagem noturna com lua cheia&#10;Carro andando na estrada"></textarea>
-            <input type="number" id="fv-start-from" class="flow-select-imgs" style="margin-top:8px;width:100%;box-sizing:border-box;" placeholder="Retomar de (Cena X). Ex: 20 (Use 0 para carregar painel direto)">
+            <input type="number" id="fv-start-from" class="flow-select-imgs" style="margin-top:8px;width:100%;box-sizing:border-box;" placeholder="Retomar de (Cena X). Ex: 20 (Use 0 para pular)">
             <div id="fv-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
@@ -558,7 +558,6 @@
               <div style="display:flex;flex-direction:column;gap:6px;">
                 <button class="flow-validate-btn" id="fv-dl-identified" style="margin:0;">📋 Todas as Identificadas</button>
                 <button class="flow-validate-btn" id="fv-dl-scenes" style="margin:0;">🎬 Apenas Cenas</button>
-                <button class="flow-validate-btn" id="fv-dl-refs" style="margin:0;">🖼️ Apenas Referências</button>
                 <button class="flow-validate-btn" id="fv-dl-all" style="margin:0;">📦 Completo (Todas as Geradas)</button>
                 <button class="flow-validate-btn" id="fv-upscale-btn" style="margin:0; background:linear-gradient(135deg, #8b5cf6, #6d28d9); color:#fff; border:none; margin-top: 6px;">🚀 Iniciar Upscale 1080p (Cenas Atribuídas)</button>
               </div>
@@ -780,10 +779,12 @@
             $('fv-analyze-btn').addEventListener('click', () => this.analyzeProject('video'));
             $('fv-dl-identified').addEventListener('click', () => this.downloadProjectImages('identified'));
             $('fv-dl-scenes').addEventListener('click', () => this.downloadProjectImages('scenes'));
-            $('fv-dl-refs').addEventListener('click', () => this.downloadProjectImages('refs')); // NOVO BOTÃO
             $('fv-dl-all').addEventListener('click', () => this.downloadProjectImages('all'));
             $('fv-reopen-assign').addEventListener('click', () => this.reopenAssignPanel());
-            $('fv-upscale-btn').addEventListener('click', () => this.startUpscaleProcess());
+            
+            // BOTÃO NOVO (UPSCALE) INJETADO AQUI
+            const fvUpscaleBtn = $('fv-upscale-btn');
+            if (fvUpscaleBtn) fvUpscaleBtn.addEventListener('click', () => this.startUpscaleProcess());
         }
 
         setupTextWatcher() {
@@ -1485,7 +1486,7 @@
             this.prompts = parsePromptsText(text);
             if (!this.prompts.length) { this.setStatus('error', 'Nenhum prompt detectado.'); return; }
 
-            // --- FUNCIONALIDADE 1: Sistema "Retomar de" (Imagens) ---
+            // --- INJEÇÃO ADD-ON: Sistema "Retomar de" ---
             const resumeInput = document.getElementById('flow-start-from').value.trim();
             let resumeFrom = -1;
             if (resumeInput !== '') {
@@ -1504,7 +1505,7 @@
                 }
             }
 
-            // Em modo cenas: sceneCount = número de prompts. Usando promptNum do objeto para manter Fidelidade.
+            // Em modo cenas: sceneCount = número de prompts (INJEÇÃO ADD-ON: Numeração Fiel)
             if (this.genMode === 'scenes') {
                 this.sceneCount = this.prompts.length;
                 this.sceneAssignments = new Map();
@@ -1523,7 +1524,7 @@
             this.setStatus('info', '🚀 Iniciando automação v4.0...');
             this.updateProgress(0);
 
-            // --- Regra do 0: Pular geração ---
+            // --- INJEÇÃO ADD-ON: Regra do 0 ---
             if (resumeFrom === 0) {
                 this.logDebug('Regra do 0: Pulando geração e abrindo painel de atribuição...', 'success');
                 this.prompts.forEach((p, idx) => {
@@ -1541,7 +1542,7 @@
                 return;
             }
 
-            // --- Resume > 0 ---
+            // --- INJEÇÃO ADD-ON: Resume > 0 ---
             let promptsToProcess = this.prompts;
             if (resumeFrom > 0) {
                 promptsToProcess = this.prompts.filter(p => p.promptNum >= resumeFrom);
@@ -1556,7 +1557,7 @@
             await this.detectGrid();
 
             const batches = [];
-            // Aqui usamos promptsToProcess para obedecer ao Resume sem quebrar as rotinas base
+            // INJEÇÃO ADD-ON: Usando promptsToProcess em vez de this.prompts
             for (let i = 0; i < promptsToProcess.length; i += this.batchSize)
                 batches.push(promptsToProcess.slice(i, Math.min(i + this.batchSize, promptsToProcess.length)));
             this.logDebug(`${promptsToProcess.length} prompts → ${batches.length} lote(s)`, 'info');
@@ -1829,7 +1830,7 @@
                 dlBtn.disabled = true;
                 const rlBar2 = document.getElementById('flow-assign-reload-bar'); if (rlBar2) rlBar2.classList.remove('visible');
                 
-                // Usa sceneAssignments e prompts (FUNCIONALIDADE 2 - Fidelidade ao ler Cena do Map para Imagens)
+                // INJEÇÃO ADD-ON: Numeração Fiel
                 for (const [sceneName] of this.sceneAssignments) {
                     const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
                     const prompt = this.prompts.find(p => p.promptNum === sceneNum);
@@ -1958,7 +1959,7 @@
                 const dlBtn = document.getElementById('flow-assign-download');
                 dlBtn.disabled = done < total;
             } else if (this.genMode === 'scenes') {
-                const total = this.sceneAssignments.size;
+                const total = this.sceneAssignments.size; // INJEÇÃO ADD-ON: Numeração Fiel
                 const done = [...this.sceneAssignments.values()].filter(arr => arr.length > 0).length;
                 el.textContent = `${done}/${total}`;
                 const dlBtn = document.getElementById('flow-assign-download');
@@ -2531,7 +2532,7 @@
             // Remove labels anteriores
             document.querySelectorAll('.flow-tile-label').forEach(l => l.remove());
             
-            // Limpa as memórias
+            // INJEÇÃO ADD-ON: Limpa as memórias para evitar lixo do passado no Upscale
             this.tileAssignments.clear();
             if (isVideo) this.videoSceneAssignments.clear();
             else this.sceneAssignments.clear();
@@ -2580,7 +2581,7 @@
                         this.addLabelToTile(outer, labelText, wfId, type, extra);
                         this.tileAssignments.set(wfId, { label: labelText, type, name: extra, scene: extra });
                         
-                        // SINCRONIZA COM A MEMÓRIA DOS PAINÉIS / UPSCALE
+                        // INJEÇÃO ADD-ON: SINCRONIZA COM A MEMÓRIA DOS PAINÉIS / UPSCALE / DOWNLOAD
                         if (type === 'scene') {
                             const sceneName = extra;
                             const assignmentsMap = isVideo ? this.videoSceneAssignments : this.sceneAssignments;
@@ -2623,7 +2624,7 @@
             this.videoPrompts = parsePromptsText(text);
             if (!this.videoPrompts.length) { this.setVideoStatus('error', 'Nenhum prompt detectado.'); return; }
 
-            // --- FUNCIONALIDADE 1: Sistema "Retomar de" ---
+            // --- INJEÇÃO ADD-ON: Sistema "Retomar de" ---
             const resumeInput = document.getElementById('fv-start-from').value.trim();
             let resumeFrom = -1;
             if (resumeInput !== '') {
@@ -2639,7 +2640,7 @@
                 if (missing.length)     { this.setVideoStatus('error', `Referências não encontradas: ${missing.join(', ')}`); return; }
             }
 
-            // Em modo cenas: sceneCount = número de prompts. Usando promptNum do objeto para manter Fidelidade.
+            // Em modo cenas: sceneCount = número de prompts. (INJEÇÃO ADD-ON: Numeração Fiel)
             if (this.videoGenMode === 'scenes') {
                 this.videoSceneCount = this.videoPrompts.length;
                 this.videoSceneAssignments = new Map();
@@ -2658,7 +2659,7 @@
             this.setVideoStatus('info', '🚀 Iniciando automação de vídeos v4.0...');
             this.updateVideoProgress(0);
 
-            // --- Regra do 0: Pular geração ---
+            // --- INJEÇÃO ADD-ON: Regra do 0 ---
             if (resumeFrom === 0) {
                 this.logVideoDebug('Regra do 0: Pulando geração e abrindo painel de atribuição...', 'success');
                 this.videoPrompts.forEach((p, idx) => {
@@ -2676,7 +2677,7 @@
                 return;
             }
 
-            // --- Resume > 0 ---
+            // --- INJEÇÃO ADD-ON: Resume > 0 ---
             let promptsToProcess = this.videoPrompts;
             if (resumeFrom > 0) {
                 promptsToProcess = this.videoPrompts.filter(p => p.promptNum >= resumeFrom);
@@ -2692,7 +2693,7 @@
 
             const N = this.videoResultsPerPrompt;
             const batches = [];
-            // Aqui usamos promptsToProcess para obedecer ao Resume sem quebrar as rotinas base
+            // INJEÇÃO ADD-ON: Usando promptsToProcess em vez de this.prompts
             for (let i = 0; i < promptsToProcess.length; i += this.videoBatchSize)
                 batches.push(promptsToProcess.slice(i, Math.min(i + this.videoBatchSize, promptsToProcess.length)));
             this.logVideoDebug(`${promptsToProcess.length} prompts → ${batches.length} lote(s)`, 'info');
@@ -2864,7 +2865,7 @@
             const rlBar = document.getElementById('flow-assign-reload-bar');
             if (rlBar) rlBar.classList.remove('visible');
 
-            // Usa videoSceneAssignments e videoPrompts (FUNCIONALIDADE 2 - Fidelidade ao ler Cena do Map)
+            // INJEÇÃO ADD-ON: Numeração Fiel
             for (const [sceneName] of this.videoSceneAssignments) {
                 const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
                 const prompt = this.videoPrompts.find(p => p.promptNum === sceneNum);
@@ -2908,7 +2909,7 @@
         }
 
         /**
-         * --- FUNCIONALIDADE 3: Sistema Automático de Upscale 1080p (Vídeos) ---
+         * --- INJEÇÃO ADD-ON: Sistema Automático de Upscale 1080p (Vídeos) ---
          * Otimizado para não esperar terminar, apenas solicitar e seguir (como download)
          */
         async startUpscaleProcess() {
@@ -2916,7 +2917,7 @@
             if (btn) { btn.disabled = true; btn.textContent = '⏳ Iniciando Upscale...'; }
 
             const wfIdsToUpscale = [];
-            // Agora varre TUDO que foi identificado como cena na MEMÓRIA PRINCIPAL DA TELA
+            // Varre o que foi identificado como cena na MEMÓRIA PRINCIPAL DA TELA
             for (const [wfId, data] of this.tileAssignments.entries()) {
                 if (data.type === 'scene') {
                     wfIdsToUpscale.push(wfId);
