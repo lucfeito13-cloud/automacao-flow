@@ -1350,7 +1350,32 @@
                              await this.openAtSelector(); 
                              await this.clickDialogTab('image');
                              await this.searchAndSelect(seg.name); 
-                             await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                             // Damos um tempo extra para o "chip" da imagem aparecer na tela
+                             await this.dynamicSleep([400, 600]); 
+
+                             // --- INÍCIO DA MODIFICAÇÃO FORÇADA (Selecionar e Apagar) ---
+                             const e = this.getEditor();
+                             if (e) {
+                                 e.focus();
+                                 
+                                 // 1. Foca e seleciona o "chip" puxando o cursor para trás (como Shift + Seta Esquerda)
+                                 const sel = window.getSelection();
+                                 sel.modify('extend', 'backward', 'character');
+                                 await this.dynamicSleep([150, 250]);
+                                 
+                                 // 2. Força o comando nativo do navegador para deletar o que foi selecionado
+                                 document.execCommand('delete', false, null);
+                                 await this.dynamicSleep([150, 250]);
+                                 
+                                 // 3. Manda um evento extra de apagar, só para garantir caso o editor resista
+                                 e.dispatchEvent(new InputEvent('beforeinput', { inputType: 'deleteContentBackward', bubbles: true, cancelable: true }));
+                                 await this.dynamicSleep([150, 250]);
+                                 
+                                 // 4. Agora sim, escreve apenas o nome em texto limpo
+                                 await this.insertText(seg.name);
+                             }
+                             // --- FIM DA MODIFICAÇÃO ---
+
                         } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
                              await this.clickDialogTab('voice');
