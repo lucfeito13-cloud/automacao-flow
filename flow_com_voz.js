@@ -1332,71 +1332,71 @@
             btn.click();
             await this.dynamicSleep(CONFIG.DELAY_LONG);
         }
+async prepareAndSubmit(promptObj) {
+    const MAX_SUBMIT_RETRIES = 2;
 
-        async prepareAndSubmit(promptObj) {
-            const MAX_SUBMIT_RETRIES = 2;
+    for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
+        try {
+            this.logDebug(`Preparando prompt ${promptObj.promptNum}: "${promptObj.text.substring(0,50)}..."${attempt > 1 ? ` (tentativa ${attempt})` : ''}`, 'info');
+            const segs = parsePrompt(promptObj.text);
+            await this.clearEditor();
+            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
 
-            for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
-                try {
-                    this.logDebug(`Preparando prompt ${promptObj.promptNum}: "${promptObj.text.substring(0,50)}..."${attempt > 1 ? ` (tentativa ${attempt})` : ''}`, 'info');
-                    const segs = parsePrompt(promptObj.text);
-                    await this.clearEditor();
-                    await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+            // ==========================================================
+            // PASSO 1: ANEXAR IMAGENS E LIMPAR O TEXTO (Ideia Genial)
+            // ==========================================================
+            // Pega apenas as referências de imagem desse prompt
+            const refsToAdd = segs.filter(s => s.type === 'ref').map(s => s.name);
+            const uniqueRefs = [...new Set(refsToAdd)]; // Remove duplicatas
 
-                    // ==========================================================
-                    // PASSO 1: ANEXAR IMAGENS E LIMPAR O TEXTO (Ideia Genial)
-                    // ==========================================================
-                    // Pega apenas as referências de imagem desse prompt
-                    const refsToAdd = segs.filter(s => s.type === 'ref').map(s => s.name);
-                    const uniqueRefs = [...new Set(refsToAdd)]; // Remove duplicatas
+            if (uniqueRefs.length > 0) {
+                for (const refName of uniqueRefs) {
+                    if (this.shouldStop || this.videoShouldStop) return false;
+                    await this.openAtSelector(); 
+                    await this.clickDialogTab('image');
+                    await this.searchAndSelect(refName); 
+                    await this.dynamicSleep([600, 800]); // Aguarda a imagem anexar no topo
+                }
+                
+                // Agora que as imagens estão salvas em cima, limpamos o editor para sumir com os "chips" visuais
+                await this.clearEditor();
+                await this.dynamicSleep([400, 600]);
+            }
 
-                    if (uniqueRefs.length > 0) {
-                        for (const refName of uniqueRefs) {
-                            if (this.shouldStop || this.videoShouldStop) return false;
-                            await this.openAtSelector(); 
-                            await this.clickDialogTab('image');
-                            await this.searchAndSelect(refName); 
-                            await this.dynamicSleep([600, 800]); // Aguarda a imagem anexar no topo
-                        }
-                        
-                        // Agora que as imagens estão salvas em cima, limpamos o editor para sumir com os "chips" visuais
-                        await this.clearEditor();
-                        await this.dynamicSleep([400, 600]);
-                    }
-
-                    // ==========================================================
-                    // PASSO 2: ESCREVER O PROMPT E ADICIONAR VOZES
-                    // ==========================================================
-                    for (const seg of segs) {
-                        if (this.shouldStop || this.videoShouldStop) return false;
-                        
-                        if (seg.type === 'text') {
-                             await this.insertText(seg.content);
-                        } else if (seg.type === 'ref') { 
-                             // Como a imagem já foi anexada no Passo 1, aqui ele APENAS digita o nome (texto puro)
-                             await this.insertText(seg.name); 
-                        } else if (seg.type === 'voice') {
-                             // As vozes continuam precisando abrir o menu no local exato do texto
-                             await this.openAtSelector(); 
-                             await this.clickDialogTab('voice');
-                             await this.searchAndSelectVoice(seg.name); 
-                             await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                        }
-                    }
-
-                    await this.clickSubmit();
-                    this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
-                    return true;
-                } catch (err) {
-                    this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
-                    if (attempt < MAX_SUBMIT_RETRIES) {
-                        await this.resetEditor();
-                        await this.dynamicSleep([2000, 3000]);
-                    }
+            // ==========================================================
+            // PASSO 2: ESCREVER O PROMPT E ADICIONAR VOZES
+            // ==========================================================
+            for (const seg of segs) {
+                if (this.shouldStop || this.videoShouldStop) return false;
+                
+                if (seg.type === 'text') {
+                     await this.insertText(seg.content);
+                } else if (seg.type === 'ref') { 
+                     // MODIFICADO AQUI: Como a imagem já foi anexada, pulamos essa parte 
+                     // para não escrever o nome da referência de volta na caixa de texto.
+                     continue; 
+                } else if (seg.type === 'voice') {
+                     // As vozes continuam precisando abrir o menu no local exato do texto
+                     await this.openAtSelector(); 
+                     await this.clickDialogTab('voice');
+                     await this.searchAndSelectVoice(seg.name); 
+                     await this.dynamicSleep(CONFIG.DELAY_SHORT);
                 }
             }
-            return false;
+
+            await this.clickSubmit();
+            this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
+            return true;
+        } catch (err) {
+            this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
+            if (attempt < MAX_SUBMIT_RETRIES) {
+                await this.resetEditor();
+                await this.dynamicSleep([2000, 3000]);
+            }
         }
+    }
+    return false;
+}
         /**
          * Força reset do editor: fecha dialogs, limpa conteúdo via botão "Apagar comando".
          */
