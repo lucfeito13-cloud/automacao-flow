@@ -1351,6 +1351,28 @@
                              await this.clickDialogTab('image');
                              await this.searchAndSelect(seg.name); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
+
+                             // --- INÍCIO DA MODIFICAÇÃO (Apagar referência visual) ---
+                             const e = this.getEditor();
+                             if (e) {
+                                 e.focus();
+                                 await this.dynamicSleep([200, 300]);
+                                 
+                                 // Simula apertar a tecla "Backspace" duas vezes
+                                 e.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true }));
+                                 await this.dynamicSleep([100, 150]);
+                                 e.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true }));
+                                 await this.dynamicSleep([100, 150]);
+
+                                 // Garantia extra caso o teclado falhe
+                                 document.execCommand('delete', false, null);
+                                 await this.dynamicSleep([150, 250]);
+                                 
+                                 // Insere o texto normal
+                                 await this.insertText(seg.name);
+                             }
+                             // --- FIM DA MODIFICAÇÃO ---
+
                         } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
                              await this.clickDialogTab('voice');
