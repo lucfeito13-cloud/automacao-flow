@@ -643,13 +643,10 @@
             this.videoResultsPerPrompt = 3;
             this.videoSceneCount      = 0;
             this.videoSceneAssignments = new Map(); // 'Cena X' → [{ imgNum, workflowId }]
-            this._flowHiddenState = document.hidden;
-            this._flowHiddenNoticeShown = false;
             this.initUI();
             this.setupTextWatcher();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            this.setupHiddenModeWatcher();
             log.success('Flow Automation v4.0 inicializado!');
             if (!_authToken) log.warn('Token ainda não capturado — faça qualquer ação na página.');
         }
@@ -859,73 +856,19 @@
         sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
         dynamicSleep(val) {
-            let ms;
             if (Array.isArray(val)) {
                 const [min, max] = val;
-                ms = Math.round(min + Math.random() * (max - min));
-            } else {
-                ms = val;
+                return this.sleep(Math.round(min + Math.random() * (max - min)));
             }
-
-            // Em aba oculta/minimizada, dá mais folga para os timers.
-            if (this.isFlowPageHidden()) {
-                ms = Math.max(Math.round(ms * 2.5), 800);
-            }
-
-            return this.sleep(ms);
+            return this.sleep(val);
         }
+
         getScroller() {
             return document.querySelector('[data-testid="virtuoso-scroller"]') ||
                    document.querySelector('[data-virtuoso-scroller="true"]');
         }
 
         esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
-        isFlowPageHidden() {
-            return document.hidden || document.visibilityState === 'hidden';
-        }
-
-        isElementStable(el) {
-            return !!el && el.isConnected && document.contains(el);
-        }
-
-        setupHiddenModeWatcher() {
-            const onChange = () => {
-                const hidden = this.isFlowPageHidden();
-                if (hidden === this._flowHiddenState) return;
-                this._flowHiddenState = hidden;
-
-                if (hidden) {
-                    this._flowHiddenNoticeShown = false;
-                    this.logDebug('Aba oculta/minimizada detectada. Entrando em modo seguro.', 'warning');
-                } else {
-                    this._flowHiddenNoticeShown = false;
-                    this.logDebug('Aba voltou a ficar visível. Retomando sincronização normal.', 'success');
-                }
-            };
-
-            document.addEventListener('visibilitychange', onChange, true);
-            window.addEventListener('focus', onChange, true);
-            window.addEventListener('blur', onChange, true);
-        }
-
-        async waitForVisibleReturn(timeout = 300000, reason = 'continuar') {
-            if (!this.isFlowPageHidden()) return true;
-
-            if (!this._flowHiddenNoticeShown) {
-                this._flowHiddenNoticeShown = true;
-                this.logDebug(`Aguardando a aba voltar para ${reason}...`, 'warning');
-            }
-
-            const start = Date.now();
-            while (this.isFlowPageHidden()) {
-                if (Date.now() - start > timeout) return false;
-                await this.sleep(500);
-            }
-
-            this._flowHiddenNoticeShown = false;
-            await this.sleep(350);
-            return true;
-        }        
 
         // ──────────────────────────────────────────────
         // GRID + TILES
@@ -1114,172 +1057,98 @@
             const scroller = this.getScroller();
             const rowsNeeded = Math.max(...matrix.map(s => s.row)) + 1;
             const start = Date.now();
-            let hiddenPausedMs = 0;
-
-            const effectiveElapsed = () => Date.now() - start - hiddenPausedMs;
-
-            const pauseIfHidden = async (reason) => {
-                if (!this.isFlowPageHidden()) return true;
-
-                const pauseStart = Date.now();
-                this.logDebug(`Aba oculta durante "${reason}". Pausando a contagem até voltar.`, 'warning');
-                const ok = await this.waitForVisibleReturn(300000, reason);
-                hiddenPausedMs += Date.now() - pauseStart;
-                return ok;
-            };
-
-            if (scroller) {
-                scroller.scrollTop = 0;
-                await this.sleep(500);
-            }
-
+            if (scroller) { scroller.scrollTop = 0; await this.sleep(500); }
             this.logDebug(`Aguardando ${matrix.length} slot(s) em ${rowsNeeded} linha(s)...`, 'info');
 
-            const confirmedLoaded = new Set();
-            const confirmedError = new Set();
+            // Tracking: uma vez confirmado como loaded (UUID novo), não re-verifica.
+            // Isso evita falsos "pending" quando o Virtuoso destrói/recria DOM ao scrollar.
+            const confirmedLoaded = new Set(); // índices de matrix[] já confirmados
+            const confirmedError  = new Set();
 
             const countStates = () => {
                 let loaded = 0, errors = 0, pending = 0;
-
                 for (let i = 0; i < matrix.length; i++) {
-                    if (confirmedLoaded.has(i)) {
-                        loaded++;
-                        continue;
-                    }
-
-                    if (confirmedError.has(i)) {
-                        errors++;
-                        continue;
-                    }
-
+                    if (confirmedLoaded.has(i)) { loaded++; continue; }
+                    if (confirmedError.has(i))  { errors++; continue; }
                     const slot = matrix[i];
                     const tile = this.getTileAt(slot.row, slot.col);
-
-                    if (!tile) {
-                        pending++;
-                        continue;
-                    }
-
+                    if (!tile) { pending++; continue; }
                     if (this.isTileLoaded(tile)) {
                         const uuid = this.getUuidFromTile(tile);
                         if (uuid && !beforeUuids.has(uuid)) {
                             loaded++;
                             confirmedLoaded.add(i);
+                            // Captura dados já para evitar re-scroll na Fase 3
                             slot.uuid = uuid;
                             slot.src = this.getImgSrcFromTile(tile);
                             slot.workflowId = this.getWorkflowIdFromTile(tile);
-                        } else {
-                            pending++;
                         }
+                        else pending++;
                     } else if (this.isTileError(tile)) {
                         errors++;
                         confirmedError.add(i);
-                    } else {
-                        pending++;
                     }
+                    else { pending++; }
                 }
-
                 return { loaded, errors, pending };
             };
 
+            // Fase 1: aguarda primeiro slot resolver
             let detected = false;
-            while (effectiveElapsed() < CONFIG.GENERATION_TIMEOUT) {
+            while (Date.now() - start < CONFIG.GENERATION_TIMEOUT) {
                 if (this.shouldStop || this.videoShouldStop) return;
-
-                const canContinue = await pauseIfHidden('aguardo da geração');
-                if (!canContinue) break;
-
                 await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
                 if (scroller) scroller.scrollTop = 0;
-
-                const { loaded, errors } = countStates();
-                if (loaded + errors > 0) {
-                    detected = true;
-                    break;
-                }
-            }
-
-            if (!detected) {
-                for (const s of matrix) s.state = 'error';
-                return;
-            }
-
-            let lastPending = -1;
-            let pendingZeroAt = null;
-
-            while (effectiveElapsed() < CONFIG.GENERATION_TIMEOUT) {
-                if (this.shouldStop || this.videoShouldStop) return;
-
-                const canContinue = await pauseIfHidden('estabilização da geração');
-                if (!canContinue) break;
-
-                await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
-                if (scroller) scroller.scrollTop = 0;
-
                 const { loaded, errors, pending } = countStates();
+                if (loaded + errors > 0) { detected = true; break; }
+            }
+            if (!detected) { for (const s of matrix) s.state = 'error'; return; }
 
+            // Fase 2: aguarda pending === 0 estável
+            let lastPending = -1, pendingZeroAt = null;
+            while (Date.now() - start < CONFIG.GENERATION_TIMEOUT) {
+                if (this.shouldStop || this.videoShouldStop) return;
+                await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
+                if (scroller) scroller.scrollTop = 0;
+                const { loaded, errors, pending } = countStates();
                 if (pending !== lastPending) {
                     lastPending = pending;
                     pendingZeroAt = pending === 0 ? Date.now() : null;
                     this.logDebug(`Progresso: ${loaded} ✅  ${errors} ❌  ${pending} ⏳`, 'info');
                 }
-
                 if (pending === 0 && (Date.now() - (pendingZeroAt || Date.now())) >= CONFIG.STABILIZE_TIME) {
                     this.logDebug(`✅ Lote finalizado: ${loaded} ok, ${errors} erros`, 'success');
                     break;
                 }
             }
 
+            // Fase 3: classifica slots — apenas os que NÃO foram confirmados durante polling
             this.logDebug('Classificando slots finais...', 'info');
-
             for (let i = 0; i < matrix.length; i++) {
                 const slot = matrix[i];
-
                 if (confirmedLoaded.has(i)) {
                     slot.state = 'loaded';
                     continue;
                 }
-
                 if (confirmedError.has(i)) {
                     slot.state = 'error';
                     continue;
                 }
-
+                // Slot não confirmado: tenta scroll e verificação final
                 if (this.shouldStop || this.videoShouldStop) return;
-
-                const canContinue = await pauseIfHidden('classificação final do lote');
-                if (!canContinue) {
-                    slot.state = 'error';
-                    continue;
-                }
-
                 await this.scrollToRow(slot.row);
                 const tile = this.getTileAt(slot.row, slot.col);
-
-                if (!tile) {
-                    slot.state = 'error';
-                    continue;
-                }
-
+                if (!tile) { slot.state = 'error'; continue; }
                 if (this.isTileLoaded(tile)) {
                     const uuid = this.getUuidFromTile(tile);
                     if (uuid && !beforeUuids.has(uuid)) {
-                        slot.state = 'loaded';
-                        slot.uuid = uuid;
+                        slot.state = 'loaded'; slot.uuid = uuid;
                         slot.src = this.getImgSrcFromTile(tile);
                         slot.workflowId = this.getWorkflowIdFromTile(tile);
-                    } else {
-                        slot.state = 'error';
-                    }
-                } else {
-                    slot.state = 'error';
-                }
+                    } else { slot.state = 'error'; }
+                } else { slot.state = 'error'; }
             }
-
-            if (scroller) {
-                scroller.scrollTop = 0;
-                await this.sleep(300);
-            }
+            if (scroller) { scroller.scrollTop = 0; await this.sleep(300); }
         }
 
         // ──────────────────────────────────────────────
@@ -1288,123 +1157,48 @@
 
         getEditor() { return document.querySelector('[data-slate-editor="true"]'); }
 
-
         async clearEditor() {
-            let lastErr = null;
-
-            for (let attempt = 1; attempt <= 3; attempt++) {
-                try {
-                    let e = this.getEditor();
-
-                    if (!this.isElementStable(e)) {
-                        if (this.isFlowPageHidden()) {
-                            const ok = await this.waitForVisibleReturn(120000, 'encontrar o editor');
-                            if (!ok) throw new Error('Aba permaneceu oculta por muito tempo');
-                        }
-                        e = this.getEditor();
-                    }
-
-                    if (!this.isElementStable(e)) throw new Error('Editor Slate não encontrado');
-
-                    e.focus();
-                    await this.dynamicSleep(CONFIG.DELAY_SHORT);
-
-                    const sel = window.getSelection();
-                    const range = document.createRange();
-                    range.selectNodeContents(e);
-                    sel.removeAllRanges();
-                    sel.addRange(range);
-
-                    await this.dynamicSleep([180, 280]);
-                    document.execCommand('delete', false, null);
-                    await this.dynamicSleep(CONFIG.DELAY_SHORT);
-
-                    if ((e.textContent || '').trim().length > 0) {
-                        document.execCommand('selectAll', false, null);
-                        await this.dynamicSleep([150, 250]);
-                        document.execCommand('delete', false, null);
-                        await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                    }
-
-                    return;
-                } catch (err) {
-                    lastErr = err;
-
-                    if (this.isFlowPageHidden()) {
-                        const ok = await this.waitForVisibleReturn(120000, 'limpar o editor');
-                        if (!ok) break;
-                    }
-
-                    await this.sleep(250);
-                }
-            }
-
-            throw lastErr || new Error('Editor Slate não encontrado');
+            const e = this.getEditor();
+            if (!e) throw new Error('Editor Slate não encontrado');
+            e.focus(); await this.dynamicSleep(CONFIG.DELAY_SHORT);
+            document.execCommand('selectAll', false, null); await this.dynamicSleep([250, 400]);
+            document.execCommand('delete', false, null); await this.dynamicSleep(CONFIG.DELAY_SHORT);
         }
 
+        async insertText(text) {
+            const e = this.getEditor();
+            if (!e) throw new Error('Editor não encontrado');
+            e.focus(); await this.dynamicSleep([250, 400]);
+            e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
+            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+        }
 
-               async openAtSelector() {
-            const MAX_AT_RETRIES = this.isFlowPageHidden() ? 5 : 3;
-
+        async openAtSelector() {
+            const MAX_AT_RETRIES = 3;
             for (let attempt = 1; attempt <= MAX_AT_RETRIES; attempt++) {
-                let e = this.getEditor();
-
-                if (!this.isElementStable(e)) {
-                    if (this.isFlowPageHidden()) {
-                        const ok = await this.waitForVisibleReturn(120000, 'abrir o seletor @');
-                        if (!ok) break;
-                    }
-                    e = this.getEditor();
-                }
-
-                if (!this.isElementStable(e)) throw new Error('Editor não encontrado');
-
-                e.focus();
-                await this.dynamicSleep([250, 400]);
-
-                e.dispatchEvent(new KeyboardEvent('keydown', { key: '@', bubbles: true, cancelable: true }));
-                e.dispatchEvent(new KeyboardEvent('keypress', { key: '@', bubbles: true, cancelable: true }));
-                e.dispatchEvent(new KeyboardEvent('keyup', { key: '@', bubbles: true, cancelable: true }));
-
+                const e = this.getEditor();
+                if (!e) throw new Error('Editor não encontrado');
+                e.focus(); await this.dynamicSleep([250, 400]);
+                e.dispatchEvent(new KeyboardEvent('keydown', { key:'@', bubbles:true, cancelable:true }));
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-
                 let opened = false;
-                for (let i = 0; i < 24; i++) {
+                for (let i = 0; i < 20; i++) {
                     await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                    const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
-                    if (dialog && this.isElementStable(dialog)) {
-                        opened = true;
-                        break;
-                    }
+                    if (document.querySelector('[role="dialog"], [role="presentation"]')) { opened = true; break; }
                 }
-
                 if (opened) return;
-
                 this.logDebug(`⚠️ Diálogo @ não abriu (tentativa ${attempt}/${MAX_AT_RETRIES})`, 'error');
-
-                if (this.isFlowPageHidden()) {
-                    const ok = await this.waitForVisibleReturn(120000, 'retentar o seletor @');
-                    if (!ok) break;
-                }
-
-                e = this.getEditor();
-                if (this.isElementStable(e)) {
-                    e.focus();
-                    await this.sleep(150);
-                    e.dispatchEvent(new InputEvent('beforeinput', {
-                        bubbles: true,
-                        cancelable: true,
-                        inputType: 'deleteContentBackward'
-                    }));
-                }
-
+                e.focus(); await this.sleep(200);
+                e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'deleteContentBackward' }));
+                await this.sleep(200);
                 if (attempt < MAX_AT_RETRIES) {
-                    await this.dynamicSleep([1200, 1800]);
+                    await this.dynamicSleep([2000, 3000]);
+                    e.focus(); e.click(); await this.dynamicSleep([500, 800]);
                 }
             }
-
-            throw new Error('Diálogo @ não abriu após as tentativas');
+            throw new Error('Diálogo @ não abriu após ' + MAX_AT_RETRIES + ' tentativas');
         }
+
         // ============================================
         // O SEGREDO DAS ABAS DO RADIX
         // ============================================
@@ -1539,116 +1333,78 @@
             await this.dynamicSleep(CONFIG.DELAY_LONG);
         }
 
-            
-
         async prepareAndSubmit(promptObj) {
             const MAX_SUBMIT_RETRIES = 2;
 
             for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
                 try {
-                    this.logDebug(
-                        `Preparando prompt ${promptObj.promptNum}: "${promptObj.text.substring(0, 50)}..."${attempt > 1 ? ` (tentativa ${attempt})` : ''}`,
-                        'info'
-                    );
-
+                    this.logDebug(`Preparando prompt ${promptObj.promptNum}: "${promptObj.text.substring(0,50)}..."${attempt > 1 ? ` (tentativa ${attempt})` : ''}`, 'info');
                     const segs = parsePrompt(promptObj.text);
-
                     await this.clearEditor();
                     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-
                     for (const seg of segs) {
                         if (this.shouldStop || this.videoShouldStop) return false;
-
                         if (seg.type === 'text') {
-                            await this.insertText(seg.content);
-                        } else if (seg.type === 'ref') {
-                            await this.openAtSelector();
-                            await this.clickDialogTab('image');
-                            await this.searchAndSelect(seg.name);
-                            await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                             await this.insertText(seg.content);
+                        } else if (seg.type === 'ref') { 
+                             await this.openAtSelector(); 
+                             await this.clickDialogTab('image');
+                             await this.searchAndSelect(seg.name); 
+                             await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         } else if (seg.type === 'voice') {
-                            await this.openAtSelector();
-                            await this.clickDialogTab('voice');
-                            await this.searchAndSelectVoice(seg.name);
-                            await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                             await this.openAtSelector(); 
+                             await this.clickDialogTab('voice');
+                             await this.searchAndSelectVoice(seg.name); 
+                             await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         }
                     }
-
                     await this.clickSubmit();
                     this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
                     return true;
-
                 } catch (err) {
-                    this.logDebug(
-                        `⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`,
-                        'error'
-                    );
-
+                    this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
                     if (attempt < MAX_SUBMIT_RETRIES) {
-                        if (this.isFlowPageHidden()) {
-                            this.logDebug(
-                                `Aba oculta durante o prompt ${promptObj.promptNum}; aguardando voltar para retentar.`,
-                                'warning'
-                            );
-                            const ok = await this.waitForVisibleReturn(180000, `retentar o prompt ${promptObj.promptNum}`);
-                            if (!ok) break;
-                        }
-
                         await this.resetEditor();
                         await this.dynamicSleep([2000, 3000]);
                     }
                 }
             }
-
             return false;
         }
 
         /**
          * Força reset do editor: fecha dialogs, limpa conteúdo via botão "Apagar comando".
          */
-              async resetEditor() {
-            if (this.isFlowPageHidden()) {
-                const ok = await this.waitForVisibleReturn(120000, 'resetar o editor');
-                if (!ok) return;
-            }
-
+        async resetEditor() {
+            // 1. Fecha qualquer dialog aberto (seletor @)
             const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
             if (dialog) {
-                document.dispatchEvent(new KeyboardEvent('keydown', {
-                    key: 'Escape',
-                    code: 'Escape',
-                    keyCode: 27,
-                    bubbles: true
-                }));
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
                 await this.sleep(500);
             }
 
-            let editor = this.getEditor();
-            if (this.isElementStable(editor)) {
+            // 2. Escreve algo no editor para garantir que o botão X fica disponível
+            const editor = this.getEditor();
+            if (editor) {
                 editor.focus();
                 await this.sleep(200);
-                editor.dispatchEvent(new InputEvent('beforeinput', {
-                    bubbles: true,
-                    cancelable: true,
-                    inputType: 'insertText',
-                    data: ' reset'
-                }));
+                editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: ' reset' }));
                 await this.sleep(500);
             }
 
+            // 3. Clica no botão "Apagar comando" (ícone close)
             const closeBtn = [...document.querySelectorAll('button')].find(btn => {
                 const icon = btn.querySelector('i.google-symbols');
                 if (!icon || icon.textContent.trim() !== 'close') return false;
                 return btn.textContent.includes('Apagar') || btn.querySelector('span')?.textContent?.includes('Apagar');
             });
-
             if (closeBtn) {
                 closeBtn.click();
                 this.logDebug('Editor resetado via botão Apagar', 'info');
                 await this.sleep(800);
             } else {
-                editor = this.getEditor();
-                if (this.isElementStable(editor)) {
+                // Fallback: selectAll + delete
+                if (editor) {
                     editor.focus();
                     await this.sleep(200);
                     document.execCommand('selectAll', false, null);
@@ -1659,17 +1415,14 @@
                 }
             }
 
+            // 4. Fecha qualquer dialog que possa ter reaberto
             const dialog2 = document.querySelector('[role="dialog"], [role="presentation"]');
             if (dialog2) {
-                document.dispatchEvent(new KeyboardEvent('keydown', {
-                    key: 'Escape',
-                    code: 'Escape',
-                    keyCode: 27,
-                    bubbles: true
-                }));
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
                 await this.sleep(400);
             }
         }
+
         // ──────────────────────────────────────────────
         // API (rename + favorite via HTTP)
         // ──────────────────────────────────────────────
@@ -3411,12 +3164,6 @@
         async scrollToWorkflow(wfId) {
             const scroller = this.getScroller();
             if (!scroller) return null;
-
-            if (this.isFlowPageHidden()) {
-                const ok = await this.waitForVisibleReturn(180000, 'localizar o vídeo para ações de menu');
-                if (!ok) return null;
-            }
-
             scroller.scrollTop = 0;
             await this.sleep(600);
 
@@ -3425,15 +3172,14 @@
                 if (link) {
                     const tile = link.closest('[data-tile-id]');
                     if (tile) {
+                        // Pequeno scroll de ajuste para garantir que o menu do tile não seja coberto no bottom/top do virtualizer
                         const rect = tile.getBoundingClientRect();
                         const scrollerRect = scroller.getBoundingClientRect();
-
                         if (rect.top < scrollerRect.top + 50 || rect.bottom > scrollerRect.bottom - 50) {
                             const relativeTop = rect.top - scrollerRect.top;
                             scroller.scrollTop += (relativeTop - scrollerRect.height / 2 + rect.height / 2);
                             await this.sleep(300);
                         }
-
                         return tile;
                     }
                 }
@@ -3441,9 +3187,8 @@
                 const prev = scroller.scrollTop;
                 scroller.scrollTop += 450;
                 await this.sleep(400);
-                if (scroller.scrollTop === prev) break;
+                if (scroller.scrollTop === prev) break; // Chegou no fim
             }
-
             return null;
         }
 
