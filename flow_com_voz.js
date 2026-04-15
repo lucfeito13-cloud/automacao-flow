@@ -1,3 +1,4 @@
+
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
 // Versão 4.0 - Drag & Drop + API Rename (Flow Voz)
@@ -1351,6 +1352,24 @@
                              await this.clickDialogTab('image');
                              await this.searchAndSelect(seg.name); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                             
+                             // --- INÍCIO DA MODIFICAÇÃO (Apagar referência visual e digitar só texto) ---
+                             const e = this.getEditor();
+                             if (e) {
+                                 e.focus();
+                                 await this.dynamicSleep([150, 250]);
+                                 
+                                 // Dá 2 backspaces para garantir que apaga o espaço extra e o "chip/token" da imagem
+                                 e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'deleteContentBackward' }));
+                                 await this.dynamicSleep([100, 150]);
+                                 e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'deleteContentBackward' }));
+                                 await this.dynamicSleep([150, 250]);
+                                 
+                                 // Insere apenas o nome da referência em formato de texto comum
+                                 await this.insertText(seg.name);
+                             }
+                             // --- FIM DA MODIFICAÇÃO ---
+
                         } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
                              await this.clickDialogTab('voice');
