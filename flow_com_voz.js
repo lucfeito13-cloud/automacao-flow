@@ -1342,47 +1342,48 @@
                     const segs = parsePrompt(promptObj.text);
                     await this.clearEditor();
                     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+
+                    // ==========================================================
+                    // PASSO 1: ANEXAR IMAGENS E LIMPAR O TEXTO (Ideia Genial)
+                    // ==========================================================
+                    // Pega apenas as referências de imagem desse prompt
+                    const refsToAdd = segs.filter(s => s.type === 'ref').map(s => s.name);
+                    const uniqueRefs = [...new Set(refsToAdd)]; // Remove duplicatas
+
+                    if (uniqueRefs.length > 0) {
+                        for (const refName of uniqueRefs) {
+                            if (this.shouldStop || this.videoShouldStop) return false;
+                            await this.openAtSelector(); 
+                            await this.clickDialogTab('image');
+                            await this.searchAndSelect(refName); 
+                            await this.dynamicSleep([600, 800]); // Aguarda a imagem anexar no topo
+                        }
+                        
+                        // Agora que as imagens estão salvas em cima, limpamos o editor para sumir com os "chips" visuais
+                        await this.clearEditor();
+                        await this.dynamicSleep([400, 600]);
+                    }
+
+                    // ==========================================================
+                    // PASSO 2: ESCREVER O PROMPT E ADICIONAR VOZES
+                    // ==========================================================
                     for (const seg of segs) {
                         if (this.shouldStop || this.videoShouldStop) return false;
+                        
                         if (seg.type === 'text') {
                              await this.insertText(seg.content);
                         } else if (seg.type === 'ref') { 
-                             await this.openAtSelector(); 
-                             await this.clickDialogTab('image');
-                             await this.searchAndSelect(seg.name); 
-                             // Damos um tempo extra para o "chip" da imagem aparecer na tela
-                             await this.dynamicSleep([400, 600]); 
-
-                             // --- INÍCIO DA MODIFICAÇÃO FORÇADA (Selecionar e Apagar) ---
-                             const e = this.getEditor();
-                             if (e) {
-                                 e.focus();
-                                 
-                                 // 1. Foca e seleciona o "chip" puxando o cursor para trás (como Shift + Seta Esquerda)
-                                 const sel = window.getSelection();
-                                 sel.modify('extend', 'backward', 'character');
-                                 await this.dynamicSleep([150, 250]);
-                                 
-                                 // 2. Força o comando nativo do navegador para deletar o que foi selecionado
-                                 document.execCommand('delete', false, null);
-                                 await this.dynamicSleep([150, 250]);
-                                 
-                                 // 3. Manda um evento extra de apagar, só para garantir caso o editor resista
-                                 e.dispatchEvent(new InputEvent('beforeinput', { inputType: 'deleteContentBackward', bubbles: true, cancelable: true }));
-                                 await this.dynamicSleep([150, 250]);
-                                 
-                                 // 4. Agora sim, escreve apenas o nome em texto limpo
-                                 await this.insertText(seg.name);
-                             }
-                             // --- FIM DA MODIFICAÇÃO ---
-
+                             // Como a imagem já foi anexada no Passo 1, aqui ele APENAS digita o nome (texto puro)
+                             await this.insertText(seg.name); 
                         } else if (seg.type === 'voice') {
+                             // As vozes continuam precisando abrir o menu no local exato do texto
                              await this.openAtSelector(); 
                              await this.clickDialogTab('voice');
                              await this.searchAndSelectVoice(seg.name); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         }
                     }
+
                     await this.clickSubmit();
                     this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
                     return true;
@@ -1396,7 +1397,6 @@
             }
             return false;
         }
-
         /**
          * Força reset do editor: fecha dialogs, limpa conteúdo via botão "Apagar comando".
          */
