@@ -1351,6 +1351,19 @@
                              await this.clickDialogTab('image');
                              await this.searchAndSelect(seg.name); 
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                             
+                             // --- INÍCIO DA CORREÇÃO (APAGAR CHIP DO TEXTO) ---
+                             const editor = this.getEditor();
+                             if (editor) {
+                                 editor.focus();
+                                 await this.dynamicSleep([150, 250]);
+                                 // Simula o Backspace para remover o quadradinho
+                                 editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true }));
+                                 editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'deleteContentBackward' }));
+                                 await this.dynamicSleep([150, 250]);
+                             }
+                             // --- FIM DA CORREÇÃO ---
+
                         } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
                              await this.clickDialogTab('voice');
