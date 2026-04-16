@@ -1157,195 +1157,22 @@
 
         getEditor() { return document.querySelector('[data-slate-editor="true"]'); }
 
-async clearEditor() {
-    const e = this.getEditor();
-    if (!e) throw new Error('Editor Slate não encontrado');
+        async clearEditor() {
+            const e = this.getEditor();
+            if (!e) throw new Error('Editor Slate não encontrado');
+            e.focus(); await this.dynamicSleep(CONFIG.DELAY_SHORT);
+            document.execCommand('selectAll', false, null); await this.dynamicSleep([250, 400]);
+            document.execCommand('delete', false, null); await this.dynamicSleep(CONFIG.DELAY_SHORT);
+        }
 
-    e.focus();
-    await this.dynamicSleep([120, 180]);
+        async insertText(text) {
+            const e = this.getEditor();
+            if (!e) throw new Error('Editor não encontrado');
+            e.focus(); await this.dynamicSleep([250, 400]);
+            e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
+            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+        }
 
-    // 1) apaga primeiro as caixas/chips como o teclado faria
-    await this.deleteEditorBoxesWithKeyboard(40);
-
-    // 2) depois limpa texto restante
-    e.focus();
-    await this.dynamicSleep([80, 120]);
-
-    document.execCommand('selectAll', false, null);
-    await this.dynamicSleep([100, 160]);
-
-    document.execCommand('delete', false, null);
-    await this.dynamicSleep([120, 180]);
-
-    // 3) tenta apagar caixas remanescentes mais uma vez
-    await this.deleteEditorBoxesWithKeyboard(20);
-
-    // 4) normalização final
-    e.focus();
-    await this.dynamicSleep([80, 120]);
-
-    e.dispatchEvent(new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertText',
-        data: ' '
-    }));
-    await this.dynamicSleep([70, 110]);
-
-    e.dispatchEvent(new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'deleteContentBackward',
-        data: null
-    }));
-    await this.dynamicSleep([100, 160]);
-
-    e.blur();
-    await this.dynamicSleep([80, 120]);
-    e.focus();
-    await this.dynamicSleep([100, 160]);
-}
-async insertText(text) {
-    const e = this.getEditor();
-    if (!e) throw new Error('Editor não encontrado');
-    e.focus(); await this.dynamicSleep([250, 400]);
-    e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
-    await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-}
-
-async isEditorReallyEmpty() {
-    const e = this.getEditor();
-    if (!e) return true;
-
-    const text = (e.textContent || '')
-        .replace(/\u200B/g, '')
-        .replace(/\s+/g, '')
-        .trim();
-
-    const chips = e.querySelectorAll('img, [data-lexical-decorator], [contenteditable="false"], mention, [data-slate-string], [data-slate-node]');
-    
-    return text === '' && chips.length === 0;
-}
-
-async clickNativeClearMultiple(times = 3) {
-    for (let i = 0; i < times; i++) {
-        const nativeClearBtn = [...document.querySelectorAll('button')].find(btn => {
-            const icon = btn.querySelector('i.google-symbols');
-            const txt = (btn.textContent || '').toLowerCase();
-            const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-            const title = (btn.getAttribute('title') || '').toLowerCase();
-
-            return (
-                icon?.textContent?.trim() === 'close' ||
-                txt.includes('apagar comando') ||
-                aria.includes('apagar comando') ||
-                title.includes('apagar comando')
-            );
-        });
-
-        if (!nativeClearBtn || nativeClearBtn.disabled) break;
-
-        nativeClearBtn.click();
-        await this.dynamicSleep([250, 450]);
-
-        const empty = await this.isEditorReallyEmpty();
-        if (empty) return true;
-    }
-
-    return await this.isEditorReallyEmpty();
-}
-
-async normalizeEditorSelection() {
-    const e = this.getEditor();
-    if (!e) throw new Error('Editor não encontrado');
-
-    e.focus();
-    await this.dynamicSleep([120, 180]);
-
-    e.dispatchEvent(new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertText',
-        data: ' '
-    }));
-    await this.dynamicSleep([70, 110]);
-
-    e.dispatchEvent(new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'deleteContentBackward',
-        data: null
-    }));
-    await this.dynamicSleep([140, 220]);
-}
-        async countEditorBoxes() {
-    const e = this.getEditor();
-    if (!e) return 0;
-
-    return e.querySelectorAll(
-        'img, [contenteditable="false"], [data-lexical-decorator], mention, [data-slate-node]'
-    ).length;
-}
-
-async deleteEditorBoxesWithKeyboard(maxSteps = 30) {
-    const e = this.getEditor();
-    if (!e) throw new Error('Editor não encontrado');
-
-    const placeCaretAtEnd = () => {
-        e.focus();
-        const sel = window.getSelection();
-        if (!sel) return;
-
-        const range = document.createRange();
-        range.selectNodeContents(e);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
-    };
-
-    const pressBackspace = async () => {
-        e.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'Backspace',
-            code: 'Backspace',
-            keyCode: 8,
-            which: 8,
-            bubbles: true,
-            cancelable: true
-        }));
-
-        e.dispatchEvent(new InputEvent('beforeinput', {
-            bubbles: true,
-            cancelable: true,
-            inputType: 'deleteContentBackward',
-            data: null
-        }));
-
-        e.dispatchEvent(new KeyboardEvent('keyup', {
-            key: 'Backspace',
-            code: 'Backspace',
-            keyCode: 8,
-            which: 8,
-            bubbles: true,
-            cancelable: true
-        }));
-
-        await this.dynamicSleep([80, 140]);
-    };
-
-    for (let i = 0; i < maxSteps; i++) {
-        const boxes = await this.countEditorBoxes();
-        if (boxes <= 0) break;
-
-        placeCaretAtEnd();
-        await this.dynamicSleep([60, 100]);
-
-        await pressBackspace();
-        await this.dynamicSleep([80, 140]);
-    }
-
-    placeCaretAtEnd();
-    await this.dynamicSleep([60, 100]);
-}
         async openAtSelector() {
             const MAX_AT_RETRIES = 3;
             for (let attempt = 1; attempt <= MAX_AT_RETRIES; attempt++) {
@@ -1507,60 +1334,43 @@ async deleteEditorBoxesWithKeyboard(maxSteps = 30) {
         }
 
         async prepareAndSubmit(promptObj) {
-    const MAX_SUBMIT_RETRIES = 2;
+            const MAX_SUBMIT_RETRIES = 2;
 
-    for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
-        try {
-            this.logDebug(`Preparando prompt ${promptObj.promptNum}: "${promptObj.text.substring(0,50)}..."${attempt > 1 ? ` (tentativa ${attempt})` : ''}`, 'info');
-
-            const segs = parsePrompt(promptObj.text);
-
-            const refs = segs.filter(s => s.type === 'ref');
-            const voices = segs.filter(s => s.type === 'voice');
-            const texts = segs.filter(s => s.type === 'text' && s.content && s.content.trim());
-
-            await this.clearEditor();
-            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-
-            for (const seg of refs) {
-                if (this.shouldStop || this.videoShouldStop) return false;
-                await this.openAtSelector();
-                await this.clickDialogTab('image');
-                await this.searchAndSelect(seg.name);
-                await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                await this.normalizeEditorSelection();
+            for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
+                try {
+                    this.logDebug(`Preparando prompt ${promptObj.promptNum}: "${promptObj.text.substring(0,50)}..."${attempt > 1 ? ` (tentativa ${attempt})` : ''}`, 'info');
+                    const segs = parsePrompt(promptObj.text);
+                    await this.clearEditor();
+                    await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+                    for (const seg of segs) {
+                        if (this.shouldStop || this.videoShouldStop) return false;
+                        if (seg.type === 'text') {
+                             await this.insertText(seg.content);
+                        } else if (seg.type === 'ref') { 
+                             await this.openAtSelector(); 
+                             await this.clickDialogTab('image');
+                             await this.searchAndSelect(seg.name); 
+                             await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                        } else if (seg.type === 'voice') {
+                             await this.openAtSelector(); 
+                             await this.clickDialogTab('voice');
+                             await this.searchAndSelectVoice(seg.name); 
+                             await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                        }
+                    }
+                    await this.clickSubmit();
+                    this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
+                    return true;
+                } catch (err) {
+                    this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
+                    if (attempt < MAX_SUBMIT_RETRIES) {
+                        await this.resetEditor();
+                        await this.dynamicSleep([2000, 3000]);
+                    }
+                }
             }
-
-            for (const seg of voices) {
-                if (this.shouldStop || this.videoShouldStop) return false;
-                await this.openAtSelector();
-                await this.clickDialogTab('voice');
-                await this.searchAndSelectVoice(seg.name);
-                await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                await this.normalizeEditorSelection();
-            }
-
-            const finalText = texts.map(t => t.content.trim()).join(' ').trim();
-            if (finalText) {
-                await this.insertText(finalText);
-                await this.dynamicSleep(CONFIG.DELAY_SHORT);
-            }
-
-            await this.clickSubmit();
-            this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
-            return true;
-
-        } catch (err) {
-            this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
-            if (attempt < MAX_SUBMIT_RETRIES) {
-                await this.resetEditor();
-                await this.dynamicSleep([2000, 3000]);
-            }
+            return false;
         }
-    }
-
-    return false;
-}
 
         /**
          * Força reset do editor: fecha dialogs, limpa conteúdo via botão "Apagar comando".
