@@ -1151,7 +1151,7 @@
             if (scroller) { scroller.scrollTop = 0; await this.sleep(300); }
         }
 
-        // ──────────────────────────────────────────────
+       // ──────────────────────────────────────────────
         // EDITOR (Slate)
         // ──────────────────────────────────────────────
 
@@ -1160,11 +1160,26 @@
         async clearEditor() {
             const e = this.getEditor();
             if (!e) throw new Error('Editor Slate não encontrado');
-            e.focus(); await this.dynamicSleep(CONFIG.DELAY_SHORT);
-            document.execCommand('selectAll', false, null); await this.dynamicSleep([250, 400]);
-            document.execCommand('delete', false, null); await this.dynamicSleep(CONFIG.DELAY_SHORT);
-        }
+            
+            e.focus(); 
+            await this.dynamicSleep(CONFIG.DELAY_SHORT);
+            
+            // 1. Seleciona tudo
+            document.execCommand('selectAll', false, null); 
+            await this.dynamicSleep([250, 400]);
+            
+            // 2. Apaga visualmente
+            document.execCommand('delete', false, null); 
+            await this.dynamicSleep([150, 300]);
 
+            // 3. O SEGREDO PARA O SLATE/REACT: Forçar os eventos de teclado para atualizar o estado interno
+            e.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'deleteContentBackward' }));
+            e.dispatchEvent(new Event('input', { bubbles: true }));
+            e.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true }));
+            e.dispatchEvent(new KeyboardEvent('keyup', { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true }));
+            
+            await this.dynamicSleep(CONFIG.DELAY_SHORT);
+        }
         async insertText(text) {
             const e = this.getEditor();
             if (!e) throw new Error('Editor não encontrado');
