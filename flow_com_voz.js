@@ -1151,43 +1151,84 @@
             if (scroller) { scroller.scrollTop = 0; await this.sleep(300); }
         }
 
-       // ──────────────────────────────────────────────
+        // ──────────────────────────────────────────────
         // EDITOR (Slate)
         // ──────────────────────────────────────────────
 
         getEditor() { return document.querySelector('[data-slate-editor="true"]'); }
 
         async clearEditor() {
-            const e = this.getEditor();
-            if (!e) throw new Error('Editor Slate não encontrado');
-            
-            e.focus(); 
-            await this.dynamicSleep(CONFIG.DELAY_SHORT);
-            
-            // 1. Seleciona tudo
-            document.execCommand('selectAll', false, null); 
-            await this.dynamicSleep([250, 400]);
-            
-            // 2. Apaga visualmente
-            document.execCommand('delete', false, null); 
-            await this.dynamicSleep([150, 300]);
+    const e = this.getEditor();
+    if (!e) throw new Error('Editor Slate não encontrado');
 
-            // 3. O SEGREDO PARA O SLATE/REACT: Forçar os eventos de teclado para atualizar o estado interno
-            e.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'deleteContentBackward' }));
-            e.dispatchEvent(new Event('input', { bubbles: true }));
-            e.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true }));
-            e.dispatchEvent(new KeyboardEvent('keyup', { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true }));
-            
-            await this.dynamicSleep(CONFIG.DELAY_SHORT);
-        }
+    e.focus();
+    await this.dynamicSleep([180, 260]);
+
+    const nativeClearBtn = [...document.querySelectorAll('button')].find(btn => {
+        const icon = btn.querySelector('i.google-symbols');
+        const txt = (btn.textContent || '').toLowerCase();
+        return icon?.textContent?.trim() === 'close' || txt.includes('apagar comando');
+    });
+
+    if (nativeClearBtn && !nativeClearBtn.disabled) {
+        nativeClearBtn.click();
+        await this.dynamicSleep([500, 800]);
+    } else {
+        document.execCommand('selectAll', false, null);
+        await this.dynamicSleep([180, 260]);
+        document.execCommand('delete', false, null);
+        await this.dynamicSleep([180, 260]);
+    }
+
+    e.focus();
+    await this.dynamicSleep([120, 180]);
+    e.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertText',
+        data: ' '
+    }));
+    await this.dynamicSleep([80, 120]);
+
+    e.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'deleteContentBackward',
+        data: null
+    }));
+    await this.dynamicSleep([180, 260]);
+}
         async insertText(text) {
-            const e = this.getEditor();
-            if (!e) throw new Error('Editor não encontrado');
-            e.focus(); await this.dynamicSleep([250, 400]);
-            e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
-            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-        }
+    const e = this.getEditor();
+    if (!e) throw new Error('Editor não encontrado');
+    e.focus(); await this.dynamicSleep([250, 400]);
+    e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
+    await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+}
 
+async normalizeEditorSelection() {
+    const e = this.getEditor();
+    if (!e) throw new Error('Editor não encontrado');
+
+    e.focus();
+    await this.dynamicSleep([120, 180]);
+
+    e.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertText',
+        data: ' '
+    }));
+    await this.dynamicSleep([70, 110]);
+
+    e.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'deleteContentBackward',
+        data: null
+    }));
+    await this.dynamicSleep([140, 220]);
+}
         async openAtSelector() {
             const MAX_AT_RETRIES = 3;
             for (let attempt = 1; attempt <= MAX_AT_RETRIES; attempt++) {
@@ -1347,61 +1388,51 @@
             btn.click();
             await this.dynamicSleep(CONFIG.DELAY_LONG);
         }
-async prepareAndSubmit(promptObj) {
+
+        async prepareAndSubmit(promptObj) {
     const MAX_SUBMIT_RETRIES = 2;
 
     for (let attempt = 1; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
         try {
             this.logDebug(`Preparando prompt ${promptObj.promptNum}: "${promptObj.text.substring(0,50)}..."${attempt > 1 ? ` (tentativa ${attempt})` : ''}`, 'info');
+
             const segs = parsePrompt(promptObj.text);
+
+            const refs = segs.filter(s => s.type === 'ref');
+            const voices = segs.filter(s => s.type === 'voice');
+            const texts = segs.filter(s => s.type === 'text' && s.content && s.content.trim());
+
             await this.clearEditor();
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
 
-            // ==========================================================
-            // PASSO 1: ANEXAR IMAGENS E LIMPAR O TEXTO (Ideia Genial)
-            // ==========================================================
-            // Pega apenas as referências de imagem desse prompt
-            const refsToAdd = segs.filter(s => s.type === 'ref').map(s => s.name);
-            const uniqueRefs = [...new Set(refsToAdd)]; // Remove duplicatas
-
-            if (uniqueRefs.length > 0) {
-                for (const refName of uniqueRefs) {
-                    if (this.shouldStop || this.videoShouldStop) return false;
-                    await this.openAtSelector(); 
-                    await this.clickDialogTab('image');
-                    await this.searchAndSelect(refName); 
-                    await this.dynamicSleep([600, 800]); // Aguarda a imagem anexar no topo
-                }
-                
-                // Agora que as imagens estão salvas em cima, limpamos o editor para sumir com os "chips" visuais
-                await this.clearEditor();
-                await this.dynamicSleep([400, 600]);
+            for (const seg of refs) {
+                if (this.shouldStop || this.videoShouldStop) return false;
+                await this.openAtSelector();
+                await this.clickDialogTab('image');
+                await this.searchAndSelect(seg.name);
+                await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                await this.normalizeEditorSelection();
             }
 
-            // ==========================================================
-            // PASSO 2: ESCREVER O PROMPT E ADICIONAR VOZES
-            // ==========================================================
-            for (const seg of segs) {
+            for (const seg of voices) {
                 if (this.shouldStop || this.videoShouldStop) return false;
-                
-                if (seg.type === 'text') {
-                     await this.insertText(seg.content);
-                } else if (seg.type === 'ref') { 
-                     // MODIFICADO AQUI: Como a imagem já foi anexada, pulamos essa parte 
-                     // para não escrever o nome da referência de volta na caixa de texto.
-                     continue; 
-                } else if (seg.type === 'voice') {
-                     // As vozes continuam precisando abrir o menu no local exato do texto
-                     await this.openAtSelector(); 
-                     await this.clickDialogTab('voice');
-                     await this.searchAndSelectVoice(seg.name); 
-                     await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                }
+                await this.openAtSelector();
+                await this.clickDialogTab('voice');
+                await this.searchAndSelectVoice(seg.name);
+                await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                await this.normalizeEditorSelection();
+            }
+
+            const finalText = texts.map(t => t.content.trim()).join(' ').trim();
+            if (finalText) {
+                await this.insertText(finalText);
+                await this.dynamicSleep(CONFIG.DELAY_SHORT);
             }
 
             await this.clickSubmit();
             this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
             return true;
+
         } catch (err) {
             this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
             if (attempt < MAX_SUBMIT_RETRIES) {
@@ -1410,8 +1441,10 @@ async prepareAndSubmit(promptObj) {
             }
         }
     }
+
     return false;
 }
+
         /**
          * Força reset do editor: fecha dialogs, limpa conteúdo via botão "Apagar comando".
          */
