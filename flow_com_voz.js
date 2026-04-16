@@ -1157,30 +1157,96 @@
 
         getEditor() { return document.querySelector('[data-slate-editor="true"]'); }
 
-        async clearEditor() {
+async clearEditor() {
     const e = this.getEditor();
     if (!e) throw new Error('Editor Slate não encontrado');
 
-    e.focus();
-    await this.dynamicSleep([180, 260]);
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-    let cleared = await this.clickNativeClearMultiple(3);
+    const getVisibleClearButtons = () => {
+        return [...document.querySelectorAll('button')].filter(btn => {
+            const icon = btn.querySelector('i.google-symbols');
+            const txt = (btn.textContent || '').toLowerCase();
+            const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+            const title = (btn.getAttribute('title') || '').toLowerCase();
+            const rect = btn.getBoundingClientRect();
 
-    if (!cleared) {
+            const looksLikeClear =
+                icon?.textContent?.trim() === 'close' ||
+                txt.includes('apagar comando') ||
+                aria.includes('apagar comando') ||
+                title.includes('apagar comando');
+
+            const visible =
+                rect.width > 0 &&
+                rect.height > 0 &&
+                getComputedStyle(btn).display !== 'none' &&
+                getComputedStyle(btn).visibility !== 'hidden';
+
+            return looksLikeClear && visible && !btn.disabled;
+        });
+    };
+
+    const fireRealLikeBackspace = async () => {
         e.focus();
-        await this.dynamicSleep([180, 260]);
+        await sleep(80);
 
-        document.execCommand('selectAll', false, null);
-        await this.dynamicSleep([180, 260]);
+        e.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Backspace',
+            code: 'Backspace',
+            keyCode: 8,
+            which: 8,
+            bubbles: true,
+            cancelable: true
+        }));
 
-        document.execCommand('delete', false, null);
-        await this.dynamicSleep([180, 260]);
+        e.dispatchEvent(new InputEvent('beforeinput', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'deleteContentBackward',
+            data: null
+        }));
 
-        cleared = await this.clickNativeClearMultiple(2);
+        e.dispatchEvent(new KeyboardEvent('keyup', {
+            key: 'Backspace',
+            code: 'Backspace',
+            keyCode: 8,
+            which: 8,
+            bubbles: true,
+            cancelable: true
+        }));
+
+        await sleep(120);
+    };
+
+    e.focus();
+    await sleep(180);
+
+    for (let round = 0; round < 3; round++) {
+        const buttons = getVisibleClearButtons();
+        if (!buttons.length) break;
+
+        for (const btn of buttons.slice(0, 3)) {
+            btn.click();
+            await sleep(220);
+        }
+
+        await sleep(250);
     }
 
     e.focus();
-    await this.dynamicSleep([120, 180]);
+    await sleep(120);
+    document.execCommand('selectAll', false, null);
+    await sleep(120);
+    document.execCommand('delete', false, null);
+    await sleep(180);
+
+    await fireRealLikeBackspace();
+    await fireRealLikeBackspace();
+    await fireRealLikeBackspace();
+
+    e.focus();
+    await sleep(100);
 
     e.dispatchEvent(new InputEvent('beforeinput', {
         bubbles: true,
@@ -1188,20 +1254,14 @@
         inputType: 'insertText',
         data: ' '
     }));
-    await this.dynamicSleep([80, 120]);
+    await sleep(90);
 
-    e.dispatchEvent(new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'deleteContentBackward',
-        data: null
-    }));
-    await this.dynamicSleep([140, 220]);
+    await fireRealLikeBackspace();
 
     e.blur();
-    await this.dynamicSleep([80, 120]);
+    await sleep(100);
     e.focus();
-    await this.dynamicSleep([120, 180]);
+    await sleep(180);
 }
 async insertText(text) {
     const e = this.getEditor();
