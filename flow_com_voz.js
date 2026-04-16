@@ -1346,24 +1346,30 @@
                         if (this.shouldStop || this.videoShouldStop) return false;
                         if (seg.type === 'text') {
                              await this.insertText(seg.content);
-                        } else if (seg.type === 'ref') { 
-                             await this.openAtSelector(); 
-                             await this.clickDialogTab('image');
-                             await this.searchAndSelect(seg.name); 
-                             await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                       } else if (seg.type === 'ref') { 
+                         await this.openAtSelector(); 
+                         await this.clickDialogTab('image');
+                         await this.searchAndSelect(seg.name); 
+                         await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                         
+                         // --- INÍCIO DA CORREÇÃO (APAGAR CHIP DO TEXTO 3 VEZES) ---
+                         const editor = this.getEditor();
+                         if (editor) {
+                             editor.focus();
+                             await this.dynamicSleep([150, 250]);
                              
-                             // --- INÍCIO DA CORREÇÃO (APAGAR CHIP DO TEXTO) ---
-                             const editor = this.getEditor();
-                             if (editor) {
-                                 editor.focus();
-                                 await this.dynamicSleep([150, 250]);
-                                 // Simula o Backspace para remover o quadradinho
+                             // Loop que repete o Backspace 3 vezes
+                             for (let b = 0; b < 3; b++) {
                                  editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true }));
                                  editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'deleteContentBackward' }));
-                                 await this.dynamicSleep([150, 250]);
+                                 await this.dynamicSleep([50, 100]); // Pausa bem rápida entre cada apagada
                              }
-                             // --- FIM DA CORREÇÃO ---
+                             
+                             await this.dynamicSleep([150, 250]);
+                         }
+                         // --- FIM DA CORREÇÃO ---
 
+                    } else if (seg.type === 'voice') {
                         } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
                              await this.clickDialogTab('voice');
