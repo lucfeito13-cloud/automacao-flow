@@ -1346,7 +1346,7 @@
                         if (this.shouldStop || this.videoShouldStop) return false;
                         if (seg.type === 'text') {
                              await this.insertText(seg.content);
-                       } else if (seg.type === 'ref') { 
+} else if (seg.type === 'ref') { 
                          await this.openAtSelector(); 
                          await this.clickDialogTab('image');
                          await this.searchAndSelect(seg.name); 
@@ -1370,7 +1370,6 @@
                          // --- FIM DA CORREÇÃO ---
 
                     } else if (seg.type === 'voice') {
-                        } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
                              await this.clickDialogTab('voice');
                              await this.searchAndSelectVoice(seg.name); 
