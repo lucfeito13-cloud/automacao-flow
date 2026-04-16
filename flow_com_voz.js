@@ -1164,24 +1164,24 @@
     e.focus();
     await this.dynamicSleep([180, 260]);
 
-    const nativeClearBtn = [...document.querySelectorAll('button')].find(btn => {
-        const icon = btn.querySelector('i.google-symbols');
-        const txt = (btn.textContent || '').toLowerCase();
-        return icon?.textContent?.trim() === 'close' || txt.includes('apagar comando');
-    });
+    let cleared = await this.clickNativeClearMultiple(3);
 
-    if (nativeClearBtn && !nativeClearBtn.disabled) {
-        nativeClearBtn.click();
-        await this.dynamicSleep([500, 800]);
-    } else {
+    if (!cleared) {
+        e.focus();
+        await this.dynamicSleep([180, 260]);
+
         document.execCommand('selectAll', false, null);
         await this.dynamicSleep([180, 260]);
+
         document.execCommand('delete', false, null);
         await this.dynamicSleep([180, 260]);
+
+        cleared = await this.clickNativeClearMultiple(2);
     }
 
     e.focus();
     await this.dynamicSleep([120, 180]);
+
     e.dispatchEvent(new InputEvent('beforeinput', {
         bubbles: true,
         cancelable: true,
@@ -1196,14 +1196,61 @@
         inputType: 'deleteContentBackward',
         data: null
     }));
-    await this.dynamicSleep([180, 260]);
+    await this.dynamicSleep([140, 220]);
+
+    e.blur();
+    await this.dynamicSleep([80, 120]);
+    e.focus();
+    await this.dynamicSleep([120, 180]);
 }
-        async insertText(text) {
+async insertText(text) {
     const e = this.getEditor();
     if (!e) throw new Error('Editor não encontrado');
     e.focus(); await this.dynamicSleep([250, 400]);
     e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+}
+
+async isEditorReallyEmpty() {
+    const e = this.getEditor();
+    if (!e) return true;
+
+    const text = (e.textContent || '')
+        .replace(/\u200B/g, '')
+        .replace(/\s+/g, '')
+        .trim();
+
+    const chips = e.querySelectorAll('img, [data-lexical-decorator], [contenteditable="false"], mention, [data-slate-string], [data-slate-node]');
+    
+    return text === '' && chips.length === 0;
+}
+
+async clickNativeClearMultiple(times = 3) {
+    for (let i = 0; i < times; i++) {
+        const nativeClearBtn = [...document.querySelectorAll('button')].find(btn => {
+            const icon = btn.querySelector('i.google-symbols');
+            const txt = (btn.textContent || '').toLowerCase();
+            const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+            const title = (btn.getAttribute('title') || '').toLowerCase();
+
+            return (
+                icon?.textContent?.trim() === 'close' ||
+                txt.includes('apagar comando') ||
+                aria.includes('apagar comando') ||
+                title.includes('apagar comando')
+            );
+        });
+
+        if (!nativeClearBtn || nativeClearBtn.disabled) break;
+
+        nativeClearBtn.click();
+        await this.dynamicSleep([250, 450]);
+
+        const empty = await this.isEditorReallyEmpty();
+        if (empty) return true;
+    }
+
+    return await this.isEditorReallyEmpty();
 }
 
 async normalizeEditorSelection() {
