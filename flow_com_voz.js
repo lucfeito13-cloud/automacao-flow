@@ -2991,10 +2991,6 @@
             const menuBtn = await this.getTileMenuButton(tile);
             if (!menuBtn) return false;
 
-            // FORÇA fechar qualquer menu de variações anteriores antes de abrir o novo
-            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-            await this.sleep(400);
-
             menuBtn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, view: window }));
             menuBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, view: window }));
             menuBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, view: window }));
@@ -3007,6 +3003,7 @@
 
             return !!opened;
         }
+
         async openDownloadSubmenu() {
             const downloadBtn = await this.waitFor(() => {
                 const items = [...document.querySelectorAll('button[role="menuitem"], [role="menuitem"]')];
@@ -3029,7 +3026,7 @@
             return !!submenu;
         }
 
-       async click1080pOption() {
+        async click1080pOption() {
             const upscaleBtn = await this.waitFor(() => {
                 const items = [...document.querySelectorAll('button[role="menuitem"], [role="menuitem"]')];
                 return items.find(el => {
@@ -3040,18 +3037,14 @@
 
             if (!upscaleBtn) return { ok: false, reason: '1080p_not_found' };
 
-            // Se o botão já estiver desativado, significa que o vídeo JÁ FOI upscaled
-            if (upscaleBtn.disabled || upscaleBtn.getAttribute('aria-disabled') === 'true') {
-                return { ok: true, reason: 'already_upscaled' };
-            }
-
             upscaleBtn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, view: window }));
             upscaleBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, view: window }));
             upscaleBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, view: window }));
             upscaleBtn.click();
 
-            return { ok: true, reason: 'clicked' };
+            return { ok: true };
         }
+
         async waitForUpscaleToast() {
             const toast = await this.waitFor(() => {
                 const toasts = [...document.querySelectorAll('li[data-sonner-toast], li[data-sonner-toast="true"]')];
@@ -3109,9 +3102,6 @@
             for (const wfId of wfIdsToUpscale) {
                 if (this.videoShouldStop) break;
 
-                // Pausa extra para garantir que variações adjacentes não conflitem
-                await this.sleep(800); 
-
                 try {
                     const tile = await this.scrollToWorkflow(wfId);
                     if (!tile) {
@@ -3120,14 +3110,7 @@
                         continue;
                     }
 
-                    // Tenta abrir o menu até 2 vezes caso a primeira falhe por lentidão do Google
-                    let menuOpened = false;
-                    for(let retry = 0; retry < 2; retry++) {
-                        menuOpened = await this.openTileMenu(tile);
-                        if(menuOpened) break;
-                        await this.sleep(1000);
-                    }
-
+                    const menuOpened = await this.openTileMenu(tile);
                     if (!menuOpened) {
                         this.logVideoDebug(`❌ Menu não abriu para ${wfId.substring(0, 8)}`, 'error');
                         fail++;
@@ -3137,7 +3120,12 @@
                     const submenuOpened = await this.openDownloadSubmenu();
                     if (!submenuOpened) {
                         this.logVideoDebug(`❌ Submenu Download não abriu para ${wfId.substring(0, 8)}`, 'error');
-                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                        document.dispatchEvent(new KeyboardEvent('keydown', {
+                            key: 'Escape',
+                            code: 'Escape',
+                            keyCode: 27,
+                            bubbles: true
+                        }));
                         fail++;
                         continue;
                     }
@@ -3145,39 +3133,42 @@
                     const clickResult = await this.click1080pOption();
                     if (!clickResult.ok) {
                         this.logVideoDebug(`⚠️ Opção 1080p não encontrada para ${wfId.substring(0, 8)}`, 'warning');
-                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                        document.dispatchEvent(new KeyboardEvent('keydown', {
+                            key: 'Escape',
+                            code: 'Escape',
+                            keyCode: 27,
+                            bubbles: true
+                        }));
                         fail++;
                         continue;
                     }
 
-                    // Se a razão for already_upscaled, não precisa esperar o toast
-                    if (clickResult.reason === 'already_upscaled') {
+                    const toastOk = await this.waitForUpscaleToast();
+                    if (toastOk) {
                         requested.add(wfId);
                         count++;
-                        this.logVideoDebug(`✅ ${wfId.substring(0, 8)} já estava em 1080p!`, 'success');
+                        this.logVideoDebug(`✅ Upscale solicitado para ${wfId.substring(0, 8)}`, 'success');
                     } else {
-                        const toastOk = await this.waitForUpscaleToast();
-                        if (toastOk) {
-                            requested.add(wfId);
-                            count++;
-                            this.logVideoDebug(`✅ Upscale solicitado para ${wfId.substring(0, 8)}`, 'success');
-                        } else {
-                            requested.add(wfId);
-                            count++;
-                            this.logVideoDebug(`⚠️ Clique executado, mas aviso oculto no Google para ${wfId.substring(0, 8)}`, 'warning');
-                        }
+                        // em alguns casos o clique pega mesmo sem o toast aparecer
+                        requested.add(wfId);
+                        count++;
+                        this.logVideoDebug(`⚠️ Clique em 1080p executado, mas toast não apareceu para ${wfId.substring(0, 8)}`, 'warning');
                     }
 
                     if (btn) btn.textContent = `⏳ Upscale ${count}/${wfIdsToUpscale.length}`;
-                    
+                    await this.sleep(1200);
+
                 } catch (err) {
                     fail++;
                     this.logVideoDebug(`❌ Erro no upscale ${wfId.substring(0, 8)}: ${err.message}`, 'error');
+                    document.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: 'Escape',
+                        code: 'Escape',
+                        keyCode: 27,
+                        bubbles: true
+                    }));
+                    await this.sleep(500);
                 }
-                
-                // Limpeza geral no final de cada loop para preparar a tela para a próxima variação
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                await this.sleep(1500); // Respiro antes de ir para o próximo vídeo
             }
 
             this.setVideoStatus('success', `✅ Upscale solicitado para ${count} vídeo(s). Falhas: ${fail}.`);
