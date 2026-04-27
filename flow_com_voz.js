@@ -418,6 +418,13 @@
             </div>
             <div id="flow-grid-info" style="font-size:11px;color:var(--cd-text-light);margin-top:4px;font-style:italic;"></div>
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+              <input type="checkbox" id="flow-use-backspace">
+              <div class="flow-option-text">
+                <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Modo alternativo (Backspace 3x)</div>
+                <div class="flow-option-desc">Apaga a ref para evitar erros.</div>
+              </div>
+            </label>
+            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <input type="checkbox" id="flow-show-logs">
               <div class="flow-option-text">
                 <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Mostrar logs</div>
@@ -522,6 +529,13 @@
                 <option value="4">4 vídeos</option>
               </select>
             </div>
+            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+              <input type="checkbox" id="fv-use-backspace">
+              <div class="flow-option-text">
+                <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Modo alternativo (Backspace 3x)</div>
+                <div class="flow-option-desc">Apaga a ref para evitar erros.</div>
+              </div>
+            </label>
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <input type="checkbox" id="fv-show-logs">
               <div class="flow-option-text">
@@ -1346,12 +1360,36 @@
                         if (this.shouldStop || this.videoShouldStop) return false;
                         if (seg.type === 'text') {
                              await this.insertText(seg.content);
-                        } else if (seg.type === 'ref') { 
-                             await this.openAtSelector(); 
-                             await this.clickDialogTab('image');
-                             await this.searchAndSelect(seg.name); 
-                             await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                        } else if (seg.type === 'voice') {
+} else if (seg.type === 'ref') { 
+                         await this.openAtSelector(); 
+                         await this.clickDialogTab('image');
+                         await this.searchAndSelect(seg.name); 
+                         await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                         
+                        // Verifica se a opção do Backspace foi ativada
+                         const useBackspace = (document.getElementById('flow-use-backspace') && document.getElementById('flow-use-backspace').checked) || 
+                                              (document.getElementById('fv-use-backspace') && document.getElementById('fv-use-backspace').checked);
+
+                         if (useBackspace) {
+                             // --- INÍCIO DA CORREÇÃO (APAGAR CHIP DO TEXTO 3 VEZES) ---
+                             const editor = this.getEditor();
+                             if (editor) {
+                                 editor.focus();
+                                 await this.dynamicSleep([150, 250]);
+                                 
+                                 // Loop que repete o Backspace 3 vezes
+                                 for (let b = 0; b < 3; b++) {
+                                     editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true }));
+                                     editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'deleteContentBackward' }));
+                                     await this.dynamicSleep([50, 100]); // Pausa bem rápida entre cada apagada
+                                 }
+                                 
+                                 await this.dynamicSleep([150, 250]);
+                             }
+                             // --- FIM DA CORREÇÃO ---
+                         }
+
+                    } else if (seg.type === 'voice') {
                              await this.openAtSelector(); 
                              await this.clickDialogTab('voice');
                              await this.searchAndSelectVoice(seg.name); 
