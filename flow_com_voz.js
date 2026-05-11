@@ -376,6 +376,7 @@
           <div class="flow-card-content">
             <div class="flow-ref-list" id="flow-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência detectada.</span></div>
             <button class="flow-validate-btn" id="flow-validate-btn">🔍 Validar referências na galeria</button>
+            <button class="flow-validate-btn" id="flow-load-refs-btn" style="margin-top:6px; background:#f1f5f9; border-color:#cbd5e1; color:#334155;">📂 Usar referências validadas salvas</button>
             <button class="flow-validate-btn" id="flow-assign-refs-btn" style="display:none;margin-top:6px;">📌 Atribuir referências</button>
           </div>
         </div>
@@ -491,6 +492,7 @@
           <div class="flow-card-content">
             <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span></div>
             <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências na galeria</button>
+            <button class="flow-validate-btn" id="fv-load-refs-btn" style="margin-top:6px; background:#f1f5f9; border-color:#cbd5e1; color:#334155;">📂 Usar referências validadas salvas</button>
           </div>
         </div>
         <div class="flow-card">
@@ -721,7 +723,13 @@
                 });
             });
 
-            $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
+           $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
+            const btnLoadRefs = document.getElementById('flow-load-refs-btn');
+            if (btnLoadRefs) btnLoadRefs.addEventListener('click', () => {
+                this.loadCachedReferences();
+                this.updateReferences();
+                this.setStatus('success', '✅ Referências salvas carregadas!');
+            });
             $('flow-show-logs').addEventListener('change', e => $('flow-logs-container').classList.toggle('visible', e.target.checked));
             $('flow-start-btn').addEventListener('click', () => this.start());
             $('flow-stop-btn').addEventListener('click',  () => this.stop());
@@ -786,7 +794,13 @@
                 this.videoResultsPerPrompt = parseInt(e.target.value);
             });
 
-            $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
+         $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
+            const btnFvLoadRefs = document.getElementById('fv-load-refs-btn');
+            if (btnFvLoadRefs) btnFvLoadRefs.addEventListener('click', () => {
+                this.loadCachedReferences();
+                this.updateVideoReferences();
+                this.setVideoStatus('success', '✅ Referências salvas carregadas!');
+            });
             $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
             $('fv-start-btn').addEventListener('click', () => this.startVideo());
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
@@ -1183,7 +1197,10 @@
             const e = this.getEditor();
             if (!e) throw new Error('Editor não encontrado');
             e.focus(); await this.dynamicSleep([250, 400]);
-            e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
+            
+            if (!document.execCommand('insertText', false, text)) {
+                e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
+            }
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
         }
 
@@ -1335,18 +1352,43 @@
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
 
+       triggerTrustedClick(el) {
+            if (!el) return false;
+            const reactKey = Object.keys(el).find(k => k.startsWith('__reactProps') || k.startsWith('__reactEventHandlers'));
+            const onClick = reactKey && el[reactKey] && el[reactKey].onClick;
+            if (typeof onClick === 'function') {
+                try {
+                    onClick({
+                        isTrusted: true,
+                        preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {},
+                        type: 'click', target: el, currentTarget: el,
+                        bubbles: true, cancelable: true, defaultPrevented: false,
+                        eventPhase: 2, detail: 1, button: 0, buttons: 0,
+                        nativeEvent: { isTrusted: true, type: 'click' },
+                    });
+                    return true;
+                } catch (err) {}
+            }
+            el.click();
+            return false;
+        }
+
         async clickSubmit() {
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-            const btn = [...document.querySelectorAll('button')].find(b =>
-                b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
-            );
+            const btn = [...document.querySelectorAll('button')].find(b => {
+                const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                const icon = b.querySelector('i.google-symbols, span, svg')?.textContent?.trim()?.toLowerCase() || '';
+                return aria.includes('enviar') || aria.includes('send') || aria.includes('submit') ||
+                       icon.includes('arrow_forward') || icon.includes('arrow_upward') || icon.includes('send');
+            });
+
             if (!btn) throw new Error('Botão enviar não encontrado');
             for (let i = 0; i < 30; i++) { if (!btn.disabled) break; await this.dynamicSleep(CONFIG.DELAY_SHORT); }
             if (btn.disabled) throw new Error('Botão enviar desabilitado');
-            btn.click();
+            
+            this.triggerTrustedClick(btn);
             await this.dynamicSleep(CONFIG.DELAY_LONG);
         }
-
         async prepareAndSubmit(promptObj) {
             const MAX_SUBMIT_RETRIES = 2;
 
@@ -1794,9 +1836,12 @@
                 this.validatedRefs = {};
                 for (const ref of refs) this.validatedRefs[ref.toLowerCase()] = found.has(ref.toLowerCase().trim());
                 updateFn();
-                if (!pending.size) statusFn('success', `✅ Todas as ${refs.length} referências encontradas!`);
+               if (!pending.size) statusFn('success', `✅ Todas as ${refs.length} referências encontradas!`);
                 else statusFn('error', `❌ Não encontradas: ${refs.filter(r => pending.has(r.toLowerCase().trim())).join(', ')}`);
                 scroller.scrollTop = 0;
+                
+                this.saveCachedReferences();
+                
                 if (found.size > 0) this.startLabelObserver();
             } catch (err) { statusFn('error', 'Erro: ' + err.message); }
             btn.disabled = false; btn.textContent = '🔍 Validar referências na galeria';
@@ -3337,10 +3382,33 @@
                     dlBtn.style.display = 'none';
                 }
             }
-            const overlay = document.getElementById('flow-popup-overlay');
+           const overlay = document.getElementById('flow-popup-overlay');
             const popup = document.getElementById('flow-popup');
             if (overlay) overlay.style.display = 'block';
             if (popup) popup.style.display = 'block';
+        }
+
+        loadCachedReferences() {
+            try {
+                const cached = localStorage.getItem('flow_validated_refs');
+                if (cached) {
+                    this.validatedRefs = { ...this.validatedRefs, ...JSON.parse(cached) };
+                    this.logDebug('Referências salvas carregadas do cache.', 'info');
+                } else {
+                    this.logDebug('Nenhuma referência salva no cache.', 'warning');
+                }
+            } catch(e) {
+                this.logDebug('Erro ao carregar referências do cache: ' + e.message, 'error');
+            }
+        }
+
+        saveCachedReferences() {
+            try {
+                localStorage.setItem('flow_validated_refs', JSON.stringify(this.validatedRefs));
+                this.logDebug('Referências validadas salvas no cache do navegador.', 'success');
+            } catch(e) {
+                this.logDebug('Erro ao salvar referências: ' + e.message, 'error');
+            }
         }
 
         logDebug(msg, type = 'info') {
