@@ -79,7 +79,46 @@
     // ============================================================
     // PARSERS
     // ============================================================
+function triggerTrustedClick(el) {
+    if (!el) return false;
 
+    const reactKey = Object.keys(el).find(k =>
+        k.startsWith('__reactProps') || k.startsWith('__reactEventHandlers')
+    );
+
+    const onClick = reactKey && el[reactKey] && el[reactKey].onClick;
+
+    if (typeof onClick === 'function') {
+        try {
+            onClick({
+                isTrusted: true,
+                preventDefault() {},
+                stopPropagation() {},
+                stopImmediatePropagation() {},
+                type: 'click',
+                target: el,
+                currentTarget: el,
+                bubbles: true,
+                cancelable: true,
+                defaultPrevented: false,
+                eventPhase: 2,
+                detail: 1,
+                button: 0,
+                buttons: 0,
+                nativeEvent: {
+                    isTrusted: true,
+                    type: 'click'
+                },
+            });
+            return true;
+        } catch (err) {
+            console.warn('[Flow] triggerTrustedClick falhou, usando .click():', err);
+        }
+    }
+
+    el.click();
+    return false;
+}
     function parsePrompt(prompt) {
         const segs = [];
         const re = /(\[([^\]]+)\]|<voz:\s*([^>]+)>)/gi;
@@ -1335,17 +1374,52 @@
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
 
-        async clickSubmit() {
-            await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-            const btn = [...document.querySelectorAll('button')].find(b =>
-                b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
-            );
-            if (!btn) throw new Error('Botão enviar não encontrado');
-            for (let i = 0; i < 30; i++) { if (!btn.disabled) break; await this.dynamicSleep(CONFIG.DELAY_SHORT); }
-            if (btn.disabled) throw new Error('Botão enviar desabilitado');
-            btn.click();
+       async clickSubmit() {
+    await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+
+    const findSubmitBtn = () => [...document.querySelectorAll('button')].find(b =>
+        b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
+    );
+
+    const btn = findSubmitBtn();
+
+    if (!btn) {
+        throw new Error('Botão enviar não encontrado');
+    }
+
+    for (let i = 0; i < 30; i++) {
+        if (!btn.disabled) break;
+        await this.dynamicSleep(CONFIG.DELAY_SHORT);
+    }
+
+    if (btn.disabled) {
+        throw new Error('Botão enviar desabilitado');
+    }
+
+    const editorBefore = this.getEditor?.();
+    const textBefore = (editorBefore?.innerText || editorBefore?.textContent || '').trim();
+
+    triggerTrustedClick(btn);
+
+    // Confirma se o Flow realmente aceitou o envio
+    for (let i = 0; i < 30; i++) {
+        await this.dynamicSleep([250, 400]);
+
+        const editor = this.getEditor?.();
+        const textNow = (editor?.innerText || editor?.textContent || '').trim();
+        const currentBtn = findSubmitBtn();
+
+        const editorCleared = textBefore && textNow.length < Math.max(5, textBefore.length * 0.25);
+        const buttonReacted = currentBtn && currentBtn.disabled;
+
+        if (editorCleared || buttonReacted) {
             await this.dynamicSleep(CONFIG.DELAY_LONG);
+            return true;
         }
+    }
+
+    throw new Error('Clique de envio não confirmado pelo Flow');
+}
 
         async prepareAndSubmit(promptObj) {
             const MAX_SUBMIT_RETRIES = 2;
