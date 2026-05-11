@@ -672,7 +672,7 @@ function triggerTrustedClick(el) {
             this.isRunning       = false;
             this.shouldStop      = false;
             this.prompts         = [];
-            this.validatedRefs   = {};
+            this.validatedRefs   = this.loadValidatedRefs();
             this.batchSize       = 4;
             this.imagesPerPrompt = 3;
             this.gridCols        = 3;
@@ -922,6 +922,43 @@ function triggerTrustedClick(el) {
         }
 
         esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+        getValidatedRefsCacheKey() {
+    const projectId = this.getProjectId?.() || location.pathname;
+    return `flow_validated_refs_${projectId}`;
+}
+
+loadValidatedRefs() {
+    try {
+        const raw = localStorage.getItem(this.getValidatedRefsCacheKey());
+        if (!raw) return {};
+        const data = JSON.parse(raw);
+        return data && typeof data === 'object' ? data : {};
+    } catch (e) {
+        console.warn('[Flow] Erro ao carregar cache de referências:', e);
+        return {};
+    }
+}
+
+saveValidatedRefs() {
+    try {
+        const onlyValid = {};
+        for (const [key, value] of Object.entries(this.validatedRefs || {})) {
+            if (value === true) onlyValid[key] = true;
+        }
+        localStorage.setItem(this.getValidatedRefsCacheKey(), JSON.stringify(onlyValid));
+    } catch (e) {
+        console.warn('[Flow] Erro ao salvar cache de referências:', e);
+    }
+}
+
+clearValidatedRefsCache() {
+    try {
+        localStorage.removeItem(this.getValidatedRefsCacheKey());
+    } catch (e) {}
+    this.validatedRefs = {};
+    this.updateReferences?.();
+    this.updateVideoReferences?.();
+}
 
         // ──────────────────────────────────────────────
         // GRID + TILES
@@ -1829,12 +1866,40 @@ function triggerTrustedClick(el) {
             const btn = document.getElementById(btnId);
             btn.disabled = true; btn.textContent = '⏳ Escaneando galeria...';
             try {
-                const text = document.getElementById(inputId).value;
-                const prompts = parsePromptsText(text);
-                const refs = extractReferences(prompts);
-                if (!refs.length) { this.validatedRefs = {}; updateFn(); btn.disabled = false; btn.textContent = '🔍 Validar referências na galeria'; return; }
-                const pending = new Set(refs.map(r => r.toLowerCase().trim()));
-                const found = new Set();
+               const text = document.getElementById(inputId).value;
+const prompts = parsePromptsText(text);
+const refs = extractReferences(prompts);
+
+if (!refs.length) {
+    updateFn();
+    btn.disabled = false;
+    btn.textContent = '🔍 Validar referências na galeria';
+    return;
+}
+
+// Carrega cache salvo e mistura com o estado atual
+this.validatedRefs = {
+    ...this.loadValidatedRefs(),
+    ...this.validatedRefs
+};
+
+// Se alguma referência já foi validada antes, ela não precisa ser escaneada de novo
+const cachedFound = refs.filter(r => this.validatedRefs[r.toLowerCase().trim()] === true);
+const pending = new Set(
+    refs
+        .filter(r => this.validatedRefs[r.toLowerCase().trim()] !== true)
+        .map(r => r.toLowerCase().trim())
+);
+
+const found = new Set(cachedFound.map(r => r.toLowerCase().trim()));
+
+if (!pending.size) {
+    updateFn();
+    statusFn('success', `✅ Todas as ${refs.length} referências já estavam validadas!`);
+    btn.disabled = false;
+    btn.textContent = '🔍 Validar referências na galeria';
+    return;
+}
                 const checkedTileIds = new Set();
                 const scroller = this.getScroller();
                 if (!scroller) throw new Error('Scroller não encontrado');
@@ -1865,9 +1930,19 @@ function triggerTrustedClick(el) {
                     scroller.scrollTop = Math.max(0, scroller.scrollTop - 350); await this.sleep(400);
                     if (scroller.scrollTop === 0 && prev === 0) break;
                 }
-                this.validatedRefs = {};
-                for (const ref of refs) this.validatedRefs[ref.toLowerCase()] = found.has(ref.toLowerCase().trim());
-                updateFn();
+               for (const ref of refs) {
+    const key = ref.toLowerCase().trim();
+
+    if (found.has(key)) {
+        this.validatedRefs[key] = true;
+    } else {
+        // Não salva como permanente, mas mostra como ausente nesta validação
+        this.validatedRefs[key] = false;
+    }
+}
+
+this.saveValidatedRefs();
+updateFn();
                 if (!pending.size) statusFn('success', `✅ Todas as ${refs.length} referências encontradas!`);
                 else statusFn('error', `❌ Não encontradas: ${refs.filter(r => pending.has(r.toLowerCase().trim())).join(', ')}`);
                 scroller.scrollTop = 0;
