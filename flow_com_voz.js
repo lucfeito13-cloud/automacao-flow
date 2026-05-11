@@ -76,11 +76,7 @@
         VERSION: '4.0 (Flow Voz + Add-ons)',
     };
 
-    // ============================================================
-    // PARSERS
-    // ============================================================
-
-    function parsePrompt(prompt) {
+ function parsePrompt(prompt) {
         const segs = [];
         const re = /(\[([^\]]+)\]|<voz:\s*([^>]+)>)/gi;
         let last = 0, m;
@@ -1375,18 +1371,16 @@
 
         async clickSubmit() {
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-            const btn = [...document.querySelectorAll('button')].find(b => {
-                const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                const icon = b.querySelector('i.google-symbols, span, svg')?.textContent?.trim()?.toLowerCase() || '';
-                return aria.includes('enviar') || aria.includes('send') || aria.includes('submit') ||
-                       icon.includes('arrow_forward') || icon.includes('arrow_upward') || icon.includes('send');
-            });
-
+            const btn = [...document.querySelectorAll('button')].find(b =>
+                b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
+            );
             if (!btn) throw new Error('Botão enviar não encontrado');
             for (let i = 0; i < 30; i++) { if (!btn.disabled) break; await this.dynamicSleep(CONFIG.DELAY_SHORT); }
             if (btn.disabled) throw new Error('Botão enviar desabilitado');
             
-            this.triggerTrustedClick(btn);
+            // Aqui ele chama a função mágica que acabamos de colocar lá no topo
+            triggerTrustedClick(btn);
+            
             await this.dynamicSleep(CONFIG.DELAY_LONG);
         }
         async prepareAndSubmit(promptObj) {
