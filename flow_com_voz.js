@@ -414,8 +414,9 @@ function triggerTrustedClick(el) {
           </div>
           <div class="flow-card-content">
             <div class="flow-ref-list" id="flow-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência detectada.</span></div>
-            <button class="flow-validate-btn" id="flow-validate-btn">🔍 Validar referências na galeria</button>
-            <button class="flow-validate-btn" id="flow-assign-refs-btn" style="display:none;margin-top:6px;">📌 Atribuir referências</button>
+           <button class="flow-validate-btn" id="flow-validate-btn">🔍 Validar referências na galeria</button>
+<button class="flow-validate-btn" id="flow-mark-refs-valid-btn" style="margin-top:6px;">✅ Referências já validadas</button>
+<button class="flow-validate-btn" id="flow-assign-refs-btn" style="display:none;margin-top:6px;">📌 Atribuir referências</button>
           </div>
         </div>
         <div class="flow-card">
@@ -530,6 +531,7 @@ function triggerTrustedClick(el) {
           <div class="flow-card-content">
             <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span></div>
             <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências na galeria</button>
+<button class="flow-validate-btn" id="fv-mark-refs-valid-btn" style="margin-top:6px;">✅ Referências já validadas</button>
           </div>
         </div>
         <div class="flow-card">
@@ -761,6 +763,7 @@ function triggerTrustedClick(el) {
             });
 
             $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
+            $('flow-mark-refs-valid-btn').addEventListener('click', () => this.markReferencesAsValidated('images'));
             $('flow-show-logs').addEventListener('change', e => $('flow-logs-container').classList.toggle('visible', e.target.checked));
             $('flow-start-btn').addEventListener('click', () => this.start());
             $('flow-stop-btn').addEventListener('click',  () => this.stop());
@@ -826,6 +829,7 @@ function triggerTrustedClick(el) {
             });
 
             $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
+            $('fv-mark-refs-valid-btn').addEventListener('click', () => this.markReferencesAsValidated('video'));
             $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
             $('fv-start-btn').addEventListener('click', () => this.startVideo());
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
@@ -901,7 +905,37 @@ function triggerTrustedClick(el) {
                 list.innerHTML = html;
             }
         }
+markReferencesAsValidated(source = 'images') {
+    const isVideo = source === 'video';
+    const inputId = isVideo ? 'fv-prompts-input' : 'flow-prompts-input';
+    const statusFn = isVideo
+        ? (t, m) => this.setVideoStatus(t, m)
+        : (t, m) => this.setStatus(t, m);
+    const updateFn = isVideo
+        ? () => this.updateVideoReferences()
+        : () => this.updateReferences();
 
+    const text = document.getElementById(inputId)?.value || '';
+    const prompts = parsePromptsText(text);
+    const refs = extractReferences(prompts);
+
+    if (!refs.length) {
+        statusFn('warning', 'Nenhuma referência [nome] detectada nos prompts.');
+        return;
+    }
+
+    for (const ref of refs) {
+        const key = ref.toLowerCase().trim();
+        this.validatedRefs[key] = true;
+    }
+
+    updateFn();
+
+    statusFn(
+        'success',
+        `✅ ${refs.length} referência(s) marcada(s) como já validada(s).`
+    );
+}
         // ──────────────────────────────────────────────
         // HELPERS
         // ──────────────────────────────────────────────
