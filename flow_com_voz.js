@@ -1369,18 +1369,47 @@
             return false;
         }
 
-        async clickSubmit() {
+      async clickSubmit() {
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-            const btn = [...document.querySelectorAll('button')].find(b =>
-                b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
-            );
+            
+            // 1. Acha o botão de forma inteligente
+            const btn = [...document.querySelectorAll('button')].find(b => {
+                const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                const icon = b.querySelector('i.google-symbols, span, svg')?.textContent?.trim()?.toLowerCase() || '';
+                return aria.includes('enviar') || aria.includes('send') || aria.includes('submit') ||
+                       icon.includes('arrow_forward') || icon.includes('arrow_upward') || icon.includes('send');
+            });
+
             if (!btn) throw new Error('Botão enviar não encontrado');
             for (let i = 0; i < 30; i++) { if (!btn.disabled) break; await this.dynamicSleep(CONFIG.DELAY_SHORT); }
             if (btn.disabled) throw new Error('Botão enviar desabilitado');
             
-            // Aqui ele chama a função mágica que acabamos de colocar lá no topo
-            triggerTrustedClick(btn);
-            
+            // 2. MÁGICA DO CLIQUE SEGURO (Bypass React) direto na função
+            let clicked = false;
+            const reactKey = Object.keys(btn).find(k => k.startsWith('__reactProps') || k.startsWith('__reactEventHandlers'));
+            const onClick = reactKey && btn[reactKey] && btn[reactKey].onClick;
+
+            if (typeof onClick === 'function') {
+                try {
+                    onClick({
+                        isTrusted: true,
+                        preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {},
+                        type: 'click', target: btn, currentTarget: btn,
+                        bubbles: true, cancelable: true, defaultPrevented: false,
+                        eventPhase: 2, detail: 1, button: 0, buttons: 0,
+                        nativeEvent: { isTrusted: true, type: 'click' },
+                    });
+                    clicked = true;
+                } catch (err) {
+                    console.warn('[Flow] Erro no bypass do clique:', err);
+                }
+            }
+
+            // Fallback se a mágica falhar
+            if (!clicked) {
+                btn.click();
+            }
+
             await this.dynamicSleep(CONFIG.DELAY_LONG);
         }
         async prepareAndSubmit(promptObj) {
