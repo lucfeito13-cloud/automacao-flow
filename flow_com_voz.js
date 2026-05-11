@@ -1,20 +1,3 @@
-Sem problemas, amigo! Fica tranquilo. Eu fiz todas as alterações para você no
-código abaixo.
-
-Peguei exatamente essa sua Versão 4.0 que você acabou de enviar (com os add-ons
-de Cenas, Voz, Upscale, etc.) e já coloquei:
-
-1.  O botão de enviar com a mágica do clique (embutido na função clickSubmit).
-2.  A correção do insertText para ele digitar sempre.
-3.  Os botões no painel de "📂 Usar referências validadas salvas" (tanto em
-    Imagens quanto em Vídeos).
-4.  A lógica para salvar na memória quando valida, e puxar quando clica.
-
-Basta você apagar tudo que está aí na sua extensão, copiar o código inteiro
-abaixo e colar.
-
-Aqui está o código 100% pronto e corrigido:
-
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
 // Versão 4.0 - Drag & Drop + API Rename (Flow Voz)
@@ -90,8 +73,12 @@ Aqui está o código 100% pronto e corrigido:
         MAX_RETRIES:              3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.0.1 (Flow Voz + Fix Clique + Refs Salvas)',
+        VERSION: '4.0 (Flow Voz + Add-ons)',
     };
+
+    // ============================================================
+    // PARSERS
+    // ============================================================
 
     function parsePrompt(prompt) {
         const segs = [];
@@ -389,7 +376,6 @@ Aqui está o código 100% pronto e corrigido:
           <div class="flow-card-content">
             <div class="flow-ref-list" id="flow-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência detectada.</span></div>
             <button class="flow-validate-btn" id="flow-validate-btn">🔍 Validar referências na galeria</button>
-            <button class="flow-validate-btn" id="flow-load-refs-btn" style="margin-top:6px; background:#f1f5f9; border-color:#cbd5e1; color:#334155;">📂 Usar referências validadas salvas</button>
             <button class="flow-validate-btn" id="flow-assign-refs-btn" style="display:none;margin-top:6px;">📌 Atribuir referências</button>
           </div>
         </div>
@@ -505,7 +491,6 @@ Aqui está o código 100% pronto e corrigido:
           <div class="flow-card-content">
             <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span></div>
             <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências na galeria</button>
-            <button class="flow-validate-btn" id="fv-load-refs-btn" style="margin-top:6px; background:#f1f5f9; border-color:#cbd5e1; color:#334155;">📂 Usar referências validadas salvas</button>
           </div>
         </div>
         <div class="flow-card">
@@ -736,13 +721,7 @@ Aqui está o código 100% pronto e corrigido:
                 });
             });
 
-           $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
-            const btnLoadRefs = document.getElementById('flow-load-refs-btn');
-            if (btnLoadRefs) btnLoadRefs.addEventListener('click', () => {
-                this.loadCachedReferences();
-                this.updateReferences();
-                this.setStatus('success', '✅ Referências salvas carregadas!');
-            });
+            $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
             $('flow-show-logs').addEventListener('change', e => $('flow-logs-container').classList.toggle('visible', e.target.checked));
             $('flow-start-btn').addEventListener('click', () => this.start());
             $('flow-stop-btn').addEventListener('click',  () => this.stop());
@@ -807,13 +786,7 @@ Aqui está o código 100% pronto e corrigido:
                 this.videoResultsPerPrompt = parseInt(e.target.value);
             });
 
-         $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
-            const btnFvLoadRefs = document.getElementById('fv-load-refs-btn');
-            if (btnFvLoadRefs) btnFvLoadRefs.addEventListener('click', () => {
-                this.loadCachedReferences();
-                this.updateVideoReferences();
-                this.setVideoStatus('success', '✅ Referências salvas carregadas!');
-            });
+            $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
             $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
             $('fv-start-btn').addEventListener('click', () => this.startVideo());
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
@@ -1210,10 +1183,7 @@ Aqui está o código 100% pronto e corrigido:
             const e = this.getEditor();
             if (!e) throw new Error('Editor não encontrado');
             e.focus(); await this.dynamicSleep([250, 400]);
-            
-            if (!document.execCommand('insertText', false, text)) {
-                e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
-            }
+            e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
         }
 
@@ -1365,47 +1335,15 @@ Aqui está o código 100% pronto e corrigido:
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
 
-      async clickSubmit() {
+        async clickSubmit() {
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-            
-            // 1. Acha o botão de forma inteligente
-            const btn = [...document.querySelectorAll('button')].find(b => {
-                const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                const icon = b.querySelector('i.google-symbols, span, svg')?.textContent?.trim()?.toLowerCase() || '';
-                return aria.includes('enviar') || aria.includes('send') || aria.includes('submit') ||
-                       icon.includes('arrow_forward') || icon.includes('arrow_upward') || icon.includes('send');
-            });
-
+            const btn = [...document.querySelectorAll('button')].find(b =>
+                b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
+            );
             if (!btn) throw new Error('Botão enviar não encontrado');
             for (let i = 0; i < 30; i++) { if (!btn.disabled) break; await this.dynamicSleep(CONFIG.DELAY_SHORT); }
             if (btn.disabled) throw new Error('Botão enviar desabilitado');
-            
-            // 2. MÁGICA DO CLIQUE SEGURO (Bypass React) direto na função
-            let clicked = false;
-            const reactKey = Object.keys(btn).find(k => k.startsWith('__reactProps') || k.startsWith('__reactEventHandlers'));
-            const onClick = reactKey && btn[reactKey] && btn[reactKey].onClick;
-
-            if (typeof onClick === 'function') {
-                try {
-                    onClick({
-                        isTrusted: true,
-                        preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {},
-                        type: 'click', target: btn, currentTarget: btn,
-                        bubbles: true, cancelable: true, defaultPrevented: false,
-                        eventPhase: 2, detail: 1, button: 0, buttons: 0,
-                        nativeEvent: { isTrusted: true, type: 'click' },
-                    });
-                    clicked = true;
-                } catch (err) {
-                    console.warn('[Flow] Erro no bypass do clique:', err);
-                }
-            }
-
-            // Fallback se a mágica falhar
-            if (!clicked) {
-                btn.click();
-            }
-
+            btn.click();
             await this.dynamicSleep(CONFIG.DELAY_LONG);
         }
 
@@ -1856,12 +1794,9 @@ Aqui está o código 100% pronto e corrigido:
                 this.validatedRefs = {};
                 for (const ref of refs) this.validatedRefs[ref.toLowerCase()] = found.has(ref.toLowerCase().trim());
                 updateFn();
-               if (!pending.size) statusFn('success', `✅ Todas as ${refs.length} referências encontradas!`);
+                if (!pending.size) statusFn('success', `✅ Todas as ${refs.length} referências encontradas!`);
                 else statusFn('error', `❌ Não encontradas: ${refs.filter(r => pending.has(r.toLowerCase().trim())).join(', ')}`);
                 scroller.scrollTop = 0;
-                
-                this.saveCachedReferences();
-                
                 if (found.size > 0) this.startLabelObserver();
             } catch (err) { statusFn('error', 'Erro: ' + err.message); }
             btn.disabled = false; btn.textContent = '🔍 Validar referências na galeria';
@@ -3402,33 +3337,10 @@ Aqui está o código 100% pronto e corrigido:
                     dlBtn.style.display = 'none';
                 }
             }
-           const overlay = document.getElementById('flow-popup-overlay');
+            const overlay = document.getElementById('flow-popup-overlay');
             const popup = document.getElementById('flow-popup');
             if (overlay) overlay.style.display = 'block';
             if (popup) popup.style.display = 'block';
-        }
-
-        loadCachedReferences() {
-            try {
-                const cached = localStorage.getItem('flow_validated_refs');
-                if (cached) {
-                    this.validatedRefs = { ...this.validatedRefs, ...JSON.parse(cached) };
-                    this.logDebug('Referências salvas carregadas do cache.', 'info');
-                } else {
-                    this.logDebug('Nenhuma referência salva no cache.', 'warning');
-                }
-            } catch(e) {
-                this.logDebug('Erro ao carregar referências do cache: ' + e.message, 'error');
-            }
-        }
-
-        saveCachedReferences() {
-            try {
-                localStorage.setItem('flow_validated_refs', JSON.stringify(this.validatedRefs));
-                this.logDebug('Referências validadas salvas no cache do navegador.', 'success');
-            } catch(e) {
-                this.logDebug('Erro ao salvar referências: ' + e.message, 'error');
-            }
         }
 
         logDebug(msg, type = 'info') {
