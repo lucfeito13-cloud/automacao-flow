@@ -987,13 +987,22 @@ cleanUploadReferenceName(rawName) {
     // Se já está no padrão de referência, não mexe
     if (/\s_$/.test(name)) return null;
 
-    // Não mexe em cenas/imagens/vídeos já identificados
+    // NÃO mexe em cenas simples
+    // Ex: cena 188, Cena 204, cena 207
+    if (/^cena\s+\d+$/i.test(name)) return null;
+
+    // NÃO mexe em cenas/imagens/vídeos já identificados
     if (/^Cena\s+\d+\s*-\s*(Imagem|Vídeo|Video)\s+\d+$/i.test(name)) return null;
+
+    // NÃO mexe em nomes de personagens/cenas já atribuídos manualmente sem extensão
+    // A correção de upload deve agir só em arquivo real: .jpg, .png, .webp etc.
+    const hasImageExtension = /\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i.test(name);
+    if (!hasImageExtension) return null;
 
     // Não mexe em nomes genéricos do Flow
     if (/^(Imagem gerada|Video gerado|Vídeo gerado|Generated image|Generated video)$/i.test(name)) return null;
 
-    // Remove extensão de arquivo, se existir
+    // Remove extensão
     name = name.replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '');
 
     // Limpa caracteres ruins de nome de arquivo
@@ -2302,7 +2311,11 @@ updateFn();
             let nome = null;
             for (let t = 0; t < 5; t++) {
                 for (const div of tile.querySelectorAll('div')) {
-                    const text = div.textContent?.trim();
+    // Ignora labels visuais criadas pela própria extensão
+    if (div.closest('.flow-tile-label')) continue;
+    if (div.closest('.flow-assign-item')) continue;
+
+    const text = div.textContent?.trim();
                     if (!text || text.length < 1 || text.length > 80) continue;
                     if ([...div.querySelectorAll('div')].some(c => c.textContent?.trim())) continue;
                     if (div.querySelector('i, svg, button')) continue;
@@ -3727,9 +3740,29 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
 
     return `src:${media.src}`;
 }
+        getVideoMediaIdentityFromTile(tile, fallback = '') {
+    if (!tile) return fallback || '';
+
+    const media =
+        tile.querySelector('video[src*="getMediaUrlRedirect"]') ||
+        tile.querySelector('img[src*="getMediaUrlRedirect"]');
+
+    if (!media?.src) return fallback || '';
+
+    try {
+        const url = new URL(media.src);
+        const mediaName = url.searchParams.get('name');
+
+        if (mediaName) return `media:${mediaName}`;
+    } catch (e) {}
+
+    return `src:${media.src}`;
+}
 async scanIdentifiedVideosForUpscale() {
-    const scroller = this.getScroller();
+   const scroller = this.getScroller();
 const found = new Map();
+const seenMediaKeys = new Set();
+const foundFromGallery = { count: 0 };
 const seenMediaKeys = new Set();
 const foundFromGallery = { count: 0 };
     if (!scroller) {
@@ -3737,7 +3770,7 @@ const foundFromGallery = { count: 0 };
         return found;
     }
 
-    const addFound = (workflowId, label, tile, source = 'gallery') => {
+   const addFound = (workflowId, label, tile, source = 'gallery') => {
     if (!workflowId || !label) return;
 
     const match = label.match(/^Cena\s+(\d+)\s*-\s*(?:Vídeo|Video)\s+(\d+)$/i);
@@ -3751,15 +3784,16 @@ const foundFromGallery = { count: 0 };
     // Se veio da galeria e a mídia já apareceu, é duplicado real.
     // Isso evita pegar a mesma variação como se fosse outra.
     if (mediaKey && seenMediaKeys.has(mediaKey)) {
-        this.logVideoDebug(`⚠️ Duplicado ignorado no upscale: ${label} usa a mesma mídia de outro vídeo.`, 'warning');
+        this.logVideoDebug(
+            `⚠️ Duplicado ignorado no upscale: ${label} usa a mesma mídia de outro vídeo.`,
+            'warning'
+        );
         return;
     }
 
-    // Se o mesmo workflow já entrou, não mexe.
     if (found.has(workflowId)) return;
 
     if (mediaKey) seenMediaKeys.add(mediaKey);
-
     if (source === 'gallery') foundFromGallery.count++;
 
     found.set(workflowId, {
@@ -3853,6 +3887,15 @@ addFound(workflowId, name, tile, 'gallery');        }
 if (foundFromGallery.count === 0) {
     this.logVideoDebug('⚠️ Galeria não retornou vídeos identificados. Usando memória da extensão como fallback.', 'warning');
 
+    // Usa a memória apenas como fallback.
+// Se a galeria encontrou vídeos identificados, ela vira a fonte principal.
+// Isso evita memória antiga duplicar a mesma variação.
+if (foundFromGallery.count === 0) {
+    this.logVideoDebug(
+        '⚠️ Galeria não retornou vídeos identificados. Usando memória da extensão como fallback.',
+        'warning'
+    );
+
     for (const [workflowId, data] of this.tileAssignments.entries()) {
         const label = data?.label || '';
 
@@ -3865,6 +3908,27 @@ if (foundFromGallery.count === 0) {
     }
 
     if (this.videoSceneAssignments instanceof Map) {
+        for (const [sceneName, arr] of this.videoSceneAssignments.entries()) {
+            const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0, 10);
+
+            for (const item of arr || []) {
+                if (!item?.workflowId) continue;
+
+                const videoNum = Number(item.imgNum || 0);
+                const label = sceneNum && videoNum
+                    ? `Cena ${sceneNum} - Vídeo ${videoNum}`
+                    : '';
+
+                addFound(item.workflowId, label, null, 'memory');
+            }
+        }
+    }
+} else {
+    this.logVideoDebug(
+        '✅ Usando apenas vídeos confirmados pela galeria para evitar duplicados.',
+        'success'
+    );
+}
         for (const [sceneName, arr] of this.videoSceneAssignments.entries()) {
             const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0, 10);
 
