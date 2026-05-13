@@ -3280,18 +3280,25 @@ updateFn();
                 btn.textContent = '⏳ Iniciando Upscale 1080p...';
             }
 
-            const wfIdsToUpscale = [];
-            for (const [wfId, data] of this.tileAssignments.entries()) {
-                if (data.type === 'scene' && !requested.has(wfId)) {
-                    wfIdsToUpscale.push(wfId);
-                }
-            }
+           const wfIdsToUpscale = [];
+
+for (const [wfId, data] of this.tileAssignments.entries()) {
+    const label = data?.label || '';
+
+    const isIdentifiedVideo =
+        data?.type === 'scene' &&
+        /^Cena\s+\d+\s*-\s*(?:Vídeo|Video)\s+\d+$/i.test(label);
+
+    if (isIdentifiedVideo && !requested.has(wfId)) {
+        wfIdsToUpscale.push(wfId);
+    }
+}
 
             if (!wfIdsToUpscale.length) {
-                this.setVideoStatus('warning', 'Nenhuma cena atribuída pendente para upscale.');
+                this.setVideoStatus('warning', 'Nenhum vídeo identificado pendente para upscale. Use "Analisar projeto existente" ou atribua as cenas primeiro.');
                 if (btn) {
                     btn.disabled = false;
-                    btn.textContent = '🚀 Iniciar Upscale 1080p (Cenas Atribuídas)';
+                    btn.textContent = '🚀 Upscale 1080p (Vídeos Identificados)';
                 }
                 return;
             }
@@ -3379,8 +3386,7 @@ updateFn();
 
             if (btn) {
                 btn.disabled = false;
-                btn.textContent = '🚀 Iniciar Upscale 1080p (Cenas Atribuídas)';
-            }
+                btn.textContent = '🚀 Upscale 1080p (Vídeos Identificados)';
         }
         async scrollToWorkflow(wfId) {
             const scroller = this.getScroller();
