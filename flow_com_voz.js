@@ -737,12 +737,17 @@ function triggerTrustedClick(el) {
                 mini.style.display = 'none';
                 document.getElementById('flow-assign-panel').classList.remove('panel-closed');
             });
-            close.addEventListener('click', () => {
-                panel.classList.remove('active');
-                document.getElementById('flow-assign-panel').classList.add('panel-closed');
-                sidebar.style.display = '';
-                if (this.isRunning) mini.style.display = 'flex';
-            });
+           close.addEventListener('click', () => {
+    panel.classList.remove('active');
+    document.getElementById('flow-assign-panel').classList.add('panel-closed');
+    sidebar.style.display = '';
+
+    if (this.isRunning || this.videoIsRunning) {
+        mini.style.display = 'flex';
+    } else {
+        mini.style.display = 'none';
+    }
+});
             mini.addEventListener('click', e => {
                 if (e.target.closest('#flow-mini-close')) return;
                 panel.classList.add('active');
@@ -3790,19 +3795,31 @@ async scrollToWorkflow(wfId) {
             document.getElementById('flow-mini-progress-bar').style.width = pct + '%';
         }
 
-        updateMini(title, sub, fraction, details) {
-            // Só mostra mini se o painel principal está fechado
-            const panelOpen = document.getElementById('flow-panel').classList.contains('active');
-            if (!panelOpen) {
-                document.getElementById('flow-mini').style.display = 'flex';
-                document.getElementById('flow-sidebar').style.display = '';
-            }
-            document.getElementById('flow-mini-status').textContent = title;
-            document.getElementById('flow-mini-sub').textContent = sub || '';
-            document.getElementById('flow-mini-details').textContent = details || '';
-            this.updateProgress(fraction);
-        }
+       updateMini(title, sub, fraction, details) {
+    const panel = document.getElementById('flow-panel');
+    const mini = document.getElementById('flow-mini');
+    const sidebar = document.getElementById('flow-sidebar');
 
+    const panelOpen = panel?.classList.contains('active');
+    const isAnyAutomationRunning = this.isRunning || this.videoIsRunning;
+
+    if (!panelOpen && isAnyAutomationRunning) {
+        if (mini) mini.style.display = 'flex';
+        if (sidebar) sidebar.style.display = '';
+    } else if (!isAnyAutomationRunning) {
+        if (mini) mini.style.display = 'none';
+    }
+
+    const statusEl = document.getElementById('flow-mini-status');
+    const subEl = document.getElementById('flow-mini-sub');
+    const detailsEl = document.getElementById('flow-mini-details');
+
+    if (statusEl) statusEl.textContent = title || 'Processando...';
+    if (subEl) subEl.textContent = sub || '';
+    if (detailsEl) detailsEl.textContent = details || '';
+
+    this.updateProgress(fraction);
+}
         buildPromptList() {
             document.getElementById('flow-prompts-preview-card').style.display = 'block';
             document.getElementById('flow-queue-info').textContent = `${this.prompts.length} prompts na fila`;
