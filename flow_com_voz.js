@@ -2292,30 +2292,49 @@ updateFn();
             btn.disabled = false; btn.textContent = '🔍 Validar referências na galeria';
         }
 
-        async getTileName(tile) {
-            tile.dispatchEvent(new MouseEvent('mouseover', { bubbles:true }));
-            tile.dispatchEvent(new MouseEvent('mouseenter', { bubbles:true }));
-            await this.sleep(350);
-            const UI = ['favorite','redo','more_vert','image','warning','refresh','delete_forever','undo','play_arrow','pause','download',
-                         'Adicionar aos favoritos','Reutilizar comando','Mais','Add to favorites','Reuse prompt','More','Falha','Ops!',
-                         'Tentar novamente','Excluir','Failed','Oops!','Retry','Delete'];
-            let nome = null;
-            for (let t = 0; t < 5; t++) {
-                for (const div of tile.querySelectorAll('div')) {
-                    const text = div.textContent?.trim();
-                    if (!text || text.length < 1 || text.length > 80) continue;
-                    if ([...div.querySelectorAll('div')].some(c => c.textContent?.trim())) continue;
-                    if (div.querySelector('i, svg, button')) continue;
-                    if (UI.some(u => text === u)) continue;
-                    nome = text; break;
-                }
-                if (nome) break; await this.sleep(100);
-            }
-            tile.dispatchEvent(new MouseEvent('mouseleave', { bubbles:true }));
-            tile.dispatchEvent(new MouseEvent('mouseout', { bubbles:true }));
-            await this.sleep(80);
-            return nome;
+       async getTileName(tile) {
+    tile.dispatchEvent(new MouseEvent('mouseover', { bubbles:true }));
+    tile.dispatchEvent(new MouseEvent('mouseenter', { bubbles:true }));
+    await this.sleep(350);
+
+    const UI = [
+        'favorite','redo','more_vert','image','warning','refresh','delete_forever','undo',
+        'play_arrow','pause','download',
+        'Adicionar aos favoritos','Reutilizar comando','Mais',
+        'Add to favorites','Reuse prompt','More',
+        'Falha','Ops!','Tentar novamente','Excluir',
+        'Failed','Oops!','Retry','Delete'
+    ];
+
+    let nome = null;
+
+    for (let t = 0; t < 5; t++) {
+        for (const div of tile.querySelectorAll('div')) {
+            // Ignora labels visuais criadas pela própria extensão
+            if (div.closest('.flow-tile-label')) continue;
+            if (div.closest('.flow-assign-item')) continue;
+
+            const text = div.textContent?.trim();
+
+            if (!text || text.length < 1 || text.length > 80) continue;
+            if ([...div.querySelectorAll('div')].some(c => c.textContent?.trim())) continue;
+            if (div.querySelector('i, svg, button')) continue;
+            if (UI.some(u => text === u)) continue;
+
+            nome = text;
+            break;
         }
+
+        if (nome) break;
+        await this.sleep(100);
+    }
+
+    tile.dispatchEvent(new MouseEvent('mouseleave', { bubbles:true }));
+    tile.dispatchEvent(new MouseEvent('mouseout', { bubbles:true }));
+    await this.sleep(80);
+
+    return nome;
+}
 
         // ──────────────────────────────────────────────
         // PAINEL DE ATRIBUIÇÃO (Drag & Drop)
