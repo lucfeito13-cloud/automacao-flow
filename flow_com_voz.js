@@ -458,6 +458,14 @@ function triggerTrustedClick(el) {
               </select>
             </div>
             <div id="flow-grid-info" style="font-size:11px;color:var(--cd-text-light);margin-top:4px;font-style:italic;"></div>
+           <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+  <input type="checkbox" id="flow-auto-name-scenes">
+  <div class="flow-option-text">
+    <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Nomear imagens automaticamente</div>
+    <div class="flow-option-desc">No modo Cenas, renomeia no final como Cena X - Imagem Y.</div>
+  </div>
+</label>
+
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <input type="checkbox" id="flow-use-backspace">
               <div class="flow-option-text">
@@ -572,6 +580,13 @@ function triggerTrustedClick(el) {
               </select>
             </div>
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+  <input type="checkbox" id="fv-auto-name-scenes">
+  <div class="flow-option-text">
+    <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Nomear vídeos automaticamente</div>
+    <div class="flow-option-desc">No modo Cenas, renomeia no final como Cena X - Vídeo Y.</div>
+  </div>
+</label>
+            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <input type="checkbox" id="fv-use-backspace">
               <div class="flow-option-text">
                 <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Modo alternativo (Backspace 3x)</div>
@@ -615,7 +630,7 @@ function triggerTrustedClick(el) {
                 <button class="flow-validate-btn" id="fv-dl-identified" style="margin:0;">📋 Todas as Identificadas</button>
                 <button class="flow-validate-btn" id="fv-dl-scenes" style="margin:0;">🎬 Apenas Cenas</button>
                 <button class="flow-validate-btn" id="fv-dl-all" style="margin:0;">📦 Completo (Todas as Geradas)</button>
-                <button class="flow-validate-btn" id="fv-upscale-btn" style="margin:0; background:linear-gradient(135deg, #8b5cf6, #6d28d9); color:#fff; border:none; margin-top: 6px;">🚀 Iniciar Upscale 1080p (Cenas Atribuídas)</button>
+                <button class="flow-validate-btn" id="fv-upscale-btn" style="margin:0; background:linear-gradient(135deg, #8b5cf6, #6d28d9); color:#fff; border:none; margin-top: 6px;">🚀 Upscale 1080p (Vídeos Identificados)</button>
               </div>
             </div>
           </div>
@@ -1881,11 +1896,17 @@ clearValidatedRefsCache() {
                     if (this.genMode !== 'free') statusMsg += ' Arraste os nomes para atribuir às imagens.';
                     this.setStatus('success', statusMsg);
 
-                    // Mostra painel de atribuição se não é modo livre
-                    if (this.genMode === 'refs' || this.genMode === 'scenes') {
-                        this.showAssignPanel(allMatrices);
-                    }
+// Mostra painel de atribuição / nomeia automaticamente, se escolhido
+if (this.genMode === 'refs') {
+    this.showAssignPanel(allMatrices);
+} else if (this.genMode === 'scenes') {
+    this.showAssignPanel(allMatrices);
 
+    const autoNameImages = document.getElementById('flow-auto-name-scenes')?.checked;
+    if (autoNameImages) {
+        await this.autoAssignScenesFromMatrices(allMatrices, { isVideo: false });
+    }
+}
                     // Popup com detalhes de falhas
                     let popupMsg = `${doneCount} prompt(s) gerado(s) com sucesso.`;
                     if (this.genMode === 'refs') popupMsg += '\n\nArraste as referências do painel superior para as imagens desejadas.';
@@ -2428,6 +2449,89 @@ updateFn();
                 this.logDebug(`Removida atribuição de ${wfId}`, 'info');
             });
         }
+        async autoAssignScenesFromMatrices(allMatrices, options = {}) {
+    const isVideo = !!options.isVideo;
+
+    const assignments = isVideo ? this.videoSceneAssignments : this.sceneAssignments;
+    const statusFn = isVideo
+        ? (type, msg) => this.setVideoStatus(type, msg)
+        : (type, msg) => this.setStatus(type, msg);
+
+    const logFn = isVideo
+        ? (msg, type) => this.logVideoDebug(msg, type)
+        : (msg, type) => this.logDebug(msg, type);
+
+    const mediaLabel = isVideo ? 'vídeo' : 'imagem';
+
+    const slots = allMatrices
+        .flatMap(m => Array.isArray(m) ? m : [])
+        .filter(s => s && s.state === 'loaded' && s.workflowId)
+        .sort((a, b) => {
+            const pa = Number(a.promptNum || 0);
+            const pb = Number(b.promptNum || 0);
+            if (pa !== pb) return pa - pb;
+            return Number(a.imgNum || 0) - Number(b.imgNum || 0);
+        });
+
+    if (!slots.length) {
+        statusFn('warning', `Nenhuma ${mediaLabel} carregada para nomear automaticamente.`);
+        return;
+    }
+
+    const previousVideoAssignState = this._videoAssignActive;
+    this._videoAssignActive = isVideo;
+
+    let assigned = 0;
+    let failed = 0;
+    const used = new Set();
+
+    try {
+        logFn(`Iniciando nomeação automática de ${slots.length} ${mediaLabel}(s).`, 'info');
+
+        for (const slot of slots) {
+            if ((isVideo && this.videoShouldStop) || (!isVideo && this.shouldStop)) break;
+            if (!slot.workflowId || used.has(slot.workflowId)) continue;
+
+            used.add(slot.workflowId);
+
+            const sceneNum = Number(slot.promptNum || 0);
+            if (!sceneNum) {
+                failed++;
+                continue;
+            }
+
+            const sceneName = `Cena ${sceneNum}`;
+            if (!assignments.has(sceneName)) assignments.set(sceneName, []);
+
+            const tile = await this.scrollToWorkflow(slot.workflowId);
+            if (!tile) {
+                failed++;
+                logFn(`Tile não encontrado para ${slot.workflowId.substring(0, 8)}.`, 'error');
+                continue;
+            }
+
+            await this.assignScene(sceneNum, sceneName, slot.workflowId, tile);
+            assigned++;
+
+            statusFn(
+                'info',
+                `🏷️ Nomeando ${mediaLabel}s automaticamente: ${assigned}/${slots.length}`
+            );
+
+            await this.sleep(500);
+        }
+
+        statusFn(
+            'success',
+            `✅ ${assigned} ${mediaLabel}(s) nomeada(s) automaticamente.${failed ? ` Falhas: ${failed}.` : ''}`
+        );
+
+        logFn(`✅ Nomeação automática concluída: ${assigned} sucesso(s), ${failed} falha(s).`, 'success');
+
+    } finally {
+        this._videoAssignActive = previousVideoAssignState;
+    }
+}
 
         // ──────────────────────────────────────────────
         // ATRIBUIR REFERÊNCIA
@@ -3186,11 +3290,15 @@ updateFn();
                     if (this.videoGenMode === 'scenes') statusMsg += ' Arraste as cenas para atribuir aos vídeos.';
                     this.setVideoStatus('success', statusMsg);
 
-                    // Mostra painel de atribuição se modo cenas
-                    if (this.videoGenMode === 'scenes') {
-                        this.showVideoAssignPanel(allMatrices);
-                    }
+                    // Mostra painel de atribuição / nomeia automaticamente, se escolhido
+if (this.videoGenMode === 'scenes') {
+    this.showVideoAssignPanel(allMatrices);
 
+    const autoNameVideos = document.getElementById('fv-auto-name-scenes')?.checked;
+    if (autoNameVideos) {
+        await this.autoAssignScenesFromMatrices(allMatrices, { isVideo: true });
+    }
+}
                     // Popup com detalhes
                     let popupMsg = `${doneCount} prompt(s) de vídeo gerado(s) com sucesso.`;
                     if (this.videoGenMode === 'scenes') popupMsg += '\n\nArraste as cenas do painel superior para os melhores vídeos.';
@@ -3539,13 +3647,15 @@ for (const [wfId, data] of this.tileAssignments.entries()) {
             }
 
             this.setVideoStatus('success', `✅ Upscale solicitado para ${count} vídeo(s). Falhas: ${fail}.`);
-            this.logVideoDebug(`✅ Processo concluído. Upscale solicitado: ${count}. Falhas: ${fail}.`, 'success');
+this.logVideoDebug(`✅ Processo concluído. Upscale solicitado: ${count}. Falhas: ${fail}.`, 'success');
 
-            if (btn) {
-                btn.disabled = false;
-                btn.textContent = '🚀 Upscale 1080p (Vídeos Identificados)';
-        }
-        async scrollToWorkflow(wfId) {
+if (btn) {
+    btn.disabled = false;
+    btn.textContent = '🚀 Upscale 1080p (Vídeos Identificados)';
+}
+}
+
+async scrollToWorkflow(wfId) {
             const scroller = this.getScroller();
             if (!scroller) return null;
             scroller.scrollTop = 0;
