@@ -2320,13 +2320,48 @@ updateFn();
         // ──────────────────────────────────────────────
         // PAINEL DE ATRIBUIÇÃO (Drag & Drop)
         // ──────────────────────────────────────────────
+        getSceneVariationCountsFromMatrices(allMatrices) {
+    const counts = new Map();
+    const seen = new Set();
 
+    const slots = (allMatrices || [])
+        .flatMap(m => Array.isArray(m) ? m : [])
+        .filter(Boolean);
+
+    for (const slot of slots) {
+        if (slot.state !== 'loaded') continue;
+
+        const sceneNum = Number(slot.promptNum || 0);
+        if (!sceneNum) continue;
+
+        const uniqueKey =
+            slot.workflowId ||
+            slot.uuid ||
+            slot.src ||
+            `${slot.row}:${slot.col}:${slot.promptNum}:${slot.imgNum}`;
+
+        if (seen.has(uniqueKey)) continue;
+        seen.add(uniqueKey);
+
+        counts.set(sceneNum, (counts.get(sceneNum) || 0) + 1);
+    }
+
+    return counts;
+}
+
+formatSceneNameWithVariationCount(sceneName, variationCounts) {
+    const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0, 10);
+    const count = variationCounts?.get(sceneNum) || 0;
+
+    return `${sceneName} (${count})`;
+}
         showAssignPanel(allMatrices) {
             this._videoAssignActive = false;
             const panel = document.getElementById('flow-assign-panel');
             const title = document.getElementById('flow-assign-title');
             const items = document.getElementById('flow-assign-items');
             const dlBtn = document.getElementById('flow-assign-download');
+            const variationCounts = this.getSceneVariationCountsFromMatrices(allMatrices);
 
             items.innerHTML = '';
 
@@ -2370,7 +2405,10 @@ updateFn();
                     item.dataset.type = 'scene';
                     item.dataset.scene = sceneName;
                     item.dataset.sceneNum = sceneNum;
-                    item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
+                    const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, variationCounts);
+
+item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">⏳</span>`;
+item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;
                     item.addEventListener('mouseenter', () => {
                         const preview = document.getElementById('flow-assign-preview');
                         if (preview) {
@@ -3471,6 +3509,7 @@ if (this.videoGenMode === 'scenes') {
             const title = document.getElementById('flow-assign-title');
             const items = document.getElementById('flow-assign-items');
             const dlBtn = document.getElementById('flow-assign-download');
+            const variationCounts = this.getSceneVariationCountsFromMatrices(allMatrices);
 
             items.innerHTML = '';
             title.textContent = 'Atribuir Cenas (Vídeos)';
@@ -3496,8 +3535,10 @@ if (this.videoGenMode === 'scenes') {
                 item.dataset.type = 'scene';
                 item.dataset.scene = sceneName;
                 item.dataset.sceneNum = sceneNum;
-                item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
-                item.addEventListener('mouseenter', () => {
+const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, variationCounts);
+
+item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">⏳</span>`;
+item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;                item.addEventListener('mouseenter', () => {
                     const preview = document.getElementById('flow-assign-preview');
                     if (preview) {
                         preview.style.display = '';
@@ -3670,16 +3711,26 @@ if (this.videoGenMode === 'scenes') {
         }
 
         async startUpscaleProcess() {
-            const btn = document.getElementById('fv-upscale-btn');
-            const requested = this.getUpscaleRequestedSet();
+           const btn = document.getElementById('fv-upscale-btn');
+
+// Controle apenas desta execução.
+// Assim uma variação não fica "pulada" por ter sido marcada em tentativa anterior.
+const requested = new Set();
 
             if (btn) {
                 btn.disabled = true;
                 btn.textContent = '⏳ Iniciando Upscale 1080p...';
             }
 
-           const wfIdsToUpscale = [];
+           const wfIdsToUpscaleSet = new Set();
 
+const addVideoToUpscale = (wfId) => {
+    if (!wfId) return;
+    if (requested.has(wfId)) return;
+    wfIdsToUpscaleSet.add(wfId);
+};
+
+// 1) Pega vídeos identificados pelo mapa geral de tiles
 for (const [wfId, data] of this.tileAssignments.entries()) {
     const label = data?.label || '';
 
@@ -3687,10 +3738,27 @@ for (const [wfId, data] of this.tileAssignments.entries()) {
         data?.type === 'scene' &&
         /^Cena\s+\d+\s*-\s*(?:Vídeo|Video)\s+\d+$/i.test(label);
 
-    if (isIdentifiedVideo && !requested.has(wfId)) {
-        wfIdsToUpscale.push(wfId);
+    if (isIdentifiedVideo) {
+        addVideoToUpscale(wfId);
     }
 }
+
+// 2) Pega também vídeos identificados no mapa específico de cenas de vídeo
+// Isso garante que Cena X - Vídeo 1, Vídeo 2, Vídeo 3 etc. entrem todos.
+if (this.videoSceneAssignments instanceof Map) {
+    for (const [sceneName, arr] of this.videoSceneAssignments.entries()) {
+        for (const item of arr || []) {
+            addVideoToUpscale(item?.workflowId);
+        }
+    }
+}
+
+const wfIdsToUpscale = [...wfIdsToUpscaleSet];
+
+this.logVideoDebug(
+    `Upscale: ${wfIdsToUpscale.length} vídeo(s) identificado(s) único(s) encontrados para processar.`,
+    'info'
+);
 
             if (!wfIdsToUpscale.length) {
                 this.setVideoStatus('warning', 'Nenhum vídeo identificado pendente para upscale. Use "Analisar projeto existente" ou atribua as cenas primeiro.');
