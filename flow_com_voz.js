@@ -3693,8 +3693,7 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
 
         async waitForUpscaleToast() {
             const toast = await this.waitFor(() => {
-                const toasts = [...document.querySelectorAll('li[data-sonner-toast], li[data-sonner-toast="true"]')];
-                return toasts.find(el =>
+const toasts = [...document.querySelectorAll('li[data-sonner-toast], li[data-sonner-toast="true"]')];                return toasts.find(el =>
                     /Upscaling your video/i.test(el.textContent || '')
                 );
             }, 6000, 200);
@@ -3736,8 +3735,7 @@ async scanIdentifiedVideosForUpscale() {
 const found = new Map();
 const seenMediaKeys = new Set();
 const foundFromGallery = { count: 0 };
-const seenMediaKeys = new Set();
-const foundFromGallery = { count: 0 };
+
     if (!scroller) {
         this.logVideoDebug('Upscale scan: scroller não encontrado.', 'error');
         return found;
