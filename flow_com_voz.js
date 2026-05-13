@@ -3709,29 +3709,69 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
             if (!this._upscaleRequestedWfIds) this._upscaleRequestedWfIds = new Set();
             return this._upscaleRequestedWfIds;
         }
+        getVideoMediaIdentityFromTile(tile, fallback = '') {
+    if (!tile) return fallback || '';
+
+    const media =
+        tile.querySelector('video[src*="getMediaUrlRedirect"]') ||
+        tile.querySelector('img[src*="getMediaUrlRedirect"]');
+
+    if (!media?.src) return fallback || '';
+
+    try {
+        const url = new URL(media.src);
+        const mediaName = url.searchParams.get('name');
+
+        if (mediaName) return `media:${mediaName}`;
+    } catch (e) {}
+
+    return `src:${media.src}`;
+}
 async scanIdentifiedVideosForUpscale() {
     const scroller = this.getScroller();
-    const found = new Map();
-
+const found = new Map();
+const seenMediaKeys = new Set();
+const foundFromGallery = { count: 0 };
     if (!scroller) {
         this.logVideoDebug('Upscale scan: scroller não encontrado.', 'error');
         return found;
     }
 
-    const addFound = (workflowId, label, tile) => {
-        if (!workflowId || !label) return;
+    const addFound = (workflowId, label, tile, source = 'gallery') => {
+    if (!workflowId || !label) return;
 
-        const match = label.match(/^Cena\s+(\d+)\s*-\s*(?:Vídeo|Video)\s+(\d+)$/i);
-        if (!match) return;
+    const match = label.match(/^Cena\s+(\d+)\s*-\s*(?:Vídeo|Video)\s+(\d+)$/i);
+    if (!match) return;
 
-        found.set(workflowId, {
-            workflowId,
-            label,
-            sceneNum: parseInt(match[1], 10),
-            videoNum: parseInt(match[2], 10),
-            tile
-        });
-    };
+    const sceneNum = parseInt(match[1], 10);
+    const videoNum = parseInt(match[2], 10);
+
+    const mediaKey = this.getVideoMediaIdentityFromTile(tile, '');
+
+    // Se veio da galeria e a mídia já apareceu, é duplicado real.
+    // Isso evita pegar a mesma variação como se fosse outra.
+    if (mediaKey && seenMediaKeys.has(mediaKey)) {
+        this.logVideoDebug(`⚠️ Duplicado ignorado no upscale: ${label} usa a mesma mídia de outro vídeo.`, 'warning');
+        return;
+    }
+
+    // Se o mesmo workflow já entrou, não mexe.
+    if (found.has(workflowId)) return;
+
+    if (mediaKey) seenMediaKeys.add(mediaKey);
+
+    if (source === 'gallery') foundFromGallery.count++;
+
+    found.set(workflowId, {
+        workflowId,
+        label,
+        sceneNum,
+        videoNum,
+        mediaKey,
+        tile,
+        source
+    });
+};
 
     this.logVideoDebug('🔎 Upscale: varrendo galeria para encontrar todos os vídeos identificados...', 'info');
 
@@ -3752,8 +3792,7 @@ async scanIdentifiedVideosForUpscale() {
             const name = await this.getTileName(tile);
             if (!name) continue;
 
-            addFound(workflowId, name, tile);
-        }
+addFound(workflowId, name, tile, 'gallery');        }
     };
 
     // Passada 1: de cima para baixo
@@ -3808,7 +3847,12 @@ async scanIdentifiedVideosForUpscale() {
         if (now <= 0 && samePositionCount >= 2) break;
     }
 
-    // Também junta o que já estava na memória da extensão
+   // Usa a memória apenas como fallback.
+// Se a galeria encontrou vídeos identificados, ela vira a fonte principal.
+// Isso evita memória antiga duplicar a mesma variação.
+if (foundFromGallery.count === 0) {
+    this.logVideoDebug('⚠️ Galeria não retornou vídeos identificados. Usando memória da extensão como fallback.', 'warning');
+
     for (const [workflowId, data] of this.tileAssignments.entries()) {
         const label = data?.label || '';
 
@@ -3816,7 +3860,7 @@ async scanIdentifiedVideosForUpscale() {
             data?.type === 'scene' &&
             /^Cena\s+\d+\s*-\s*(?:Vídeo|Video)\s+\d+$/i.test(label)
         ) {
-            addFound(workflowId, label, null);
+            addFound(workflowId, label, null, 'memory');
         }
     }
 
@@ -3832,10 +3876,13 @@ async scanIdentifiedVideosForUpscale() {
                     ? `Cena ${sceneNum} - Vídeo ${videoNum}`
                     : '';
 
-                addFound(item.workflowId, label, null);
+                addFound(item.workflowId, label, null, 'memory');
             }
         }
     }
+} else {
+    this.logVideoDebug('✅ Usando apenas vídeos confirmados pela galeria para evitar duplicados.', 'success');
+}
 
     const sorted = new Map(
         [...found.entries()].sort((a, b) => {
