@@ -2320,48 +2320,13 @@ updateFn();
         // ──────────────────────────────────────────────
         // PAINEL DE ATRIBUIÇÃO (Drag & Drop)
         // ──────────────────────────────────────────────
-        getSceneVariationCountsFromMatrices(allMatrices) {
-    const counts = new Map();
-    const seen = new Set();
 
-    const slots = (allMatrices || [])
-        .flatMap(m => Array.isArray(m) ? m : [])
-        .filter(Boolean);
-
-    for (const slot of slots) {
-        if (slot.state !== 'loaded') continue;
-
-        const sceneNum = Number(slot.promptNum || 0);
-        if (!sceneNum) continue;
-
-        const uniqueKey =
-            slot.workflowId ||
-            slot.uuid ||
-            slot.src ||
-            `${slot.row}:${slot.col}:${slot.promptNum}:${slot.imgNum}`;
-
-        if (seen.has(uniqueKey)) continue;
-        seen.add(uniqueKey);
-
-        counts.set(sceneNum, (counts.get(sceneNum) || 0) + 1);
-    }
-
-    return counts;
-}
-
-formatSceneNameWithVariationCount(sceneName, variationCounts) {
-    const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0, 10);
-    const count = variationCounts?.get(sceneNum) || 0;
-
-    return `${sceneName} (${count})`;
-}
         showAssignPanel(allMatrices) {
             this._videoAssignActive = false;
             const panel = document.getElementById('flow-assign-panel');
             const title = document.getElementById('flow-assign-title');
             const items = document.getElementById('flow-assign-items');
             const dlBtn = document.getElementById('flow-assign-download');
-            const variationCounts = this.getSceneVariationCountsFromMatrices(allMatrices);
 
             items.innerHTML = '';
 
@@ -2405,10 +2370,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     item.dataset.type = 'scene';
                     item.dataset.scene = sceneName;
                     item.dataset.sceneNum = sceneNum;
-                    const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, variationCounts);
-
-item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">⏳</span>`;
-item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;
+                    item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
                     item.addEventListener('mouseenter', () => {
                         const preview = document.getElementById('flow-assign-preview');
                         if (preview) {
@@ -3509,7 +3471,6 @@ if (this.videoGenMode === 'scenes') {
             const title = document.getElementById('flow-assign-title');
             const items = document.getElementById('flow-assign-items');
             const dlBtn = document.getElementById('flow-assign-download');
-            const variationCounts = this.getSceneVariationCountsFromMatrices(allMatrices);
 
             items.innerHTML = '';
             title.textContent = 'Atribuir Cenas (Vídeos)';
@@ -3535,10 +3496,8 @@ if (this.videoGenMode === 'scenes') {
                 item.dataset.type = 'scene';
                 item.dataset.scene = sceneName;
                 item.dataset.sceneNum = sceneNum;
-const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, variationCounts);
-
-item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">⏳</span>`;
-item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;                item.addEventListener('mouseenter', () => {
+                item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
+                item.addEventListener('mouseenter', () => {
                     const preview = document.getElementById('flow-assign-preview');
                     if (preview) {
                         preview.style.display = '';
@@ -3709,222 +3668,29 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
             if (!this._upscaleRequestedWfIds) this._upscaleRequestedWfIds = new Set();
             return this._upscaleRequestedWfIds;
         }
-        getVideoMediaIdentityFromTile(tile, fallback = '') {
-    if (!tile) return fallback || '';
 
-    const media =
-        tile.querySelector('video[src*="getMediaUrlRedirect"]') ||
-        tile.querySelector('img[src*="getMediaUrlRedirect"]');
-
-    if (!media?.src) return fallback || '';
-
-    try {
-        const url = new URL(media.src);
-        const mediaName = url.searchParams.get('name');
-
-        if (mediaName) return `media:${mediaName}`;
-    } catch (e) {}
-
-    return `src:${media.src}`;
-}
-async scanIdentifiedVideosForUpscale() {
-    const scroller = this.getScroller();
-const found = new Map();
-const seenMediaKeys = new Set();
-const foundFromGallery = { count: 0 };
-    if (!scroller) {
-        this.logVideoDebug('Upscale scan: scroller não encontrado.', 'error');
-        return found;
-    }
-
-    const addFound = (workflowId, label, tile, source = 'gallery') => {
-    if (!workflowId || !label) return;
-
-    const match = label.match(/^Cena\s+(\d+)\s*-\s*(?:Vídeo|Video)\s+(\d+)$/i);
-    if (!match) return;
-
-    const sceneNum = parseInt(match[1], 10);
-    const videoNum = parseInt(match[2], 10);
-
-    const mediaKey = this.getVideoMediaIdentityFromTile(tile, '');
-
-    // Se veio da galeria e a mídia já apareceu, é duplicado real.
-    // Isso evita pegar a mesma variação como se fosse outra.
-    if (mediaKey && seenMediaKeys.has(mediaKey)) {
-        this.logVideoDebug(`⚠️ Duplicado ignorado no upscale: ${label} usa a mesma mídia de outro vídeo.`, 'warning');
-        return;
-    }
-
-    // Se o mesmo workflow já entrou, não mexe.
-    if (found.has(workflowId)) return;
-
-    if (mediaKey) seenMediaKeys.add(mediaKey);
-
-    if (source === 'gallery') foundFromGallery.count++;
-
-    found.set(workflowId, {
-        workflowId,
-        label,
-        sceneNum,
-        videoNum,
-        mediaKey,
-        tile,
-        source
-    });
-};
-
-    this.logVideoDebug('🔎 Upscale: varrendo galeria para encontrar todos os vídeos identificados...', 'info');
-
-    const scanVisibleTiles = async () => {
-        const tiles = [...document.querySelectorAll('[data-tile-id]')];
-
-        for (const rawTile of tiles) {
-            const tile = rawTile.querySelector('a[href*="/edit/"]')
-                ? rawTile
-                : (rawTile.querySelector('[data-tile-id]') || rawTile);
-
-            if (!tile || !this.isTileLoaded(tile)) continue;
-            if (!this.isVideoTile(tile)) continue;
-
-            const workflowId = this.getWorkflowIdFromTile(tile);
-            if (!workflowId || found.has(workflowId)) continue;
-
-            const name = await this.getTileName(tile);
-            if (!name) continue;
-
-addFound(workflowId, name, tile, 'gallery');        }
-    };
-
-    // Passada 1: de cima para baixo
-    scroller.scrollTop = 0;
-    await this.sleep(800);
-
-    let samePositionCount = 0;
-
-    for (let iter = 0; iter < 800; iter++) {
-        await scanVisibleTiles();
-
-        const prev = Math.round(scroller.scrollTop);
-        const step = Math.max(300, Math.floor(scroller.clientHeight * 0.7));
-        scroller.scrollTop = Math.min(scroller.scrollHeight, scroller.scrollTop + step);
-
-        await this.sleep(650);
-
-        const now = Math.round(scroller.scrollTop);
-
-        if (now === prev) {
-            samePositionCount++;
-        } else {
-            samePositionCount = 0;
-        }
-
-        if (samePositionCount >= 2) break;
-    }
-
-    // Passada 2: de baixo para cima, para pegar o que a galeria virtualizada pulou
-    scroller.scrollTop = scroller.scrollHeight;
-    await this.sleep(800);
-
-    samePositionCount = 0;
-
-    for (let iter = 0; iter < 800; iter++) {
-        await scanVisibleTiles();
-
-        const prev = Math.round(scroller.scrollTop);
-        const step = Math.max(300, Math.floor(scroller.clientHeight * 0.7));
-        scroller.scrollTop = Math.max(0, scroller.scrollTop - step);
-
-        await this.sleep(650);
-
-        const now = Math.round(scroller.scrollTop);
-
-        if (now === prev) {
-            samePositionCount++;
-        } else {
-            samePositionCount = 0;
-        }
-
-        if (now <= 0 && samePositionCount >= 2) break;
-    }
-
-   // Usa a memória apenas como fallback.
-// Se a galeria encontrou vídeos identificados, ela vira a fonte principal.
-// Isso evita memória antiga duplicar a mesma variação.
-if (foundFromGallery.count === 0) {
-    this.logVideoDebug('⚠️ Galeria não retornou vídeos identificados. Usando memória da extensão como fallback.', 'warning');
-
-    for (const [workflowId, data] of this.tileAssignments.entries()) {
-        const label = data?.label || '';
-
-        if (
-            data?.type === 'scene' &&
-            /^Cena\s+\d+\s*-\s*(?:Vídeo|Video)\s+\d+$/i.test(label)
-        ) {
-            addFound(workflowId, label, null, 'memory');
-        }
-    }
-
-    if (this.videoSceneAssignments instanceof Map) {
-        for (const [sceneName, arr] of this.videoSceneAssignments.entries()) {
-            const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0, 10);
-
-            for (const item of arr || []) {
-                if (!item?.workflowId) continue;
-
-                const videoNum = Number(item.imgNum || 0);
-                const label = sceneNum && videoNum
-                    ? `Cena ${sceneNum} - Vídeo ${videoNum}`
-                    : '';
-
-                addFound(item.workflowId, label, null, 'memory');
-            }
-        }
-    }
-} else {
-    this.logVideoDebug('✅ Usando apenas vídeos confirmados pela galeria para evitar duplicados.', 'success');
-}
-
-    const sorted = new Map(
-        [...found.entries()].sort((a, b) => {
-            const av = a[1];
-            const bv = b[1];
-
-            if (av.sceneNum !== bv.sceneNum) return av.sceneNum - bv.sceneNum;
-            return av.videoNum - bv.videoNum;
-        })
-    );
-
-    this.logVideoDebug(
-        `✅ Upscale scan: ${sorted.size} vídeo(s) identificado(s) encontrado(s).`,
-        sorted.size ? 'success' : 'warning'
-    );
-
-    for (const item of sorted.values()) {
-        this.logVideoDebug(`• ${item.label} → ${item.workflowId.substring(0, 8)}`, 'info');
-    }
-
-    return sorted;
-}
         async startUpscaleProcess() {
-           const btn = document.getElementById('fv-upscale-btn');
-
-// Controle apenas desta execução.
-// Assim uma variação não fica "pulada" por ter sido marcada em tentativa anterior.
-const requested = new Set();
+            const btn = document.getElementById('fv-upscale-btn');
+            const requested = this.getUpscaleRequestedSet();
 
             if (btn) {
                 btn.disabled = true;
                 btn.textContent = '⏳ Iniciando Upscale 1080p...';
             }
 
-const identifiedVideosMap = await this.scanIdentifiedVideosForUpscale();
+           const wfIdsToUpscale = [];
 
-const wfIdsToUpscale = [...identifiedVideosMap.keys()].filter(wfId => !requested.has(wfId));
+for (const [wfId, data] of this.tileAssignments.entries()) {
+    const label = data?.label || '';
 
-this.logVideoDebug(
-    `Upscale: ${wfIdsToUpscale.length} vídeo(s) identificado(s) único(s) serão processados agora.`,
-    'info'
-);
+    const isIdentifiedVideo =
+        data?.type === 'scene' &&
+        /^Cena\s+\d+\s*-\s*(?:Vídeo|Video)\s+\d+$/i.test(label);
+
+    if (isIdentifiedVideo && !requested.has(wfId)) {
+        wfIdsToUpscale.push(wfId);
+    }
+}
 
             if (!wfIdsToUpscale.length) {
                 this.setVideoStatus('warning', 'Nenhum vídeo identificado pendente para upscale. Use "Analisar projeto existente" ou atribua as cenas primeiro.');
@@ -3942,11 +3708,6 @@ this.logVideoDebug(
             let fail = 0;
 
             for (const wfId of wfIdsToUpscale) {
-                const videoInfo = identifiedVideosMap.get(wfId);
-const videoLabel = videoInfo?.label || wfId.substring(0, 8);
-
-this.logVideoDebug(`🎬 Processando upscale: ${videoLabel}`, 'info');
-this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                 if (this.videoShouldStop) break;
 
                 try {
@@ -3994,16 +3755,16 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                     if (toastOk) {
                         requested.add(wfId);
                         count++;
-                        this.logVideoDebug(`✅ Upscale solicitado para ${videoLabel}`, 'success');
+                        this.logVideoDebug(`✅ Upscale solicitado para ${wfId.substring(0, 8)}`, 'success');
                     } else {
                         // em alguns casos o clique pega mesmo sem o toast aparecer
                         requested.add(wfId);
                         count++;
-                        this.logVideoDebug(`⚠️ Clique em 1080p executado, mas toast não apareceu para ${videoLabel}`, 'warning');
+                        this.logVideoDebug(`⚠️ Clique em 1080p executado, mas toast não apareceu para ${wfId.substring(0, 8)}`, 'warning');
                     }
 
                     if (btn) btn.textContent = `⏳ Upscale ${count}/${wfIdsToUpscale.length}`;
-                    await this.sleep(2200);
+                    await this.sleep(1200);
 
                 } catch (err) {
                     fail++;
