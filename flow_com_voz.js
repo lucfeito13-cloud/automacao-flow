@@ -926,22 +926,24 @@ if (fixUploadRefsBtn) {
                 list.innerHTML = html;
             }
         }
-        cleanUploadReferenceName(rawName) {
+cleanUploadReferenceName(rawName) {
     if (!rawName) return null;
 
     let name = String(rawName).trim();
 
-    // Se já virou referência, não mexe de novo
+    // Se já está no padrão de referência, não mexe
     if (/\s_$/.test(name)) return null;
 
-    // Só mexe em nomes que parecem arquivo de imagem
-    const hasImageExtension = /\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i.test(name);
-    if (!hasImageExtension) return null;
+    // Não mexe em cenas/imagens/vídeos já identificados
+    if (/^Cena\s+\d+\s*-\s*(Imagem|Vídeo|Video)\s+\d+$/i.test(name)) return null;
 
-    // Remove extensão
+    // Não mexe em nomes genéricos do Flow
+    if (/^(Imagem gerada|Video gerado|Vídeo gerado|Generated image|Generated video)$/i.test(name)) return null;
+
+    // Remove extensão de arquivo, se existir
     name = name.replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '');
 
-    // Limpa separadores comuns de arquivo
+    // Limpa caracteres ruins de nome de arquivo
     name = name
         .replace(/[_-]+/g, ' ')
         .replace(/\s+/g, ' ')
@@ -950,6 +952,21 @@ if (fixUploadRefsBtn) {
     if (!name || name.length < 2) return null;
 
     return name;
+}
+        referenceKey(rawName) {
+    if (!rawName) return '';
+
+    return String(rawName)
+        .trim()
+        .replace(/\s_$/i, '')
+        .replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[_-]+/g, ' ')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
 }
 markReferencesAsValidated(source = 'images') {
     const isVideo = source === 'video';
@@ -973,6 +990,7 @@ markReferencesAsValidated(source = 'images') {
     for (const ref of refs) {
         const key = ref.toLowerCase().trim();
         this.validatedRefs[key] = true;
+this.validatedRefs[this.referenceKey(ref)] = true;
     }
 
     updateFn();
@@ -1966,28 +1984,44 @@ async renameUploadReferencesFromFilenames() {
         let renamed = 0;
         let skipped = 0;
         let failed = 0;
+        let samePositionCount = 0;
 
-        this.setStatus('info', '🧹 Procurando uploads com .jpg, .png, .webp, .jpeg...');
-        this.logDebug('Iniciando correção de uploads para referências...', 'info');
+        this.setStatus('info', '🧹 Corrigindo uploads para o padrão de referência...');
+        this.logDebug('Iniciando correção reforçada de uploads para referências...', 'info');
 
-        // Começa do final e sobe, igual a validação de referências
+        // Começa do final da galeria
         scroller.scrollTop = scroller.scrollHeight;
-        await this.sleep(600);
+        await this.sleep(900);
 
-        for (let iter = 0; iter < 500; iter++) {
-            const tiles = [...document.querySelectorAll('[data-tile-id]')]
-                .filter(el => el.parentElement.closest('[data-tile-id]'));
+        for (let iter = 0; iter < 900; iter++) {
+            const visibleTiles = [...document.querySelectorAll('[data-tile-id]')];
 
-            for (const tile of tiles) {
+            const uniqueTiles = new Map();
+
+            for (const el of visibleTiles) {
+                const tile = el.querySelector('a[href*="/edit/"]') ? el : (el.querySelector('[data-tile-id]') || el);
                 const workflowId = this.getWorkflowIdFromTile(tile);
 
-                if (!workflowId || checked.has(workflowId)) continue;
+                if (!workflowId) continue;
+                if (uniqueTiles.has(workflowId)) continue;
+
+                uniqueTiles.set(workflowId, tile);
+            }
+
+            for (const [workflowId, tile] of uniqueTiles.entries()) {
+                if (checked.has(workflowId)) continue;
                 checked.add(workflowId);
 
-                if (!this.isTileLoaded(tile)) continue;
+                if (!this.isTileLoaded(tile)) {
+                    skipped++;
+                    continue;
+                }
 
-                // Referências são imagens. Evita mexer em vídeo por segurança.
-                if (this.isVideoTile(tile)) continue;
+                // Referências são imagens. Não mexe em vídeo.
+                if (this.isVideoTile(tile)) {
+                    skipped++;
+                    continue;
+                }
 
                 const currentName = await this.getTileName(tile);
                 const cleanName = this.cleanUploadReferenceName(currentName);
@@ -1999,7 +2033,7 @@ async renameUploadReferencesFromFilenames() {
 
                 const newName = cleanName + CONFIG.REF_SUFFIX;
 
-                this.logDebug(`Renomeando upload: "${currentName}" → "${newName}"`, 'info');
+                this.logDebug(`Renomeando referência: "${currentName}" → "${newName}"`, 'info');
 
                 const okRename = await this.apiRename(workflowId, newName);
                 const okFav = await this.apiFavorite(workflowId, true);
@@ -2007,8 +2041,12 @@ async renameUploadReferencesFromFilenames() {
                 if (okRename && okFav) {
                     renamed++;
 
-                    const key = cleanName.toLowerCase().trim();
-                    this.validatedRefs[key] = true;
+                    const lowerKey = cleanName.toLowerCase().trim();
+                    const refKey = this.referenceKey(cleanName);
+
+                    this.validatedRefs[lowerKey] = true;
+                    this.validatedRefs[refKey] = true;
+
                     this.refAssignments.set(cleanName, workflowId);
                     this.tileAssignments.set(workflowId, {
                         label: cleanName,
@@ -2019,24 +2057,37 @@ async renameUploadReferencesFromFilenames() {
                     const outer = tile.closest('[data-tile-id]') || tile;
                     this.addLabelToTile(outer, cleanName, workflowId, 'ref', cleanName);
 
-                    this.logDebug(`✅ Referência criada: ${cleanName}`, 'success');
+                    this.logDebug(`✅ Referência pronta: ${cleanName}`, 'success');
 
                     if (btn) {
                         btn.textContent = `⏳ ${renamed} corrigida(s)...`;
                     }
 
-                    await this.sleep(350);
+                    await this.sleep(450);
                 } else {
                     failed++;
                     this.logDebug(`❌ Falha ao renomear "${currentName}"`, 'error');
                 }
             }
 
-            const prev = scroller.scrollTop;
-            scroller.scrollTop = Math.max(0, scroller.scrollTop - 350);
-            await this.sleep(400);
+            const prev = Math.round(scroller.scrollTop);
 
-            if (scroller.scrollTop === 0 && prev === 0) break;
+            // Scroll mais forte e mais lento para a galeria virtualizada carregar os próximos cards
+            const step = Math.max(280, Math.floor(scroller.clientHeight * 0.65));
+            scroller.scrollTop = Math.max(0, scroller.scrollTop - step);
+
+            await this.sleep(700);
+
+            const now = Math.round(scroller.scrollTop);
+
+            if (now === prev) {
+                samePositionCount++;
+            } else {
+                samePositionCount = 0;
+            }
+
+            // Chegou no topo e não anda mais
+            if (now <= 0 && samePositionCount >= 2) break;
         }
 
         this.saveValidatedRefs();
@@ -2047,16 +2098,19 @@ async renameUploadReferencesFromFilenames() {
             this.startLabelObserver();
             this.setStatus(
                 'success',
-                `✅ ${renamed} upload(s) corrigido(s) para referência. ${failed ? `${failed} falha(s).` : ''}`
+                `✅ ${renamed} referência(s) corrigida(s). ${failed ? `${failed} falha(s).` : ''}`
             );
         } else {
             this.setStatus(
                 'warning',
-                'Nenhum upload com extensão .jpg, .png, .jpeg ou .webp foi encontrado para corrigir.'
+                'Nenhum upload novo foi corrigido. Verifique se os cards estão carregados e se os nomes ainda não estavam no padrão de referência.'
             );
         }
 
-        this.logDebug(`Correção finalizada: ${renamed} corrigido(s), ${skipped} ignorado(s), ${failed} falha(s).`, 'info');
+        this.logDebug(
+            `Correção finalizada: ${renamed} corrigido(s), ${skipped} ignorado(s), ${failed} falha(s), ${checked.size} tile(s) verificado(s).`,
+            'info'
+        );
 
     } catch (err) {
         this.setStatus('error', 'Erro ao corrigir uploads: ' + err.message);
@@ -2096,14 +2150,27 @@ this.validatedRefs = {
 };
 
 // Se alguma referência já foi validada antes, ela não precisa ser escaneada de novo
-const cachedFound = refs.filter(r => this.validatedRefs[r.toLowerCase().trim()] === true);
-const pending = new Set(
-    refs
-        .filter(r => this.validatedRefs[r.toLowerCase().trim()] !== true)
-        .map(r => r.toLowerCase().trim())
+const cachedFound = refs.filter(r =>
+    this.validatedRefs[r.toLowerCase().trim()] === true ||
+    this.validatedRefs[this.referenceKey(r)] === true
 );
 
-const found = new Set(cachedFound.map(r => r.toLowerCase().trim()));
+const pending = new Map();
+
+for (const ref of refs) {
+    const lowerKey = ref.toLowerCase().trim();
+    const refKey = this.referenceKey(ref);
+
+    const alreadyValid =
+        this.validatedRefs[lowerKey] === true ||
+        this.validatedRefs[refKey] === true;
+
+    if (!alreadyValid) {
+        pending.set(refKey, ref);
+    }
+}
+
+const found = new Set(cachedFound.map(r => this.referenceKey(r)));
 
 if (!pending.size) {
     updateFn();
@@ -2125,12 +2192,15 @@ if (!pending.size) {
                         checkedTileIds.add(id);
                         const name = await this.getTileName(tile);
                         if (!name) continue;
-                        const lc = name.toLowerCase().trim().replace(/ _$/, '');
-                        if (pending.has(lc)) {
-                            pending.delete(lc); found.add(lc);
-                            btn.textContent = `⏳ ${found.size}/${refs.length}`;
-                            const wfId = this.getWorkflowIdFromTile(tile);
-                            const originalName = refs.find(r => r.toLowerCase().trim() === lc) || name.replace(/ _$/, '');
+                        const lc = this.referenceKey(name);
+
+if (pending.has(lc)) {
+    const originalName = pending.get(lc);
+    pending.delete(lc);
+    found.add(lc);
+
+    btn.textContent = `⏳ ${found.size}/${refs.length}`;
+    const wfId = this.getWorkflowIdFromTile(tile);
                             if (wfId) {
                                 const outer = tile.closest('[data-tile-id]') || tile;
                                 this.tileAssignments.set(wfId, { label: originalName, type: 'ref', name: originalName });
@@ -2142,21 +2212,23 @@ if (!pending.size) {
                     scroller.scrollTop = Math.max(0, scroller.scrollTop - 350); await this.sleep(400);
                     if (scroller.scrollTop === 0 && prev === 0) break;
                 }
-               for (const ref of refs) {
-    const key = ref.toLowerCase().trim();
+              for (const ref of refs) {
+    const lowerKey = ref.toLowerCase().trim();
+    const refKey = this.referenceKey(ref);
 
-    if (found.has(key)) {
-        this.validatedRefs[key] = true;
+    if (found.has(refKey)) {
+        this.validatedRefs[lowerKey] = true;
+        this.validatedRefs[refKey] = true;
     } else {
-        // Não salva como permanente, mas mostra como ausente nesta validação
-        this.validatedRefs[key] = false;
+        this.validatedRefs[lowerKey] = false;
+        this.validatedRefs[refKey] = false;
     }
 }
 
 this.saveValidatedRefs();
 updateFn();
                 if (!pending.size) statusFn('success', `✅ Todas as ${refs.length} referências encontradas!`);
-                else statusFn('error', `❌ Não encontradas: ${refs.filter(r => pending.has(r.toLowerCase().trim())).join(', ')}`);
+                else statusFn('error', `❌ Não encontradas: ${[...pending.values()].join(', ')}`);
                 scroller.scrollTop = 0;
                 if (found.size > 0) this.startLabelObserver();
             } catch (err) { statusFn('error', 'Erro: ' + err.message); }
