@@ -456,20 +456,6 @@ function triggerTrustedClick(el) {
                 <option value="3" selected>3 imagens</option>
                 <option value="4">4 imagens</option>
               </select>
-              <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;">
-  <div class="flow-option-text">
-    <div class="flow-option-title">Tentativas ao falhar</div>
-    <div class="flow-option-desc">Quantas vezes tentar novamente o prompt se a geração falhar. 0 desativa a regeração.</div>
-  </div>
-  <select id="flow-max-retries" class="flow-select-imgs">
-    <option value="0" selected>0 tentativa</option>
-    <option value="1">1 tentativa</option>
-    <option value="2">2 tentativas</option>
-    <option value="3">3 tentativas</option>
-    <option value="4">4 tentativas</option>
-    <option value="5">5 tentativas</option>
-  </select>
-</div>
             </div>
             <div id="flow-grid-info" style="font-size:11px;color:var(--cd-text-light);margin-top:4px;font-style:italic;"></div>
            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
@@ -592,20 +578,6 @@ function triggerTrustedClick(el) {
                 <option value="3" selected>3 vídeos</option>
                 <option value="4">4 vídeos</option>
               </select>
-              <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;">
-  <div class="flow-option-text">
-    <div class="flow-option-title">Tentativas ao falhar</div>
-    <div class="flow-option-desc">Quantas vezes tentar novamente o prompt se a geração falhar. 0 desativa a regeração.</div>
-  </div>
-  <select id="fv-max-retries" class="flow-select-imgs">
-    <option value="0" selected>0 tentativa</option>
-    <option value="1">1 tentativa</option>
-    <option value="2">2 tentativas</option>
-    <option value="3">3 tentativas</option>
-    <option value="4">4 tentativas</option>
-    <option value="5">5 tentativas</option>
-  </select>
-</div>
             </div>
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
   <input type="checkbox" id="fv-auto-name-scenes">
@@ -721,7 +693,6 @@ function triggerTrustedClick(el) {
             this.validatedRefs   = this.loadValidatedRefs();
             this.batchSize       = 4;
             this.imagesPerPrompt = 3;
-            this.maxPromptRetries = CONFIG.MAX_RETRIES;
             this.gridCols        = 3;
             this.rowHeight       = 347;
             // Modo: 'free' | 'refs' | 'scenes'
@@ -741,7 +712,6 @@ function triggerTrustedClick(el) {
             this.videoGenMode         = 'free'; // 'free' | 'scenes' | 'voice'
             this.videoBatchSize       = 4;
             this.videoResultsPerPrompt = 3;
-            this.videoMaxPromptRetries = CONFIG.MAX_RETRIES;
             this.videoSceneCount      = 0;
             this.videoSceneAssignments = new Map(); // 'Cena X' → [{ imgNum, workflowId }]
             this.initUI();
@@ -767,17 +737,12 @@ function triggerTrustedClick(el) {
                 mini.style.display = 'none';
                 document.getElementById('flow-assign-panel').classList.remove('panel-closed');
             });
-           close.addEventListener('click', () => {
-    panel.classList.remove('active');
-    document.getElementById('flow-assign-panel').classList.add('panel-closed');
-    sidebar.style.display = '';
-
-    if (this.isRunning || this.videoIsRunning) {
-        mini.style.display = 'flex';
-    } else {
-        mini.style.display = 'none';
-    }
-});
+            close.addEventListener('click', () => {
+                panel.classList.remove('active');
+                document.getElementById('flow-assign-panel').classList.add('panel-closed');
+                sidebar.style.display = '';
+                if (this.isRunning) mini.style.display = 'flex';
+            });
             mini.addEventListener('click', e => {
                 if (e.target.closest('#flow-mini-close')) return;
                 panel.classList.add('active');
@@ -851,15 +816,6 @@ if (fixUploadRefsBtn) {
             $('flow-imgs-per-prompt').addEventListener('change', e => {
                 this.imagesPerPrompt = parseInt(e.target.value);
             });
-            const imageRetriesSelect = $('flow-max-retries');
-if (imageRetriesSelect) {
-    this.maxPromptRetries = parseInt(imageRetriesSelect.value, 10);
-
-    imageRetriesSelect.addEventListener('change', e => {
-        this.maxPromptRetries = parseInt(e.target.value, 10);
-        this.logDebug(`Tentativas ao falhar: ${this.maxPromptRetries}`, 'info');
-    });
-}
 
             // ── VIDEO TAB LISTENERS ──
 
@@ -892,15 +848,6 @@ if (imageRetriesSelect) {
             $('fv-results-per-prompt').addEventListener('change', e => {
                 this.videoResultsPerPrompt = parseInt(e.target.value);
             });
-            const videoRetriesSelect = $('fv-max-retries');
-if (videoRetriesSelect) {
-    this.videoMaxPromptRetries = parseInt(videoRetriesSelect.value, 10);
-
-    videoRetriesSelect.addEventListener('change', e => {
-        this.videoMaxPromptRetries = parseInt(e.target.value, 10);
-        this.logVideoDebug(`Tentativas ao falhar: ${this.videoMaxPromptRetries}`, 'info');
-    });
-}
 
             $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
             $('fv-mark-refs-valid-btn').addEventListener('click', () => this.markReferencesAsValidated('video'));
@@ -1921,14 +1868,10 @@ clearValidatedRefsCache() {
                         if (!retryCount[key]) retryCount[key] = 0;
                         const gi = this.prompts.findIndex(x => x.promptNum === key);
                         let recovered = false;
-                        const maxRetries = Number.isInteger(this.maxPromptRetries)
-    ? this.maxPromptRetries
-    : CONFIG.MAX_RETRIES;
-
-while (retryCount[key] < maxRetries && !this.shouldStop) {
+                        while (retryCount[key] < CONFIG.MAX_RETRIES && !this.shouldStop) {
                             retryCount[key]++;
                             this.logDebug(`🔄 Regerar prompt ${key} — tentativa ${retryCount[key]}`, 'info');
-                            this.updatePromptItemStatus(gi, 'retrying', `${retryCount[key]}/${maxRetries}`);
+                            this.updatePromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
                             const retryBefore = this.snapshotImageUuids();
                             const ok = await this.prepareAndSubmit(fp);
                             if (!ok) break;
@@ -3371,14 +3314,10 @@ updateFn();
                         if (!retryCount[key]) retryCount[key] = 0;
                         const gi = this.videoPrompts.findIndex(x => x.promptNum === key);
                         let recovered = false;
-                        const maxVideoRetries = Number.isInteger(this.videoMaxPromptRetries)
-    ? this.videoMaxPromptRetries
-    : CONFIG.MAX_RETRIES;
-
-while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
+                        while (retryCount[key] < CONFIG.MAX_RETRIES && !this.videoShouldStop) {
                             retryCount[key]++;
                             this.logVideoDebug(`🔄 Regerar prompt ${key} — tentativa ${retryCount[key]}`, 'info');
-                            this.updateVideoPromptItemStatus(gi, 'retrying', `${retryCount[key]}/${maxVideoRetries}`);
+                            this.updateVideoPromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
                             const retryBefore = this.snapshotImageUuids();
                             const ok = await this.prepareAndSubmit(fp);
                             if (!ok) break;
@@ -3851,31 +3790,19 @@ async scrollToWorkflow(wfId) {
             document.getElementById('flow-mini-progress-bar').style.width = pct + '%';
         }
 
-       updateMini(title, sub, fraction, details) {
-    const panel = document.getElementById('flow-panel');
-    const mini = document.getElementById('flow-mini');
-    const sidebar = document.getElementById('flow-sidebar');
+        updateMini(title, sub, fraction, details) {
+            // Só mostra mini se o painel principal está fechado
+            const panelOpen = document.getElementById('flow-panel').classList.contains('active');
+            if (!panelOpen) {
+                document.getElementById('flow-mini').style.display = 'flex';
+                document.getElementById('flow-sidebar').style.display = '';
+            }
+            document.getElementById('flow-mini-status').textContent = title;
+            document.getElementById('flow-mini-sub').textContent = sub || '';
+            document.getElementById('flow-mini-details').textContent = details || '';
+            this.updateProgress(fraction);
+        }
 
-    const panelOpen = panel?.classList.contains('active');
-    const isAnyAutomationRunning = this.isRunning || this.videoIsRunning;
-
-    if (!panelOpen && isAnyAutomationRunning) {
-        if (mini) mini.style.display = 'flex';
-        if (sidebar) sidebar.style.display = '';
-    } else if (!isAnyAutomationRunning) {
-        if (mini) mini.style.display = 'none';
-    }
-
-    const statusEl = document.getElementById('flow-mini-status');
-    const subEl = document.getElementById('flow-mini-sub');
-    const detailsEl = document.getElementById('flow-mini-details');
-
-    if (statusEl) statusEl.textContent = title || 'Processando...';
-    if (subEl) subEl.textContent = sub || '';
-    if (detailsEl) detailsEl.textContent = details || '';
-
-    this.updateProgress(fraction);
-}
         buildPromptList() {
             document.getElementById('flow-prompts-preview-card').style.display = 'block';
             document.getElementById('flow-queue-info').textContent = `${this.prompts.length} prompts na fila`;
