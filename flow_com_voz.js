@@ -456,6 +456,20 @@ function triggerTrustedClick(el) {
                 <option value="3" selected>3 imagens</option>
                 <option value="4">4 imagens</option>
               </select>
+              <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;">
+  <div class="flow-option-text">
+    <div class="flow-option-title">Tentativas ao falhar</div>
+    <div class="flow-option-desc">Quantas vezes tentar novamente o prompt se a geração falhar. 0 desativa a regeração.</div>
+  </div>
+  <select id="flow-max-retries" class="flow-select-imgs">
+    <option value="0" selected>0 tentativa</option>
+    <option value="1">1 tentativa</option>
+    <option value="2">2 tentativas</option>
+    <option value="3">3 tentativas</option>
+    <option value="4">4 tentativas</option>
+    <option value="5">5 tentativas</option>
+  </select>
+</div>
             </div>
             <div id="flow-grid-info" style="font-size:11px;color:var(--cd-text-light);margin-top:4px;font-style:italic;"></div>
            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
@@ -578,6 +592,20 @@ function triggerTrustedClick(el) {
                 <option value="3" selected>3 vídeos</option>
                 <option value="4">4 vídeos</option>
               </select>
+              <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;">
+  <div class="flow-option-text">
+    <div class="flow-option-title">Tentativas ao falhar</div>
+    <div class="flow-option-desc">Quantas vezes tentar novamente o prompt se a geração falhar. 0 desativa a regeração.</div>
+  </div>
+  <select id="fv-max-retries" class="flow-select-imgs">
+    <option value="0" selected>0 tentativa</option>
+    <option value="1">1 tentativa</option>
+    <option value="2">2 tentativas</option>
+    <option value="3">3 tentativas</option>
+    <option value="4">4 tentativas</option>
+    <option value="5">5 tentativas</option>
+  </select>
+</div>
             </div>
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
   <input type="checkbox" id="fv-auto-name-scenes">
@@ -693,6 +721,7 @@ function triggerTrustedClick(el) {
             this.validatedRefs   = this.loadValidatedRefs();
             this.batchSize       = 4;
             this.imagesPerPrompt = 3;
+            this.maxPromptRetries = CONFIG.MAX_RETRIES;
             this.gridCols        = 3;
             this.rowHeight       = 347;
             // Modo: 'free' | 'refs' | 'scenes'
@@ -712,6 +741,7 @@ function triggerTrustedClick(el) {
             this.videoGenMode         = 'free'; // 'free' | 'scenes' | 'voice'
             this.videoBatchSize       = 4;
             this.videoResultsPerPrompt = 3;
+            this.videoMaxPromptRetries = CONFIG.MAX_RETRIES;
             this.videoSceneCount      = 0;
             this.videoSceneAssignments = new Map(); // 'Cena X' → [{ imgNum, workflowId }]
             this.initUI();
@@ -737,12 +767,17 @@ function triggerTrustedClick(el) {
                 mini.style.display = 'none';
                 document.getElementById('flow-assign-panel').classList.remove('panel-closed');
             });
-            close.addEventListener('click', () => {
-                panel.classList.remove('active');
-                document.getElementById('flow-assign-panel').classList.add('panel-closed');
-                sidebar.style.display = '';
-                if (this.isRunning) mini.style.display = 'flex';
-            });
+           close.addEventListener('click', () => {
+    panel.classList.remove('active');
+    document.getElementById('flow-assign-panel').classList.add('panel-closed');
+    sidebar.style.display = '';
+
+    if (this.isRunning || this.videoIsRunning) {
+        mini.style.display = 'flex';
+    } else {
+        mini.style.display = 'none';
+    }
+});
             mini.addEventListener('click', e => {
                 if (e.target.closest('#flow-mini-close')) return;
                 panel.classList.add('active');
@@ -816,6 +851,15 @@ if (fixUploadRefsBtn) {
             $('flow-imgs-per-prompt').addEventListener('change', e => {
                 this.imagesPerPrompt = parseInt(e.target.value);
             });
+            const imageRetriesSelect = $('flow-max-retries');
+if (imageRetriesSelect) {
+    this.maxPromptRetries = parseInt(imageRetriesSelect.value, 10);
+
+    imageRetriesSelect.addEventListener('change', e => {
+        this.maxPromptRetries = parseInt(e.target.value, 10);
+        this.logDebug(`Tentativas ao falhar: ${this.maxPromptRetries}`, 'info');
+    });
+}
 
             // ── VIDEO TAB LISTENERS ──
 
@@ -848,6 +892,15 @@ if (fixUploadRefsBtn) {
             $('fv-results-per-prompt').addEventListener('change', e => {
                 this.videoResultsPerPrompt = parseInt(e.target.value);
             });
+            const videoRetriesSelect = $('fv-max-retries');
+if (videoRetriesSelect) {
+    this.videoMaxPromptRetries = parseInt(videoRetriesSelect.value, 10);
+
+    videoRetriesSelect.addEventListener('change', e => {
+        this.videoMaxPromptRetries = parseInt(e.target.value, 10);
+        this.logVideoDebug(`Tentativas ao falhar: ${this.videoMaxPromptRetries}`, 'info');
+    });
+}
 
             $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
             $('fv-mark-refs-valid-btn').addEventListener('click', () => this.markReferencesAsValidated('video'));
@@ -1868,10 +1921,14 @@ clearValidatedRefsCache() {
                         if (!retryCount[key]) retryCount[key] = 0;
                         const gi = this.prompts.findIndex(x => x.promptNum === key);
                         let recovered = false;
-                        while (retryCount[key] < CONFIG.MAX_RETRIES && !this.shouldStop) {
+                        const maxRetries = Number.isInteger(this.maxPromptRetries)
+    ? this.maxPromptRetries
+    : CONFIG.MAX_RETRIES;
+
+while (retryCount[key] < maxRetries && !this.shouldStop) {
                             retryCount[key]++;
                             this.logDebug(`🔄 Regerar prompt ${key} — tentativa ${retryCount[key]}`, 'info');
-                            this.updatePromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
+                            this.updatePromptItemStatus(gi, 'retrying', `${retryCount[key]}/${maxRetries}`);
                             const retryBefore = this.snapshotImageUuids();
                             const ok = await this.prepareAndSubmit(fp);
                             if (!ok) break;
@@ -2263,13 +2320,48 @@ updateFn();
         // ──────────────────────────────────────────────
         // PAINEL DE ATRIBUIÇÃO (Drag & Drop)
         // ──────────────────────────────────────────────
+        getSceneVariationCountsFromMatrices(allMatrices) {
+    const counts = new Map();
+    const seen = new Set();
 
+    const slots = (allMatrices || [])
+        .flatMap(m => Array.isArray(m) ? m : [])
+        .filter(Boolean);
+
+    for (const slot of slots) {
+        if (slot.state !== 'loaded') continue;
+
+        const sceneNum = Number(slot.promptNum || 0);
+        if (!sceneNum) continue;
+
+        const uniqueKey =
+            slot.workflowId ||
+            slot.uuid ||
+            slot.src ||
+            `${slot.row}:${slot.col}:${slot.promptNum}:${slot.imgNum}`;
+
+        if (seen.has(uniqueKey)) continue;
+        seen.add(uniqueKey);
+
+        counts.set(sceneNum, (counts.get(sceneNum) || 0) + 1);
+    }
+
+    return counts;
+}
+
+formatSceneNameWithVariationCount(sceneName, variationCounts) {
+    const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0, 10);
+    const count = variationCounts?.get(sceneNum) || 0;
+
+    return `${sceneName} (${count})`;
+}
         showAssignPanel(allMatrices) {
             this._videoAssignActive = false;
             const panel = document.getElementById('flow-assign-panel');
             const title = document.getElementById('flow-assign-title');
             const items = document.getElementById('flow-assign-items');
             const dlBtn = document.getElementById('flow-assign-download');
+            const variationCounts = this.getSceneVariationCountsFromMatrices(allMatrices);
 
             items.innerHTML = '';
 
@@ -2313,7 +2405,10 @@ updateFn();
                     item.dataset.type = 'scene';
                     item.dataset.scene = sceneName;
                     item.dataset.sceneNum = sceneNum;
-                    item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
+                    const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, variationCounts);
+
+item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">⏳</span>`;
+item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;
                     item.addEventListener('mouseenter', () => {
                         const preview = document.getElementById('flow-assign-preview');
                         if (preview) {
@@ -3314,10 +3409,14 @@ updateFn();
                         if (!retryCount[key]) retryCount[key] = 0;
                         const gi = this.videoPrompts.findIndex(x => x.promptNum === key);
                         let recovered = false;
-                        while (retryCount[key] < CONFIG.MAX_RETRIES && !this.videoShouldStop) {
+                        const maxVideoRetries = Number.isInteger(this.videoMaxPromptRetries)
+    ? this.videoMaxPromptRetries
+    : CONFIG.MAX_RETRIES;
+
+while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
                             retryCount[key]++;
                             this.logVideoDebug(`🔄 Regerar prompt ${key} — tentativa ${retryCount[key]}`, 'info');
-                            this.updateVideoPromptItemStatus(gi, 'retrying', `${retryCount[key]}/${CONFIG.MAX_RETRIES}`);
+                            this.updateVideoPromptItemStatus(gi, 'retrying', `${retryCount[key]}/${maxVideoRetries}`);
                             const retryBefore = this.snapshotImageUuids();
                             const ok = await this.prepareAndSubmit(fp);
                             if (!ok) break;
@@ -3410,6 +3509,7 @@ if (this.videoGenMode === 'scenes') {
             const title = document.getElementById('flow-assign-title');
             const items = document.getElementById('flow-assign-items');
             const dlBtn = document.getElementById('flow-assign-download');
+            const variationCounts = this.getSceneVariationCountsFromMatrices(allMatrices);
 
             items.innerHTML = '';
             title.textContent = 'Atribuir Cenas (Vídeos)';
@@ -3435,8 +3535,10 @@ if (this.videoGenMode === 'scenes') {
                 item.dataset.type = 'scene';
                 item.dataset.scene = sceneName;
                 item.dataset.sceneNum = sceneNum;
-                item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${sceneName}</span><span class="assign-status">⏳</span>`;
-                item.addEventListener('mouseenter', () => {
+const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, variationCounts);
+
+item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">⏳</span>`;
+item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;                item.addEventListener('mouseenter', () => {
                     const preview = document.getElementById('flow-assign-preview');
                     if (preview) {
                         preview.style.display = '';
@@ -3607,29 +3709,222 @@ if (this.videoGenMode === 'scenes') {
             if (!this._upscaleRequestedWfIds) this._upscaleRequestedWfIds = new Set();
             return this._upscaleRequestedWfIds;
         }
+        getVideoMediaIdentityFromTile(tile, fallback = '') {
+    if (!tile) return fallback || '';
 
+    const media =
+        tile.querySelector('video[src*="getMediaUrlRedirect"]') ||
+        tile.querySelector('img[src*="getMediaUrlRedirect"]');
+
+    if (!media?.src) return fallback || '';
+
+    try {
+        const url = new URL(media.src);
+        const mediaName = url.searchParams.get('name');
+
+        if (mediaName) return `media:${mediaName}`;
+    } catch (e) {}
+
+    return `src:${media.src}`;
+}
+async scanIdentifiedVideosForUpscale() {
+    const scroller = this.getScroller();
+const found = new Map();
+const seenMediaKeys = new Set();
+const foundFromGallery = { count: 0 };
+    if (!scroller) {
+        this.logVideoDebug('Upscale scan: scroller não encontrado.', 'error');
+        return found;
+    }
+
+    const addFound = (workflowId, label, tile, source = 'gallery') => {
+    if (!workflowId || !label) return;
+
+    const match = label.match(/^Cena\s+(\d+)\s*-\s*(?:Vídeo|Video)\s+(\d+)$/i);
+    if (!match) return;
+
+    const sceneNum = parseInt(match[1], 10);
+    const videoNum = parseInt(match[2], 10);
+
+    const mediaKey = this.getVideoMediaIdentityFromTile(tile, '');
+
+    // Se veio da galeria e a mídia já apareceu, é duplicado real.
+    // Isso evita pegar a mesma variação como se fosse outra.
+    if (mediaKey && seenMediaKeys.has(mediaKey)) {
+        this.logVideoDebug(`⚠️ Duplicado ignorado no upscale: ${label} usa a mesma mídia de outro vídeo.`, 'warning');
+        return;
+    }
+
+    // Se o mesmo workflow já entrou, não mexe.
+    if (found.has(workflowId)) return;
+
+    if (mediaKey) seenMediaKeys.add(mediaKey);
+
+    if (source === 'gallery') foundFromGallery.count++;
+
+    found.set(workflowId, {
+        workflowId,
+        label,
+        sceneNum,
+        videoNum,
+        mediaKey,
+        tile,
+        source
+    });
+};
+
+    this.logVideoDebug('🔎 Upscale: varrendo galeria para encontrar todos os vídeos identificados...', 'info');
+
+    const scanVisibleTiles = async () => {
+        const tiles = [...document.querySelectorAll('[data-tile-id]')];
+
+        for (const rawTile of tiles) {
+            const tile = rawTile.querySelector('a[href*="/edit/"]')
+                ? rawTile
+                : (rawTile.querySelector('[data-tile-id]') || rawTile);
+
+            if (!tile || !this.isTileLoaded(tile)) continue;
+            if (!this.isVideoTile(tile)) continue;
+
+            const workflowId = this.getWorkflowIdFromTile(tile);
+            if (!workflowId || found.has(workflowId)) continue;
+
+            const name = await this.getTileName(tile);
+            if (!name) continue;
+
+addFound(workflowId, name, tile, 'gallery');        }
+    };
+
+    // Passada 1: de cima para baixo
+    scroller.scrollTop = 0;
+    await this.sleep(800);
+
+    let samePositionCount = 0;
+
+    for (let iter = 0; iter < 800; iter++) {
+        await scanVisibleTiles();
+
+        const prev = Math.round(scroller.scrollTop);
+        const step = Math.max(300, Math.floor(scroller.clientHeight * 0.7));
+        scroller.scrollTop = Math.min(scroller.scrollHeight, scroller.scrollTop + step);
+
+        await this.sleep(650);
+
+        const now = Math.round(scroller.scrollTop);
+
+        if (now === prev) {
+            samePositionCount++;
+        } else {
+            samePositionCount = 0;
+        }
+
+        if (samePositionCount >= 2) break;
+    }
+
+    // Passada 2: de baixo para cima, para pegar o que a galeria virtualizada pulou
+    scroller.scrollTop = scroller.scrollHeight;
+    await this.sleep(800);
+
+    samePositionCount = 0;
+
+    for (let iter = 0; iter < 800; iter++) {
+        await scanVisibleTiles();
+
+        const prev = Math.round(scroller.scrollTop);
+        const step = Math.max(300, Math.floor(scroller.clientHeight * 0.7));
+        scroller.scrollTop = Math.max(0, scroller.scrollTop - step);
+
+        await this.sleep(650);
+
+        const now = Math.round(scroller.scrollTop);
+
+        if (now === prev) {
+            samePositionCount++;
+        } else {
+            samePositionCount = 0;
+        }
+
+        if (now <= 0 && samePositionCount >= 2) break;
+    }
+
+   // Usa a memória apenas como fallback.
+// Se a galeria encontrou vídeos identificados, ela vira a fonte principal.
+// Isso evita memória antiga duplicar a mesma variação.
+if (foundFromGallery.count === 0) {
+    this.logVideoDebug('⚠️ Galeria não retornou vídeos identificados. Usando memória da extensão como fallback.', 'warning');
+
+    for (const [workflowId, data] of this.tileAssignments.entries()) {
+        const label = data?.label || '';
+
+        if (
+            data?.type === 'scene' &&
+            /^Cena\s+\d+\s*-\s*(?:Vídeo|Video)\s+\d+$/i.test(label)
+        ) {
+            addFound(workflowId, label, null, 'memory');
+        }
+    }
+
+    if (this.videoSceneAssignments instanceof Map) {
+        for (const [sceneName, arr] of this.videoSceneAssignments.entries()) {
+            const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0, 10);
+
+            for (const item of arr || []) {
+                if (!item?.workflowId) continue;
+
+                const videoNum = Number(item.imgNum || 0);
+                const label = sceneNum && videoNum
+                    ? `Cena ${sceneNum} - Vídeo ${videoNum}`
+                    : '';
+
+                addFound(item.workflowId, label, null, 'memory');
+            }
+        }
+    }
+} else {
+    this.logVideoDebug('✅ Usando apenas vídeos confirmados pela galeria para evitar duplicados.', 'success');
+}
+
+    const sorted = new Map(
+        [...found.entries()].sort((a, b) => {
+            const av = a[1];
+            const bv = b[1];
+
+            if (av.sceneNum !== bv.sceneNum) return av.sceneNum - bv.sceneNum;
+            return av.videoNum - bv.videoNum;
+        })
+    );
+
+    this.logVideoDebug(
+        `✅ Upscale scan: ${sorted.size} vídeo(s) identificado(s) encontrado(s).`,
+        sorted.size ? 'success' : 'warning'
+    );
+
+    for (const item of sorted.values()) {
+        this.logVideoDebug(`• ${item.label} → ${item.workflowId.substring(0, 8)}`, 'info');
+    }
+
+    return sorted;
+}
         async startUpscaleProcess() {
-            const btn = document.getElementById('fv-upscale-btn');
-            const requested = this.getUpscaleRequestedSet();
+           const btn = document.getElementById('fv-upscale-btn');
+
+// Controle apenas desta execução.
+// Assim uma variação não fica "pulada" por ter sido marcada em tentativa anterior.
+const requested = new Set();
 
             if (btn) {
                 btn.disabled = true;
                 btn.textContent = '⏳ Iniciando Upscale 1080p...';
             }
 
-           const wfIdsToUpscale = [];
+const identifiedVideosMap = await this.scanIdentifiedVideosForUpscale();
 
-for (const [wfId, data] of this.tileAssignments.entries()) {
-    const label = data?.label || '';
+const wfIdsToUpscale = [...identifiedVideosMap.keys()].filter(wfId => !requested.has(wfId));
 
-    const isIdentifiedVideo =
-        data?.type === 'scene' &&
-        /^Cena\s+\d+\s*-\s*(?:Vídeo|Video)\s+\d+$/i.test(label);
-
-    if (isIdentifiedVideo && !requested.has(wfId)) {
-        wfIdsToUpscale.push(wfId);
-    }
-}
+this.logVideoDebug(
+    `Upscale: ${wfIdsToUpscale.length} vídeo(s) identificado(s) único(s) serão processados agora.`,
+    'info'
+);
 
             if (!wfIdsToUpscale.length) {
                 this.setVideoStatus('warning', 'Nenhum vídeo identificado pendente para upscale. Use "Analisar projeto existente" ou atribua as cenas primeiro.');
@@ -3647,6 +3942,11 @@ for (const [wfId, data] of this.tileAssignments.entries()) {
             let fail = 0;
 
             for (const wfId of wfIdsToUpscale) {
+                const videoInfo = identifiedVideosMap.get(wfId);
+const videoLabel = videoInfo?.label || wfId.substring(0, 8);
+
+this.logVideoDebug(`🎬 Processando upscale: ${videoLabel}`, 'info');
+this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                 if (this.videoShouldStop) break;
 
                 try {
@@ -3694,16 +3994,16 @@ for (const [wfId, data] of this.tileAssignments.entries()) {
                     if (toastOk) {
                         requested.add(wfId);
                         count++;
-                        this.logVideoDebug(`✅ Upscale solicitado para ${wfId.substring(0, 8)}`, 'success');
+                        this.logVideoDebug(`✅ Upscale solicitado para ${videoLabel}`, 'success');
                     } else {
                         // em alguns casos o clique pega mesmo sem o toast aparecer
                         requested.add(wfId);
                         count++;
-                        this.logVideoDebug(`⚠️ Clique em 1080p executado, mas toast não apareceu para ${wfId.substring(0, 8)}`, 'warning');
+                        this.logVideoDebug(`⚠️ Clique em 1080p executado, mas toast não apareceu para ${videoLabel}`, 'warning');
                     }
 
                     if (btn) btn.textContent = `⏳ Upscale ${count}/${wfIdsToUpscale.length}`;
-                    await this.sleep(1200);
+                    await this.sleep(2200);
 
                 } catch (err) {
                     fail++;
@@ -3790,19 +4090,31 @@ async scrollToWorkflow(wfId) {
             document.getElementById('flow-mini-progress-bar').style.width = pct + '%';
         }
 
-        updateMini(title, sub, fraction, details) {
-            // Só mostra mini se o painel principal está fechado
-            const panelOpen = document.getElementById('flow-panel').classList.contains('active');
-            if (!panelOpen) {
-                document.getElementById('flow-mini').style.display = 'flex';
-                document.getElementById('flow-sidebar').style.display = '';
-            }
-            document.getElementById('flow-mini-status').textContent = title;
-            document.getElementById('flow-mini-sub').textContent = sub || '';
-            document.getElementById('flow-mini-details').textContent = details || '';
-            this.updateProgress(fraction);
-        }
+       updateMini(title, sub, fraction, details) {
+    const panel = document.getElementById('flow-panel');
+    const mini = document.getElementById('flow-mini');
+    const sidebar = document.getElementById('flow-sidebar');
 
+    const panelOpen = panel?.classList.contains('active');
+    const isAnyAutomationRunning = this.isRunning || this.videoIsRunning;
+
+    if (!panelOpen && isAnyAutomationRunning) {
+        if (mini) mini.style.display = 'flex';
+        if (sidebar) sidebar.style.display = '';
+    } else if (!isAnyAutomationRunning) {
+        if (mini) mini.style.display = 'none';
+    }
+
+    const statusEl = document.getElementById('flow-mini-status');
+    const subEl = document.getElementById('flow-mini-sub');
+    const detailsEl = document.getElementById('flow-mini-details');
+
+    if (statusEl) statusEl.textContent = title || 'Processando...';
+    if (subEl) subEl.textContent = sub || '';
+    if (detailsEl) detailsEl.textContent = details || '';
+
+    this.updateProgress(fraction);
+}
         buildPromptList() {
             document.getElementById('flow-prompts-preview-card').style.display = 'block';
             document.getElementById('flow-queue-info').textContent = `${this.prompts.length} prompts na fila`;
