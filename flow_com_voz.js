@@ -414,8 +414,9 @@ function triggerTrustedClick(el) {
           </div>
           <div class="flow-card-content">
             <div class="flow-ref-list" id="flow-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência detectada.</span></div>
-           <button class="flow-validate-btn" id="flow-validate-btn">🔍 Validar referências na galeria</button>
+<button class="flow-validate-btn" id="flow-validate-btn">🔍 Validar referências na galeria</button>
 <button class="flow-validate-btn" id="flow-mark-refs-valid-btn" style="margin-top:6px;">✅ Referências já validadas</button>
+<button class="flow-validate-btn" id="flow-fix-upload-refs-btn" style="margin-top:6px;">🧹 Corrigir uploads para referências</button>
 <button class="flow-validate-btn" id="flow-assign-refs-btn" style="display:none;margin-top:6px;">📌 Atribuir referências</button>
           </div>
         </div>
@@ -763,7 +764,12 @@ function triggerTrustedClick(el) {
             });
 
             $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
-            $('flow-mark-refs-valid-btn').addEventListener('click', () => this.markReferencesAsValidated('images'));
+$('flow-mark-refs-valid-btn').addEventListener('click', () => this.markReferencesAsValidated('images'));
+
+const fixUploadRefsBtn = $('flow-fix-upload-refs-btn');
+if (fixUploadRefsBtn) {
+    fixUploadRefsBtn.addEventListener('click', () => this.renameUploadReferencesFromFilenames());
+}
             $('flow-show-logs').addEventListener('change', e => $('flow-logs-container').classList.toggle('visible', e.target.checked));
             $('flow-start-btn').addEventListener('click', () => this.start());
             $('flow-stop-btn').addEventListener('click',  () => this.stop());
@@ -905,6 +911,31 @@ function triggerTrustedClick(el) {
                 list.innerHTML = html;
             }
         }
+        cleanUploadReferenceName(rawName) {
+    if (!rawName) return null;
+
+    let name = String(rawName).trim();
+
+    // Se já virou referência, não mexe de novo
+    if (/\s_$/.test(name)) return null;
+
+    // Só mexe em nomes que parecem arquivo de imagem
+    const hasImageExtension = /\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i.test(name);
+    if (!hasImageExtension) return null;
+
+    // Remove extensão
+    name = name.replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '');
+
+    // Limpa separadores comuns de arquivo
+    name = name
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!name || name.length < 2) return null;
+
+    return name;
+}
 markReferencesAsValidated(source = 'images') {
     const isVideo = source === 'video';
     const inputId = isVideo ? 'fv-prompts-input' : 'flow-prompts-input';
@@ -1889,7 +1920,133 @@ clearValidatedRefsCache() {
         // ──────────────────────────────────────────────
         // VALIDAÇÃO DE REFERÊNCIAS
         // ──────────────────────────────────────────────
+async renameUploadReferencesFromFilenames() {
+    const btn = document.getElementById('flow-fix-upload-refs-btn');
+    const originalText = btn?.textContent || '🧹 Corrigir uploads para referências';
 
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ Escaneando uploads...';
+    }
+
+    try {
+        if (!_authToken) {
+            this.setStatus('warning', 'Token ainda não capturado. Faça uma ação no Flow e tente novamente.');
+            return;
+        }
+
+        const scroller = this.getScroller();
+        if (!scroller) {
+            this.setStatus('error', 'Scroller da galeria não encontrado.');
+            return;
+        }
+
+        const checked = new Set();
+        let renamed = 0;
+        let skipped = 0;
+        let failed = 0;
+
+        this.setStatus('info', '🧹 Procurando uploads com .jpg, .png, .webp, .jpeg...');
+        this.logDebug('Iniciando correção de uploads para referências...', 'info');
+
+        // Começa do final e sobe, igual a validação de referências
+        scroller.scrollTop = scroller.scrollHeight;
+        await this.sleep(600);
+
+        for (let iter = 0; iter < 500; iter++) {
+            const tiles = [...document.querySelectorAll('[data-tile-id]')]
+                .filter(el => el.parentElement.closest('[data-tile-id]'));
+
+            for (const tile of tiles) {
+                const workflowId = this.getWorkflowIdFromTile(tile);
+
+                if (!workflowId || checked.has(workflowId)) continue;
+                checked.add(workflowId);
+
+                if (!this.isTileLoaded(tile)) continue;
+
+                // Referências são imagens. Evita mexer em vídeo por segurança.
+                if (this.isVideoTile(tile)) continue;
+
+                const currentName = await this.getTileName(tile);
+                const cleanName = this.cleanUploadReferenceName(currentName);
+
+                if (!cleanName) {
+                    skipped++;
+                    continue;
+                }
+
+                const newName = cleanName + CONFIG.REF_SUFFIX;
+
+                this.logDebug(`Renomeando upload: "${currentName}" → "${newName}"`, 'info');
+
+                const okRename = await this.apiRename(workflowId, newName);
+                const okFav = await this.apiFavorite(workflowId, true);
+
+                if (okRename && okFav) {
+                    renamed++;
+
+                    const key = cleanName.toLowerCase().trim();
+                    this.validatedRefs[key] = true;
+                    this.refAssignments.set(cleanName, workflowId);
+                    this.tileAssignments.set(workflowId, {
+                        label: cleanName,
+                        type: 'ref',
+                        name: cleanName
+                    });
+
+                    const outer = tile.closest('[data-tile-id]') || tile;
+                    this.addLabelToTile(outer, cleanName, workflowId, 'ref', cleanName);
+
+                    this.logDebug(`✅ Referência criada: ${cleanName}`, 'success');
+
+                    if (btn) {
+                        btn.textContent = `⏳ ${renamed} corrigida(s)...`;
+                    }
+
+                    await this.sleep(350);
+                } else {
+                    failed++;
+                    this.logDebug(`❌ Falha ao renomear "${currentName}"`, 'error');
+                }
+            }
+
+            const prev = scroller.scrollTop;
+            scroller.scrollTop = Math.max(0, scroller.scrollTop - 350);
+            await this.sleep(400);
+
+            if (scroller.scrollTop === 0 && prev === 0) break;
+        }
+
+        this.saveValidatedRefs();
+        this.updateReferences();
+        this.updateVideoReferences();
+
+        if (renamed > 0) {
+            this.startLabelObserver();
+            this.setStatus(
+                'success',
+                `✅ ${renamed} upload(s) corrigido(s) para referência. ${failed ? `${failed} falha(s).` : ''}`
+            );
+        } else {
+            this.setStatus(
+                'warning',
+                'Nenhum upload com extensão .jpg, .png, .jpeg ou .webp foi encontrado para corrigir.'
+            );
+        }
+
+        this.logDebug(`Correção finalizada: ${renamed} corrigido(s), ${skipped} ignorado(s), ${failed} falha(s).`, 'info');
+
+    } catch (err) {
+        this.setStatus('error', 'Erro ao corrigir uploads: ' + err.message);
+        this.logDebug('Erro ao corrigir uploads: ' + err.message, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
+    }
+}
         async validateReferences(source = 'images') {
             const isVideo = source === 'video';
             const btnId = isVideo ? 'fv-validate-btn' : 'flow-validate-btn';
