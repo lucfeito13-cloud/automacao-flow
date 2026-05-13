@@ -987,25 +987,16 @@ cleanUploadReferenceName(rawName) {
     // Se já está no padrão de referência, não mexe
     if (/\s_$/.test(name)) return null;
 
-    // NÃO mexe em cenas simples
-    // Ex: cena 188, Cena 204, cena 207
-    if (/^cena\s+\d+$/i.test(name)) return null;
-
-    // NÃO mexe em cenas/imagens/vídeos já identificados
+    // Não mexe em imagens/vídeos já identificados pela extensão
     if (/^Cena\s+\d+\s*-\s*(Imagem|Vídeo|Video)\s+\d+$/i.test(name)) return null;
-
-    // NÃO mexe em nomes de personagens/cenas já atribuídos manualmente sem extensão
-    // A correção de upload deve agir só em arquivo real: .jpg, .png, .webp etc.
-    const hasImageExtension = /\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i.test(name);
-    if (!hasImageExtension) return null;
 
     // Não mexe em nomes genéricos do Flow
     if (/^(Imagem gerada|Video gerado|Vídeo gerado|Generated image|Generated video)$/i.test(name)) return null;
 
-    // Remove extensão
+    // Remove extensão se existir
     name = name.replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '');
 
-    // Limpa caracteres ruins de nome de arquivo
+    // Limpa separadores de arquivo
     name = name
         .replace(/[_-]+/g, ' ')
         .replace(/\s+/g, ' ')
@@ -3722,24 +3713,6 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
             if (!this._upscaleRequestedWfIds) this._upscaleRequestedWfIds = new Set();
             return this._upscaleRequestedWfIds;
         }
-        getVideoMediaIdentityFromTile(tile, fallback = '') {
-    if (!tile) return fallback || '';
-
-    const media =
-        tile.querySelector('video[src*="getMediaUrlRedirect"]') ||
-        tile.querySelector('img[src*="getMediaUrlRedirect"]');
-
-    if (!media?.src) return fallback || '';
-
-    try {
-        const url = new URL(media.src);
-        const mediaName = url.searchParams.get('name');
-
-        if (mediaName) return `media:${mediaName}`;
-    } catch (e) {}
-
-    return `src:${media.src}`;
-}
         getVideoMediaIdentityFromTile(tile, fallback = '') {
     if (!tile) return fallback || '';
 
