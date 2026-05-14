@@ -416,6 +416,7 @@ function triggerTrustedClick(el) {
             <div class="flow-ref-list" id="flow-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência detectada.</span></div>
 <button class="flow-validate-btn" id="flow-validate-btn">🔍 Validar referências na galeria</button>
 <button class="flow-validate-btn" id="flow-mark-refs-valid-btn" style="margin-top:6px;">✅ Referências já validadas</button>
+<button class="flow-validate-btn" id="flow-clear-refs-btn" style="margin-top:6px;">🧽 Limpar referências validadas</button>
 <button class="flow-validate-btn" id="flow-fix-upload-refs-btn" style="margin-top:6px;">🧹 Corrigir uploads para referências</button>
 <button class="flow-validate-btn" id="flow-assign-refs-btn" style="display:none;margin-top:6px;">📌 Atribuir referências</button>
           </div>
@@ -553,8 +554,9 @@ function triggerTrustedClick(el) {
           </div>
           <div class="flow-card-content">
             <div class="flow-ref-list" id="fv-ref-list"><span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span></div>
-            <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências na galeria</button>
+           <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências na galeria</button>
 <button class="flow-validate-btn" id="fv-mark-refs-valid-btn" style="margin-top:6px;">✅ Referências já validadas</button>
+<button class="flow-validate-btn" id="fv-clear-refs-btn" style="margin-top:6px;">🧽 Limpar referências validadas</button>
           </div>
         </div>
         <div class="flow-card">
@@ -659,6 +661,10 @@ function triggerTrustedClick(el) {
                 <button class="flow-validate-btn" id="fv-dl-scenes" style="margin:0;">🎬 Apenas Cenas</button>
                 <button class="flow-validate-btn" id="fv-dl-all" style="margin:0;">📦 Completo (Todas as Geradas)</button>
                 <button class="flow-validate-btn" id="fv-upscale-btn" style="margin:0; background:linear-gradient(135deg, #8b5cf6, #6d28d9); color:#fff; border:none; margin-top: 6px;">🚀 Upscale 1080p (Vídeos Identificados)</button>
+             
+              <button class="flow-validate-btn" id="fv-upscale-debug-btn" style="margin:0; margin-top:6px;">
+  🔎 Diagnosticar vídeos do upscale
+</button>
               </div>
             </div>
           </div>
@@ -815,6 +821,10 @@ function triggerTrustedClick(el) {
 
             $('flow-validate-btn').addEventListener('click', () => this.validateReferences());
 $('flow-mark-refs-valid-btn').addEventListener('click', () => this.markReferencesAsValidated('images'));
+            const clearImageRefsBtn = $('flow-clear-refs-btn');
+if (clearImageRefsBtn) {
+    clearImageRefsBtn.addEventListener('click', () => this.clearReferencesForUI('images'));
+}
 
 const fixUploadRefsBtn = $('flow-fix-upload-refs-btn');
 if (fixUploadRefsBtn) {
@@ -904,6 +914,10 @@ if (videoRetriesSelect) {
 
             $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
             $('fv-mark-refs-valid-btn').addEventListener('click', () => this.markReferencesAsValidated('video'));
+            const clearVideoRefsBtn = $('fv-clear-refs-btn');
+if (clearVideoRefsBtn) {
+    clearVideoRefsBtn.addEventListener('click', () => this.clearReferencesForUI('video'));
+}
             $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
             $('fv-start-btn').addEventListener('click', () => this.startVideo());
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
@@ -915,10 +929,16 @@ if (videoRetriesSelect) {
             
             // BOTÃO NOVO (UPSCALE) INJETADO AQUI
             const fvUpscaleBtn = $('fv-upscale-btn');
-            if (fvUpscaleBtn) fvUpscaleBtn.addEventListener('click', () => this.startUpscaleProcess());
-        }
+if (fvUpscaleBtn) fvUpscaleBtn.addEventListener('click', () => this.startUpscaleProcess());
 
-        setupTextWatcher() {
+const fvUpscaleDebugBtn = $('fv-upscale-debug-btn');
+if (fvUpscaleDebugBtn) {
+    fvUpscaleDebugBtn.addEventListener('click', () => this.debugUpscaleList());
+}
+
+} // fecha initUI()
+
+setupTextWatcher() {
             const ta = document.getElementById('flow-prompts-input');
             let t;
             ta.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => this.updateReferences(), 300); });
@@ -1110,7 +1130,25 @@ clearValidatedRefsCache() {
     this.updateReferences?.();
     this.updateVideoReferences?.();
 }
+clearReferencesForUI(source = 'images') {
+    const isVideo = source === 'video';
 
+    const ok = confirm(
+        'Limpar referências validadas deste projeto?\n\nDepois disso, você poderá validar as referências novamente.'
+    );
+
+    if (!ok) return;
+
+    this.clearValidatedRefsCache();
+
+    if (isVideo) {
+        this.setVideoStatus('success', '🧽 Referências validadas foram limpas. Valide novamente quando quiser.');
+        this.logVideoDebug('Referências validadas limpas pelo usuário.', 'warning');
+    } else {
+        this.setStatus('success', '🧽 Referências validadas foram limpas. Valide novamente quando quiser.');
+        this.logDebug('Referências validadas limpas pelo usuário.', 'warning');
+    }
+}
         // ──────────────────────────────────────────────
         // GRID + TILES
         // ──────────────────────────────────────────────
@@ -1826,9 +1864,9 @@ clearValidatedRefsCache() {
 
             // --- INJEÇÃO ADD-ON: Regra do 0 ---
             if (resumeFrom === 0) {
-                this.logDebug('Regra do 0: Pulando geração e abrindo painel de atribuição...', 'success');
+                this.logDebug('Regra do 0: Marcando geração como concluída e abrindo painel de atribuição...', 'success');
                 this.prompts.forEach((p, idx) => {
-                    this.updatePromptItemStatus(idx, 'done', 'Pulado');
+                    this.updatePromptItemStatus(idx, 'done', 'Concluído');
                 });
                 this.updateProgress(1);
                 this.setStatus('success', '✅ Geração pulada. Atribua as imagens.');
@@ -1849,9 +1887,9 @@ clearValidatedRefsCache() {
                 const skipped = this.prompts.filter(p => p.promptNum < resumeFrom);
                 skipped.forEach(p => {
                     const idx = this.prompts.findIndex(x => x.promptNum === p.promptNum);
-                    this.updatePromptItemStatus(idx, 'done', 'Pulado');
+                    this.updatePromptItemStatus(idx, 'done', 'Concluído');
                 });
-                this.logDebug(`Retomando da cena/prompt ${resumeFrom}. ${skipped.length} prompts pulados.`, 'info');
+                this.logDebug(`Retomando da cena/prompt ${resumeFrom}. ${skipped.length} prompts marcados como concluídos.`, 'info');
             }
 
             await this.detectGrid();
@@ -3329,7 +3367,7 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
 
             // --- INJEÇÃO ADD-ON: Regra do 0 ---
             if (resumeFrom === 0) {
-                this.logVideoDebug('Regra do 0: Pulando geração e abrindo painel de atribuição...', 'success');
+                this.logVideoDebug('Regra do 0: Marcando geração como concluída e abrindo painel de atribuição...', 'success');
                 this.videoPrompts.forEach((p, idx) => {
                     this.updateVideoPromptItemStatus(idx, 'done', 'Pulado');
                 });
@@ -3352,9 +3390,9 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
                 const skipped = this.videoPrompts.filter(p => p.promptNum < resumeFrom);
                 skipped.forEach(p => {
                     const idx = this.videoPrompts.findIndex(x => x.promptNum === p.promptNum);
-                    this.updateVideoPromptItemStatus(idx, 'done', 'Pulado');
+this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
                 });
-                this.logVideoDebug(`Retomando da cena ${resumeFrom}. ${skipped.length} prompts pulados.`, 'info');
+                this.logVideoDebug(`Retomando da cena ${resumeFrom}. ${skipped.length} prompts marcados como concluídos.`, 'info');
             }
 
             await this.detectGrid();
@@ -3876,6 +3914,85 @@ async scanIdentifiedVideosForUpscale() {
     }
 
     return sorted;
+}
+            async debugUpscaleList() {
+    const btn = document.getElementById('fv-upscale-debug-btn');
+    const originalText = btn?.textContent || '🔎 Diagnosticar vídeos do upscale';
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ Diagnosticando...';
+    }
+
+    try {
+        const logsToggle = document.getElementById('fv-show-logs');
+        const logsContainer = document.getElementById('fv-logs-container');
+
+        if (logsToggle) logsToggle.checked = true;
+        if (logsContainer) logsContainer.classList.add('visible');
+
+        this.setVideoStatus('info', '🔎 Diagnosticando vídeos identificados para upscale...');
+        this.logVideoDebug('🔎 Diagnóstico de upscale iniciado. Nenhum upscale será solicitado.', 'info');
+
+        const identifiedVideosMap = await this.scanIdentifiedVideosForUpscale();
+        const videos = [...identifiedVideosMap.values()];
+
+        if (!videos.length) {
+            this.setVideoStatus(
+                'warning',
+                'Nenhum vídeo identificado encontrado para upscale. Use "Analisar projeto existente" ou atribua/nomeie os vídeos primeiro.'
+            );
+            this.logVideoDebug('⚠️ Diagnóstico: nenhum vídeo identificado encontrado.', 'warning');
+            return;
+        }
+
+        const byScene = new Map();
+
+        for (const item of videos) {
+            const sceneNum = Number(item.sceneNum || 0);
+            if (!byScene.has(sceneNum)) byScene.set(sceneNum, []);
+            byScene.get(sceneNum).push(item);
+        }
+
+        const sortedScenes = [...byScene.entries()]
+            .sort((a, b) => a[0] - b[0]);
+
+        this.logVideoDebug(`✅ Diagnóstico: ${videos.length} vídeo(s) identificado(s) encontrado(s).`, 'success');
+
+        for (const [sceneNum, sceneVideos] of sortedScenes) {
+            const sortedVideos = sceneVideos.sort((a, b) => Number(a.videoNum || 0) - Number(b.videoNum || 0));
+
+            this.logVideoDebug(
+                `Cena ${sceneNum}: ${sortedVideos.length} vídeo(s) identificado(s).`,
+                'info'
+            );
+
+            for (const item of sortedVideos) {
+                const workflowShort = item.workflowId
+                    ? item.workflowId.substring(0, 8)
+                    : 'sem-id';
+
+                this.logVideoDebug(
+                    `• ${item.label} → ${workflowShort}`,
+                    'info'
+                );
+            }
+        }
+
+        this.setVideoStatus(
+            'success',
+            `✅ Diagnóstico concluído: ${videos.length} vídeo(s) identificado(s) para upscale. Confira os logs.`
+        );
+
+    } catch (err) {
+        this.setVideoStatus('error', 'Erro no diagnóstico do upscale: ' + err.message);
+        this.logVideoDebug('Erro no diagnóstico do upscale: ' + err.message, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
+    }
 }
         async startUpscaleProcess() {
            const btn = document.getElementById('fv-upscale-btn');
