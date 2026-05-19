@@ -1,7 +1,8 @@
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
-// Versão 4.0 - Drag & Drop + API Rename (Flow Voz)
-// + ADD-ONS: Resume, Numeração Fiel e Upscale (Base Antiga Mantida)
+// Versão 4.1 - Drag & Drop + API Rename (Flow Voz)
+// + ADD-ONS: Resume, Numeração Fiel e Upscale
+// + FIX: Seletores atualizados para nova interface Flow (Mai/2026)
 // ==========================================
 //
 // ARQUITETURA:
@@ -73,7 +74,7 @@
         MAX_RETRIES:              3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.0 (Flow Voz + Add-ons)',
+        VERSION: '4.1 (Flow Voz + Add-ons + Nova UI)',
     };
 
     // ============================================================
@@ -1089,7 +1090,26 @@ this.validatedRefs[this.referenceKey(ref)] = true;
 
         getScroller() {
             return document.querySelector('[data-testid="virtuoso-scroller"]') ||
-                   document.querySelector('[data-virtuoso-scroller="true"]');
+                   document.querySelector('[data-virtuoso-scroller="true"]') ||
+                   document.querySelector('div[scrollable="true"]') ||
+                   document.querySelector('[class*="virtuoso"]') ||
+                   (() => {
+                       // Fallback: find scrollable container holding tiles
+                       const tiles = document.querySelectorAll('[data-tile-id]');
+                       if (tiles.length > 0) {
+                           let el = tiles[0].parentElement;
+                           while (el && el !== document.body) {
+                               const style = window.getComputedStyle(el);
+                               if ((style.overflow === 'auto' || style.overflow === 'scroll' ||
+                                    style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+                                   el.scrollHeight > el.clientHeight) {
+                                   return el;
+                               }
+                               el = el.parentElement;
+                           }
+                       }
+                       return null;
+                   })();
         }
 
         esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
@@ -1156,14 +1176,37 @@ clearReferencesForUI(source = 'images') {
         async detectGrid() {
             const scroller = this.getScroller();
             if (scroller) { scroller.scrollTop = 0; await this.sleep(500); }
+            
+            // Try original virtuoso row detection
+            let detected = false;
             for (let attempt = 0; attempt < 8; attempt++) {
                 const firstRow = document.querySelector('[data-index="0"]');
                 if (firstRow?.firstElementChild?.children?.length > 0) {
                     this.gridCols = firstRow.firstElementChild.children.length;
+                    detected = true;
                     break;
                 }
                 await this.sleep(300);
             }
+            
+            // Fallback: count tiles in first visual row by Y position
+            if (!detected) {
+                const allTiles = document.querySelectorAll('[data-tile-id]');
+                if (allTiles.length > 0) {
+                    const firstTop = allTiles[0].getBoundingClientRect().top;
+                    let cols = 0;
+                    for (const tile of allTiles) {
+                        if (Math.abs(tile.getBoundingClientRect().top - firstTop) < 10) cols++;
+                        else break;
+                    }
+                    if (cols > 0) this.gridCols = cols;
+                    // Estimate row height from first tile
+                    const tileRect = allTiles[0].getBoundingClientRect();
+                    if (tileRect.height > 0) this.rowHeight = tileRect.height + 8;
+                    this.logDebug(`Grid detectado via fallback (tiles)`, 'info');
+                }
+            }
+            
             const anyRow = document.querySelector('[data-known-size]');
             if (anyRow) {
                 const h = parseFloat(anyRow.getAttribute('data-known-size'));
@@ -1434,7 +1477,11 @@ clearReferencesForUI(source = 'images') {
         // EDITOR (Slate)
         // ──────────────────────────────────────────────
 
-        getEditor() { return document.querySelector('[data-slate-editor="true"]'); }
+        getEditor() {
+            return document.querySelector('[data-slate-editor="true"]')
+                || document.querySelector('div[role="textbox"][contenteditable="true"]')
+                || document.querySelector('div[role="textbox"]');
+        }
 
         async clearEditor() {
             const e = this.getEditor();
