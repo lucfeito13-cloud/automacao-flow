@@ -160,11 +160,11 @@ function triggerTrustedClick(el) {
         const result = [];
         let nextNum = startFrom;
         for (const line of lines) {
-            const tag = line.match(/^\{(?:prompt|cena)\s*(\d+)\}\s*/i);
+            const tag = line.match(/^\{(?:prompt|cena)\s*([\d.]+)\}\s*/i);
             if (tag) {
-                const n = parseInt(tag[1]);
+                const n = parseFloat(tag[1]);
                 const rest = line.slice(tag[0].length).trim();
-                if (rest) { result.push({ text: rest, promptNum: n }); nextNum = n + 1; }
+                if (rest) { result.push({ text: rest, promptNum: n }); nextNum = Math.floor(n) + 1; }
                 else { nextNum = n; }
             } else {
                 result.push({ text: line, promptNum: nextNum++ });
@@ -1571,15 +1571,20 @@ clearReferencesForUI(source = 'images') {
                 if (items.length > 0) {
                     let bestItem = null;
                     const nameLower = name.toLowerCase().trim();
+                    // Limpa extensão do nome buscado também
+                    const cleanSearch = nameLower.replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '').trim();
                     for (const item of items) {
                         const nameDiv = [...item.querySelectorAll('div')].find(d =>
                             d.children.length === 0 && d.textContent?.trim().length > 0
                         );
                         const img = item.querySelector('img');
                         const itemName = (nameDiv?.textContent || img?.alt || '').trim().toLowerCase();
-                        // Comparação: tira sufixo " _" se existir
-                        const cleanName = itemName.replace(/ _$/, '').trim();
-                        if (cleanName === nameLower || itemName === nameLower) {
+                        // Comparação: tira sufixo " _" E extensão de arquivo
+                        const cleanName = itemName
+                            .replace(/ _$/, '')
+                            .replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '')
+                            .trim();
+                        if (cleanName === cleanSearch || cleanName === nameLower || itemName === nameLower) {
                             bestItem = item;
                             break;
                         }
@@ -2133,7 +2138,7 @@ async renameUploadReferencesFromFilenames() {
 
         // Começa do final da galeria
         scroller.scrollTop = scroller.scrollHeight;
-        await this.sleep(900);
+        await this.sleep(1200);
 
         for (let iter = 0; iter < 900; iter++) {
             const visibleTiles = [...document.querySelectorAll('[data-tile-id]')];
@@ -2215,10 +2220,10 @@ async renameUploadReferencesFromFilenames() {
             const prev = Math.round(scroller.scrollTop);
 
             // Scroll mais forte e mais lento para a galeria virtualizada carregar os próximos cards
-            const step = Math.max(280, Math.floor(scroller.clientHeight * 0.65));
+            const step = Math.max(180, Math.floor(scroller.clientHeight * 0.45));
             scroller.scrollTop = Math.max(0, scroller.scrollTop - step);
 
-            await this.sleep(700);
+            await this.sleep(1000);
 
             const now = Math.round(scroller.scrollTop);
 
