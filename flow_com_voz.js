@@ -2597,7 +2597,7 @@ updateFn();
 }
 
 formatSceneNameWithVariationCount(sceneName, variationCounts) {
-    const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0, 10);
+    const sceneNum = parseFloat(sceneName.match(/[\d.]+/)?.[0] || 0);
     const count = variationCounts?.get(sceneNum) || 0;
 
     return `${sceneName} (${count})`;
@@ -2642,7 +2642,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                 
                 // INJEÇÃO ADD-ON: Numeração Fiel
                 for (const [sceneName] of this.sceneAssignments) {
-                    const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
+                    const sceneNum = parseFloat(sceneName.match(/[\d.]+/)?.[0] || 0);
                     const prompt = this.prompts.find(p => p.promptNum === sceneNum);
                     const promptText = prompt?.text || '';
 
@@ -3196,11 +3196,11 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
             let count = 0;
             try {
                 for (const [sceneName, imgs] of [...assignments.entries()].sort((a,b) => {
-                    const na = parseInt(a[0].match(/\d+/)?.[0] || 0);
-                    const nb = parseInt(b[0].match(/\d+/)?.[0] || 0);
+                    const na = parseFloat(a[0].match(/[\d.]+/)?.[0] || 0);
+                    const nb = parseFloat(b[0].match(/[\d.]+/)?.[0] || 0);
                     return na - nb;
                 })) {
-                    const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
+                    const sceneNum = parseFloat(sceneName.match(/[\d.]+/)?.[0] || 0);
                     const sorted = imgs.sort((a,b) => a.imgNum - b.imgNum);
                     for (let i = 0; i < sorted.length; i++) {
                         const fileName = i === 0 ? `cena_${sceneNum}.${ext}` : `cena_${sceneNum}_${i+1}.${ext}`;
@@ -3865,7 +3865,7 @@ if (this.videoGenMode === 'scenes') {
 
             // INJEÇÃO ADD-ON: Numeração Fiel
             for (const [sceneName] of this.videoSceneAssignments) {
-                const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0);
+                const sceneNum = parseFloat(sceneName.match(/[\d.]+/)?.[0] || 0);
                 const prompt = this.videoPrompts.find(p => p.promptNum === sceneNum);
                 const promptText = prompt?.text || '';
 
@@ -4162,7 +4162,7 @@ async scanIdentifiedVideosForUpscale() {
 
     if (this.videoSceneAssignments instanceof Map) {
         for (const [sceneName, arr] of this.videoSceneAssignments.entries()) {
-            const sceneNum = parseInt(sceneName.match(/\d+/)?.[0] || 0, 10);
+            const sceneNum = parseFloat(sceneName.match(/[\d.]+/)?.[0] || 0);
 
             for (const item of arr || []) {
                 if (!item?.workflowId) continue;
