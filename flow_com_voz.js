@@ -648,9 +648,37 @@ function triggerTrustedClick(el) {
   <input type="checkbox" id="fv-auto-name-scenes">
   <div class="flow-option-text">
     <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Nomear vídeos automaticamente</div>
-    <div class="flow-option-desc">No modo Cenas, renomeia no final como Cena X - Vídeo Y.</div>
+    <div class="flow-option-desc">No modo Cenas, renomeia como Cena X - Vídeo Y.</div>
   </div>
 </label>
+            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+              <div class="flow-option-text">
+                <div class="flow-option-title">Quando enumerar</div>
+                <div class="flow-option-desc">Enumera ao final de tudo ou após cada bloco de prompts.</div>
+              </div>
+              <div class="flow-mode-btns">
+                <button class="flow-mode-btn active" data-enum="end">📋 No final</button>
+                <button class="flow-mode-btn" data-enum="block">🏷️ Por bloco</button>
+              </div>
+            </div>
+            <label class="flow-option" style="margin-top:4px;">
+              <input type="checkbox" id="fv-approve-enum">
+              <div class="flow-option-text">
+                <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Aprovar antes de enumerar</div>
+                <div class="flow-option-desc">Pausa após cada bloco e pede aprovação antes de nomear.</div>
+              </div>
+            </label>
+            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+              <div class="flow-option-text">
+                <div class="flow-option-title">Velocidade</div>
+                <div class="flow-option-desc">Ajusta o tempo entre ações. Rápido = menos espera.</div>
+              </div>
+              <div class="flow-mode-btns">
+                <button class="flow-mode-btn" data-speed="slow">🐢 Lento</button>
+                <button class="flow-mode-btn active" data-speed="normal">🔄 Normal</button>
+                <button class="flow-mode-btn" data-speed="fast">⚡ Rápido</button>
+              </div>
+            </div>
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <input type="checkbox" id="fv-use-backspace">
               <div class="flow-option-text">
@@ -984,6 +1012,17 @@ if (videoRetriesSelect) {
         this.logVideoDebug(`Tentativas ao falhar: ${this.videoMaxPromptRetries}`, 'info');
     });
 }
+
+            // ── Video approve checkbox ──
+            const videoApproveCheckbox = $('fv-approve-enum');
+            if (videoApproveCheckbox) {
+                videoApproveCheckbox.addEventListener('change', e => {
+                    this.approveBeforeEnum = e.target.checked;
+                    // Sync com o checkbox de imagens
+                    const imgCheckbox = document.getElementById('flow-approve-enum');
+                    if (imgCheckbox) imgCheckbox.checked = e.target.checked;
+                });
+            }
 
             $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
             $('fv-mark-refs-valid-btn').addEventListener('click', () => this.markReferencesAsValidated('video'));
@@ -2859,6 +2898,40 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
                 });
             });
         }
+        // ── Pause for video block approval ──
+        waitForVideoBlockApproval(blockNum, totalBlocks) {
+            return new Promise(resolve => {
+                const statusEl = document.getElementById('fv-status');
+                if (!statusEl) return resolve('approve');
+
+                const btnContainer = document.createElement('div');
+                btnContainer.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
+                btnContainer.innerHTML = `
+                    <button id="fv-approve-btn" style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid #a7f3d0;background:#ecfdf5;color:#065f46;font-weight:600;font-size:12px;cursor:pointer;">✅ Aprovar e Enumerar</button>
+                    <button id="fv-skip-btn" style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;background:#f8fafc;color:#64748b;font-weight:600;font-size:12px;cursor:pointer;">⏭️ Pular</button>
+                    <button id="fv-stop-approve-btn" style="padding:8px 12px;border-radius:8px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;font-weight:600;font-size:12px;cursor:pointer;">⏹ Parar</button>
+                `;
+                statusEl.appendChild(btnContainer);
+
+                const cleanup = () => btnContainer.remove();
+
+                document.getElementById('fv-approve-btn').addEventListener('click', () => {
+                    cleanup();
+                    this.logVideoDebug(`Lote ${blockNum} aprovado para enumeração`, 'success');
+                    resolve('approve');
+                });
+                document.getElementById('fv-skip-btn').addEventListener('click', () => {
+                    cleanup();
+                    this.logVideoDebug(`Lote ${blockNum} pulado (sem enumeração)`, 'info');
+                    resolve('skip');
+                });
+                document.getElementById('fv-stop-approve-btn').addEventListener('click', () => {
+                    cleanup();
+                    this.logVideoDebug(`Automação parada pelo usuário no lote ${blockNum}`, 'warning');
+                    resolve('stop');
+                });
+            });
+        }
 
         async autoAssignScenesFromMatrices(allMatrices, options = {}) {
     const isVideo = !!options.isVideo;
@@ -3639,13 +3712,18 @@ this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
                     this.shouldStop = origShouldStop;
                     if (this.videoShouldStop) break;
 
-                    // 4. Retry falhas
+                    // 4. Retry falhas (parciais ou totais)
                     const failedPrompts = [];
                     for (let bRevIdx = 0; bRevIdx < batch.length; bRevIdx++) {
                         const bIdx2 = batch.length - 1 - bRevIdx;
                         const prompt = batch[bIdx2];
                         const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
-                        if (slots.every(s => s.state === 'error')) failedPrompts.push(prompt);
+                        const loadedCount = slots.filter(s => s.state === 'loaded').length;
+                        if (loadedCount < N) {
+                            const missing = N - loadedCount;
+                            this.logVideoDebug(`⚠️ Prompt ${prompt.promptNum}: gerou ${loadedCount}/${N} (faltam ${missing})`, 'warning');
+                            failedPrompts.push(prompt);
+                        }
                     }
 
                     for (const fp of failedPrompts) {
@@ -3688,6 +3766,21 @@ while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
 
                     allMatrices.push(matrix);
 
+                    // ── Enum por bloco (se ativo) ──
+                    const autoNameVideos = document.getElementById('fv-auto-name-scenes')?.checked;
+                    if (this.enumMode === 'block' && this.videoGenMode === 'scenes' && autoNameVideos && !this.videoShouldStop) {
+                        if (this.approveBeforeEnum) {
+                            this.setVideoStatus('info', `✅ Lote ${bIdx+1}/${batches.length} concluído. Aprovar enumeração?`);
+                            const approved = await this.waitForVideoBlockApproval(bIdx + 1, batches.length);
+                            if (approved === 'stop') { this.videoShouldStop = true; break; }
+                            if (approved === 'approve') {
+                                await this.autoAssignScenesFromMatrices([matrix], { isVideo: true });
+                            }
+                        } else {
+                            await this.autoAssignScenesFromMatrices([matrix], { isVideo: true });
+                        }
+                    }
+
                     if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
                 }
 
@@ -3705,13 +3798,16 @@ while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
                     if (this.videoGenMode === 'scenes') statusMsg += ' Arraste as cenas para atribuir aos vídeos.';
                     this.setVideoStatus('success', statusMsg);
 
-                    // Mostra painel de atribuição / nomeia automaticamente, se escolhido
+                    // Mostra painel de atribuição / nomeia automaticamente (modo 'end')
 if (this.videoGenMode === 'scenes') {
     this.showVideoAssignPanel(allMatrices);
 
-    const autoNameVideos = document.getElementById('fv-auto-name-scenes')?.checked;
-    if (autoNameVideos) {
-        await this.autoAssignScenesFromMatrices(allMatrices, { isVideo: true });
+    // Só enumera no final se enumMode === 'end'
+    if (this.enumMode === 'end') {
+        const autoNameVideos = document.getElementById('fv-auto-name-scenes')?.checked;
+        if (autoNameVideos) {
+            await this.autoAssignScenesFromMatrices(allMatrices, { isVideo: true });
+        }
     }
 }
                     // Popup com detalhes
