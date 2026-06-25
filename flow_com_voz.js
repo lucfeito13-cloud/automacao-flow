@@ -63,14 +63,14 @@
     };
 
     const CONFIG = {
-        DELAY_SHORT:            [300, 500],
-        DELAY_MEDIUM:           [500, 800],
-        DELAY_LONG:            [1000, 1500],
-        DELAY_BETWEEN_SUBMITS: [3500, 5000],
-        DELAY_BETWEEN_BATCHES: [2500, 3500],
+        DELAY_SHORT:            [200, 400],
+        DELAY_MEDIUM:           [400, 650],
+        DELAY_LONG:            [800, 1200],
+        DELAY_BETWEEN_SUBMITS: [2000, 3000],
+        DELAY_BETWEEN_BATCHES: [1500, 2500],
         GENERATION_TIMEOUT:  180000,
-        TILE_CHECK_INTERVAL:   2500,
-        STABILIZE_TIME:        6000,
+        TILE_CHECK_INTERVAL:   2000,
+        STABILIZE_TIME:        5000,
         MAX_RETRIES:              3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
@@ -362,6 +362,16 @@ function triggerTrustedClick(el) {
 .flow-assign-reload-bar button{padding:8px 24px;font-size:13px;font-weight:700;background:linear-gradient(135deg,var(--cd-primary),var(--cd-primary-dark));color:#fff;border:none;border-radius:var(--cd-radius-xs);cursor:pointer;animation:pulse-glow 1.5s ease-in-out infinite;transition:all .2s;}
 .flow-assign-reload-bar button:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(16,185,129,.4);}
 @keyframes pulse-glow{0%,100%{box-shadow:0 0 4px rgba(16,185,129,.3);}50%{box-shadow:0 0 16px rgba(16,185,129,.6);}}
+/* ========== ASSIGNMENT PANEL: VERTICAL MODE ========== */
+#flow-assign-panel.vertical{top:12px;left:auto;right:12px;bottom:12px;width:220px;max-height:none;}
+#flow-assign-panel.vertical .flow-assign-header{flex-wrap:wrap;gap:6px;padding:8px 10px;}
+#flow-assign-panel.vertical .flow-assign-header h3{font-size:12px;}
+#flow-assign-panel.vertical .flow-assign-items{flex-direction:column;flex-wrap:nowrap;max-height:none;flex:1;overflow-y:auto;padding:6px 8px;gap:4px;}
+#flow-assign-panel.vertical .flow-assign-item{white-space:nowrap;font-size:11px;padding:5px 10px;}
+#flow-assign-panel.vertical .flow-assign-header-btns{gap:2px;}
+#flow-assign-panel.vertical .flow-assign-dl-btn{font-size:10px;padding:4px 8px;}
+#flow-assign-panel.vertical .flow-assign-prompt-preview{font-size:10px;padding:0 8px 6px;}
+#flow-assign-panel.vertical.panel-closed{right:12px;}
 /* ========== TILE LABELS ========== */
 .flow-tile-label{position:absolute;top:8px;left:8px;z-index:10;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,.8);color:#fff;font-size:11px;font-weight:600;padding:4px 8px;border-radius:6px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;backdrop-filter:blur(4px);pointer-events:auto;max-width:calc(100% - 24px);}
 .flow-tile-label span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -767,7 +777,8 @@ function triggerTrustedClick(el) {
     <h3 id="flow-assign-title">Atribuir</h3>
     <span class="flow-assign-count" id="flow-assign-count"></span>
     <div class="flow-assign-header-btns">
-      <button class="flow-assign-dl-btn" id="flow-assign-download" style="display:none;" disabled>⬇️ Baixar Cenas</button>
+      <button class="flow-assign-dl-btn" id="flow-assign-download" style="display:none;">⬇️ Baixar Cenas</button>
+      <button class="flow-assign-hbtn" id="flow-assign-layout" title="Alternar Horizontal/Vertical">↔</button>
       <button class="flow-assign-hbtn" id="flow-assign-toggle" title="Minimizar">▲</button>
       <button class="flow-assign-hbtn close-btn" id="flow-assign-close" title="Fechar">✕</button>
     </div>
@@ -904,6 +915,16 @@ if (fixUploadRefsBtn) {
             $('flow-close-popup').addEventListener('click', () => { $('flow-popup').style.display='none'; $('flow-popup-overlay').style.display='none'; });
             $('flow-popup-download').addEventListener('click', () => this.downloadLastRunMedia());
             $('flow-logout-link').addEventListener('click', () => { if(confirm('Sair da conta Criadores Dark?')) chrome.runtime?.sendMessage?.({action:'logout'}); });
+
+            // ── Layout toggle (horizontal ↔ vertical) ──
+            $('flow-assign-layout').addEventListener('click', () => {
+                const panel = document.getElementById('flow-assign-panel');
+                panel.classList.toggle('vertical');
+                const isVert = panel.classList.contains('vertical');
+                $('flow-assign-layout').textContent = isVert ? '↕' : '↔';
+                $('flow-assign-layout').title = isVert ? 'Voltar para Horizontal' : 'Alternar para Vertical';
+                this.updateScrollerPadding();
+            });
             $('flow-analyze-btn').addEventListener('click', () => this.analyzeProject());
             $('flow-dl-identified').addEventListener('click', () => this.downloadProjectImages('identified'));
             $('flow-dl-scenes').addEventListener('click', () => this.downloadProjectImages('scenes'));
@@ -1178,6 +1199,7 @@ markReferencesAsValidated(source = 'images') {
 this.validatedRefs[this.referenceKey(ref)] = true;
     }
 
+    this.saveValidatedRefs();
     updateFn();
 
     statusFn(
@@ -2102,7 +2124,7 @@ clearReferencesForUI(source = 'images') {
                         if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
                     }
                     if (this.shouldStop) break;
-                    await this.dynamicSleep([1800, 2500]);
+                    await this.dynamicSleep([1200, 1800]);
 
                     // 3. Monta matriz e aguarda geração
                     const matrix = this.buildPositionMatrix(batch, N, 0);
@@ -2140,7 +2162,7 @@ while (retryCount[key] < maxRetries && !this.shouldStop) {
                             const retryBefore = this.snapshotImageUuids();
                             const ok = await this.prepareAndSubmit(fp);
                             if (!ok) break;
-                            await this.dynamicSleep([1800, 2500]);
+                            await this.dynamicSleep([1200, 1800]);
                             const retryMatrix = this.buildPositionMatrix([fp], N, 0);
                             await this.waitForMatrix(retryMatrix, retryBefore);
                             if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
@@ -2637,7 +2659,6 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                 const previewEl = document.getElementById('flow-assign-preview');
                 if (previewEl) { previewEl.style.display = 'none'; }
                 dlBtn.style.display = 'inline-flex';
-                dlBtn.disabled = true;
                 const rlBar2 = document.getElementById('flow-assign-reload-bar'); if (rlBar2) rlBar2.classList.remove('visible');
                 
                 // INJEÇÃO ADD-ON: Numeração Fiel
@@ -2702,6 +2723,8 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
             document.getElementById('flow-assign-panel').classList.add('active');
             const reopenBtn = document.getElementById('flow-reopen-assign');
             if (reopenBtn) reopenBtn.style.display = 'none';
+            const fvReopenBtn = document.getElementById('fv-reopen-assign');
+            if (fvReopenBtn) fvReopenBtn.style.display = 'none';
             this.updateScrollerPadding();
         }
 
@@ -3297,7 +3320,7 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
 
                                 let fileName;
                                 if (data.type === 'scene') {
-                                    const sm = data.label.match(/Cena\s+(\d+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)/i);
+                                    const sm = data.label.match(/Cena\s+([\d.]+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)/i);
                                     const ext = tileIsVideo ? 'mp4' : 'jpg';
                                     if (sm) fileName = parseInt(sm[2]) === 1 ? `cena_${sm[1]}.${ext}` : `cena_${sm[1]}_${sm[2]}.${ext}`;
                                     else fileName = `cena_${data.label.replace(/\s+/g, '_')}.${ext}`;
@@ -3443,7 +3466,7 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
 
                     let fileName;
                     if (data?.type === 'scene') {
-                        const m = data.label.match(/Cena\s+(\d+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)/i);
+                        const m = data.label.match(/Cena\s+([\d.]+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)/i);
                         const ext = tileIsVideo ? 'mp4' : 'jpg';
                         if (m) fileName = parseInt(m[2]) === 1 ? `cena_${m[1]}.${ext}` : `cena_${m[1]}_${m[2]}.${ext}`;
                         else fileName = `cena_${data.label.replace(/\s+/g, '_')}.${ext}`;
@@ -3528,7 +3551,7 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
                     let labelText = null, type = null, extra = null, sceneMatch = null;
 
                     // Match "Cena X - Imagem Y" ou "Cena X - Vídeo Y"
-                    sceneMatch = name.match(/^Cena\s+(\d+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)$/i);
+                    sceneMatch = name.match(/^Cena\s+([\d.]+)\s*-\s*(?:Imagem|Vídeo|Video)\s+(\d+)$/i);
                     if (sceneMatch) {
                         labelText = name;
                         type = 'scene';
@@ -3700,7 +3723,7 @@ this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
                         if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
                     }
                     if (this.videoShouldStop) break;
-                    await this.dynamicSleep([1800, 2500]);
+                    await this.dynamicSleep([1200, 1800]);
 
                     // 3. Monta matriz e aguarda geração
                     const matrix = this.buildPositionMatrix(batch, N, 0);
@@ -3742,7 +3765,7 @@ while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
                             const retryBefore = this.snapshotImageUuids();
                             const ok = await this.prepareAndSubmit(fp);
                             if (!ok) break;
-                            await this.dynamicSleep([1800, 2500]);
+                            await this.dynamicSleep([1200, 1800]);
                             const retryMatrix = this.buildPositionMatrix([fp], N, 0);
                             this.shouldStop = this.videoShouldStop;
                             await this.waitForMatrix(retryMatrix, retryBefore);
@@ -4061,13 +4084,13 @@ async scanIdentifiedVideosForUpscale() {
     const addFound = (workflowId, label, tile) => {
         if (!workflowId || !label) return;
 
-        const match = label.match(/^Cena\s+(\d+)\s*-\s*(?:Vídeo|Video)\s+(\d+)$/i);
+        const match = label.match(/^Cena\s+([\d.]+)\s*-\s*(?:Vídeo|Video)\s+(\d+)$/i);
         if (!match) return;
 
         found.set(workflowId, {
             workflowId,
             label,
-            sceneNum: parseInt(match[1], 10),
+            sceneNum: parseFloat(match[1]),
             videoNum: parseInt(match[2], 10),
             tile
         });
@@ -4154,7 +4177,7 @@ async scanIdentifiedVideosForUpscale() {
 
         if (
             data?.type === 'scene' &&
-            /^Cena\s+\d+\s*-\s*(?:Vídeo|Video)\s+\d+$/i.test(label)
+            /^Cena\s+[\d.]+\s*-\s*(?:Vídeo|Video)\s+\d+$/i.test(label)
         ) {
             addFound(workflowId, label, null);
         }
