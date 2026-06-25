@@ -602,6 +602,7 @@ function triggerTrustedClick(el) {
            <button class="flow-validate-btn" id="fv-validate-btn">🔍 Validar referências na galeria</button>
 <button class="flow-validate-btn" id="fv-mark-refs-valid-btn" style="margin-top:6px;">✅ Referências já validadas</button>
 <button class="flow-validate-btn" id="fv-clear-refs-btn" style="margin-top:6px;">🧽 Limpar referências validadas</button>
+<button class="flow-validate-btn" id="fv-assign-refs-btn" style="display:none;margin-top:6px;">📌 Atribuir referências</button>
           </div>
         </div>
         <div class="flow-card">
@@ -1047,6 +1048,12 @@ if (videoRetriesSelect) {
 
             $('fv-validate-btn').addEventListener('click', () => this.validateReferences('video'));
             $('fv-mark-refs-valid-btn').addEventListener('click', () => this.markReferencesAsValidated('video'));
+
+            // ── Video assign refs button ──
+            const fvAssignRefsBtn = $('fv-assign-refs-btn');
+            if (fvAssignRefsBtn) {
+                fvAssignRefsBtn.addEventListener('click', () => this.openVideoAssignRefsFromDetected());
+            }
             const clearVideoRefsBtn = $('fv-clear-refs-btn');
 if (clearVideoRefsBtn) {
     clearVideoRefsBtn.addEventListener('click', () => this.clearReferencesForUI('video'));
@@ -1131,6 +1138,9 @@ setupTextWatcher() {
                 
                 list.innerHTML = html;
             }
+            // Mostra botão de atribuir se tem referências
+            const assignBtn = document.getElementById('fv-assign-refs-btn');
+            if (assignBtn) assignBtn.style.display = refs.length > 0 ? '' : 'none';
         }
 cleanUploadReferenceName(rawName) {
     if (!rawName) return null;
@@ -2742,6 +2752,20 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
             if (refsBtn) refsBtn.classList.add('active');
             const descEl = document.getElementById('flow-mode-desc');
             if (descEl) descEl.textContent = 'Arraste cada referência para a imagem desejada.';
+            this.showAssignPanel([]);
+        }
+
+        /** Abre painel de atribuição com referências detectadas nos prompts de vídeo */
+        openVideoAssignRefsFromDetected() {
+            const text = document.getElementById('fv-prompts-input').value;
+            const prompts = parsePromptsText(text);
+            const refs = extractReferences(prompts);
+            if (!refs.length) { this.setVideoStatus('warning', 'Nenhuma referência [nome] detectada nos prompts de vídeo.'); return; }
+            this.genMode = 'refs';
+            this._videoAssignActive = true;
+            this.refNames = refs;
+            this.refAssignments = new Map();
+            document.querySelectorAll('[data-vmode]').forEach(b => b.classList.remove('active'));
             this.showAssignPanel([]);
         }
 
