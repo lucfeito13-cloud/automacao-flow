@@ -2817,13 +2817,11 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
                 const done = [...this.videoSceneAssignments.values()].filter(arr => arr.length > 0).length;
                 el.textContent = `${done}/${total}`;
                 const dlBtn = document.getElementById('flow-assign-download');
-                dlBtn.disabled = done < total;
             } else if (this.genMode === 'scenes') {
                 const total = this.sceneAssignments.size; // INJEÇÃO ADD-ON: Numeração Fiel
                 const done = [...this.sceneAssignments.values()].filter(arr => arr.length > 0).length;
                 el.textContent = `${done}/${total}`;
                 const dlBtn = document.getElementById('flow-assign-download');
-                dlBtn.disabled = done < total;
             }
         }
 
@@ -3905,7 +3903,6 @@ if (this.videoGenMode === 'scenes') {
             if (previewEl) previewEl.style.display = 'none';
 
             dlBtn.style.display = 'inline-flex';
-            dlBtn.disabled = true;
 
             const rlBar = document.getElementById('flow-assign-reload-bar');
             if (rlBar) rlBar.classList.remove('visible');
