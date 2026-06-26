@@ -525,6 +525,13 @@ function triggerTrustedClick(el) {
               </div>
               <div id="flow-speed-info" style="font-size:11px;color:var(--cd-text-light);">Velocidade: Normal (1.0×)</div>
             </div>
+            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+              <input type="checkbox" id="flow-defer-retry">
+              <div class="flow-option-text">
+                <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Retentar falhas no final</div>
+                <div class="flow-option-desc">Em vez de parar para retentar, guarda os que falharam e retenta tudo no final.</div>
+              </div>
+            </label>
 
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <input type="checkbox" id="flow-use-backspace">
@@ -691,6 +698,13 @@ function triggerTrustedClick(el) {
               </div>
             </div>
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+              <input type="checkbox" id="fv-defer-retry">
+              <div class="flow-option-text">
+                <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Retentar falhas no final</div>
+                <div class="flow-option-desc">Em vez de parar para retentar, guarda os que falharam e retenta tudo no final.</div>
+              </div>
+            </label>
+            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <input type="checkbox" id="fv-use-backspace">
               <div class="flow-option-text">
                 <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Modo alternativo (Backspace 3x)</div>
@@ -830,6 +844,7 @@ function triggerTrustedClick(el) {
             this.enumMode         = 'end'; // 'end' | 'block'
             this.approveBeforeEnum = false;
             this._blockApprovalResolve = null; // para pausar no approve
+            this.deferRetry = false; // retentar no final em vez de imediatamente
             this.initUI();
             this.setupTextWatcher();
             this.setupVideoTextWatcher();
@@ -969,6 +984,24 @@ if (fixUploadRefsBtn) {
             if (approveCheckbox) {
                 approveCheckbox.addEventListener('change', e => {
                     this.approveBeforeEnum = e.target.checked;
+                });
+            }
+
+            // ── Defer retry checkboxes (sync image ↔ video) ──
+            const deferImgCb = $('flow-defer-retry');
+            if (deferImgCb) {
+                deferImgCb.addEventListener('change', e => {
+                    this.deferRetry = e.target.checked;
+                    const fvCb = document.getElementById('fv-defer-retry');
+                    if (fvCb) fvCb.checked = e.target.checked;
+                });
+            }
+            const deferVidCb = $('fv-defer-retry');
+            if (deferVidCb) {
+                deferVidCb.addEventListener('change', e => {
+                    this.deferRetry = e.target.checked;
+                    const imgCb = document.getElementById('flow-defer-retry');
+                    if (imgCb) imgCb.checked = e.target.checked;
                 });
             }
 
@@ -2102,6 +2135,7 @@ clearReferencesForUI(source = 'images') {
             try {
                 const N = this.imagesPerPrompt, C = this.gridCols;
                 const retryCount = {};
+                const deferredFailures = []; // prompts falhados para retentar no final
                 let cumulativeRows = 0; // linhas totais de lotes anteriores
 
                 for (let bIdx = 0; bIdx < batches.length; bIdx++) {
@@ -2158,8 +2192,18 @@ clearReferencesForUI(source = 'images') {
 
                     for (const fp of failedPrompts) {
                         const key = fp.promptNum;
-                        if (!retryCount[key]) retryCount[key] = 0;
                         const gi = this.prompts.findIndex(x => x.promptNum === key);
+
+                        // ── Deferred retry: guardar para o final ──
+                        if (this.deferRetry) {
+                            this.logDebug(`⏸️ Prompt ${key}: falhou — guardado para retentar no final`, 'warning');
+                            this.updatePromptItemStatus(gi, 'retrying', 'adiado');
+                            deferredFailures.push(fp);
+                            continue;
+                        }
+
+                        // ── Retry imediato (comportamento original) ──
+                        if (!retryCount[key]) retryCount[key] = 0;
                         let recovered = false;
                         const maxRetries = Number.isInteger(this.maxPromptRetries)
     ? this.maxPromptRetries
@@ -2212,6 +2256,47 @@ while (retryCount[key] < maxRetries && !this.shouldStop) {
                     }
 
                     if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
+                }
+
+                // ══════ DEFERRED RETRY: retentar falhas acumuladas ══════
+                if (deferredFailures.length > 0 && !this.shouldStop) {
+                    this.logDebug(`\n╔═══ RETENTANDO ${deferredFailures.length} PROMPT(S) ADIADO(S) ═══╗`, 'info');
+                    this.setStatus('info', `🔄 Retentando ${deferredFailures.length} prompt(s) que falharam...`);
+
+                    const maxRetries = Number.isInteger(this.maxPromptRetries) ? this.maxPromptRetries : CONFIG.MAX_RETRIES;
+
+                    for (let di = 0; di < deferredFailures.length && !this.shouldStop; di++) {
+                        const fp = deferredFailures[di];
+                        const key = fp.promptNum;
+                        const gi = this.prompts.findIndex(x => x.promptNum === key);
+                        let recovered = false;
+
+                        this.setStatus('info', `🔄 Retry adiado ${di+1}/${deferredFailures.length} — Prompt ${key}`);
+
+                        for (let attempt = 1; attempt <= maxRetries && !this.shouldStop; attempt++) {
+                            this.logDebug(`🔄 Retry adiado: prompt ${key} — tentativa ${attempt}/${maxRetries}`, 'info');
+                            this.updatePromptItemStatus(gi, 'retrying', `${attempt}/${maxRetries}`);
+                            const retryBefore = this.snapshotImageUuids();
+                            const ok = await this.prepareAndSubmit(fp);
+                            if (!ok) break;
+                            await this.dynamicSleep([1200, 1800]);
+                            const retryMatrix = this.buildPositionMatrix([fp], N, 0);
+                            await this.waitForMatrix(retryMatrix, retryBefore);
+                            if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
+                                this.updatePromptItemStatus(gi, 'done');
+                                recovered = true;
+                                allMatrices.push(retryMatrix);
+                                this.logDebug(`✅ Prompt ${key} recuperado no retry adiado!`, 'success');
+                                break;
+                            }
+                        }
+                        if (!recovered) {
+                            this.updatePromptItemStatus(gi, 'error', 'falhou');
+                            this.logDebug(`❌ Prompt ${key} falhou mesmo após retries adiados`, 'error');
+                        }
+                        if (di < deferredFailures.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
+                    }
+                    this.logDebug(`╚═══ FIM DOS RETRIES ADIADOS ═══╝`, 'info');
                 }
 
                 if (!this.shouldStop) {
@@ -3714,6 +3799,7 @@ this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
             try {
                 const C = this.gridCols;
                 const retryCount = {};
+                const deferredFailures = []; // prompts falhados para retentar no final
 
                 for (let bIdx = 0; bIdx < batches.length; bIdx++) {
                     if (this.videoShouldStop) break;
@@ -3773,8 +3859,18 @@ this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
 
                     for (const fp of failedPrompts) {
                         const key = fp.promptNum;
-                        if (!retryCount[key]) retryCount[key] = 0;
                         const gi = this.videoPrompts.findIndex(x => x.promptNum === key);
+
+                        // ── Deferred retry: guardar para o final ──
+                        if (this.deferRetry) {
+                            this.logVideoDebug(`⏸️ Prompt ${key}: falhou — guardado para retentar no final`, 'warning');
+                            this.updateVideoPromptItemStatus(gi, 'retrying', 'adiado');
+                            deferredFailures.push(fp);
+                            continue;
+                        }
+
+                        // ── Retry imediato (comportamento original) ──
+                        if (!retryCount[key]) retryCount[key] = 0;
                         let recovered = false;
                         const maxVideoRetries = Number.isInteger(this.videoMaxPromptRetries)
     ? this.videoMaxPromptRetries
@@ -3827,6 +3923,50 @@ while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
                     }
 
                     if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
+                }
+
+                // ══════ DEFERRED RETRY (Vídeos): retentar falhas acumuladas ══════
+                if (deferredFailures.length > 0 && !this.videoShouldStop) {
+                    this.logVideoDebug(`\n╔═══ RETENTANDO ${deferredFailures.length} PROMPT(S) ADIADO(S) ═══╗`, 'info');
+                    this.setVideoStatus('info', `🔄 Retentando ${deferredFailures.length} prompt(s) que falharam...`);
+
+                    const maxVideoRetries = Number.isInteger(this.videoMaxPromptRetries) ? this.videoMaxPromptRetries : CONFIG.MAX_RETRIES;
+
+                    for (let di = 0; di < deferredFailures.length && !this.videoShouldStop; di++) {
+                        const fp = deferredFailures[di];
+                        const key = fp.promptNum;
+                        const gi = this.videoPrompts.findIndex(x => x.promptNum === key);
+                        let recovered = false;
+
+                        this.setVideoStatus('info', `🔄 Retry adiado ${di+1}/${deferredFailures.length} — Prompt ${key}`);
+
+                        for (let attempt = 1; attempt <= maxVideoRetries && !this.videoShouldStop; attempt++) {
+                            this.logVideoDebug(`🔄 Retry adiado: prompt ${key} — tentativa ${attempt}/${maxVideoRetries}`, 'info');
+                            this.updateVideoPromptItemStatus(gi, 'retrying', `${attempt}/${maxVideoRetries}`);
+                            const retryBefore = this.snapshotImageUuids();
+                            const ok = await this.prepareAndSubmit(fp);
+                            if (!ok) break;
+                            await this.dynamicSleep([1200, 1800]);
+                            const retryMatrix = this.buildPositionMatrix([fp], N, 0);
+                            const origShouldStop = this.shouldStop;
+                            this.shouldStop = this.videoShouldStop;
+                            await this.waitForMatrix(retryMatrix, retryBefore);
+                            this.shouldStop = origShouldStop;
+                            if (retryMatrix.filter(s => s.state === 'loaded').length >= N) {
+                                this.updateVideoPromptItemStatus(gi, 'done');
+                                recovered = true;
+                                allMatrices.push(retryMatrix);
+                                this.logVideoDebug(`✅ Prompt ${key} recuperado no retry adiado!`, 'success');
+                                break;
+                            }
+                        }
+                        if (!recovered) {
+                            this.updateVideoPromptItemStatus(gi, 'error', 'falhou');
+                            this.logVideoDebug(`❌ Prompt ${key} falhou mesmo após retries adiados`, 'error');
+                        }
+                        if (di < deferredFailures.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
+                    }
+                    this.logVideoDebug(`╚═══ FIM DOS RETRIES ADIADOS ═══╝`, 'info');
                 }
 
                 if (!this.videoShouldStop) {
