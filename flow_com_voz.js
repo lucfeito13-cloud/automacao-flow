@@ -749,6 +749,7 @@ function triggerTrustedClick(el) {
                 <button class="flow-validate-btn" id="fv-dl-scenes" style="margin:0;">🎬 Apenas Cenas</button>
                 <button class="flow-validate-btn" id="fv-dl-all" style="margin:0;">📦 Completo (Todas as Geradas)</button>
                 <button class="flow-validate-btn" id="fv-upscale-btn" style="margin:0; background:linear-gradient(135deg, #8b5cf6, #6d28d9); color:#fff; border:none; margin-top: 6px;">🚀 Upscale 1080p (Vídeos Identificados)</button>
+                <button class="flow-validate-btn" id="fv-upscale-stop-btn" style="margin:0; margin-top:6px; display:none; background:#fef2f2; color:#991b1b; border:1px solid #fecaca;">⏹ Parar Upscale</button>
              
               <button class="flow-validate-btn" id="fv-upscale-debug-btn" style="margin:0; margin-top:6px;">
   🔎 Diagnosticar vídeos do upscale
@@ -1103,6 +1104,16 @@ if (clearVideoRefsBtn) {
             // BOTÃO NOVO (UPSCALE) INJETADO AQUI
             const fvUpscaleBtn = $('fv-upscale-btn');
 if (fvUpscaleBtn) fvUpscaleBtn.addEventListener('click', () => this.startUpscaleProcess());
+
+// Upscale stop button
+const fvUpscaleStopBtn = $('fv-upscale-stop-btn');
+if (fvUpscaleStopBtn) {
+    fvUpscaleStopBtn.addEventListener('click', () => {
+        this.upscaleShouldStop = true;
+        this.logVideoDebug('⏹ Upscale parado pelo usuário.', 'warning');
+        this.setVideoStatus('warning', '⏹ Parando upscale...');
+    });
+}
 
 const fvUpscaleDebugBtn = $('fv-upscale-debug-btn');
 if (fvUpscaleDebugBtn) {
@@ -4472,6 +4483,13 @@ const requested = new Set();
                 btn.disabled = true;
                 btn.textContent = '⏳ Iniciando Upscale 1080p...';
             }
+            // Mostra botão de parar e reseta flag
+            this.upscaleShouldStop = false;
+            const stopBtn = document.getElementById('fv-upscale-stop-btn');
+            if (stopBtn) stopBtn.style.display = '';
+
+            // Salva URL do projeto para detectar se saiu
+            const projectUrl = location.href;
 
 const identifiedVideosMap = await this.scanIdentifiedVideosForUpscale();
 
@@ -4503,7 +4521,14 @@ const videoLabel = videoInfo?.label || wfId.substring(0, 8);
 
 this.logVideoDebug(`🎬 Processando upscale: ${videoLabel}`, 'info');
 this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
-                if (this.videoShouldStop) break;
+                if (this.upscaleShouldStop) break;
+
+                // Verifica se ainda está no mesmo projeto
+                if (location.href !== projectUrl) {
+                    this.logVideoDebug('❌ Saiu do projeto! Parando upscale.', 'error');
+                    this.setVideoStatus('error', '❌ O upscale parou porque a página saiu do projeto. Volte ao projeto e tente novamente.');
+                    break;
+                }
 
                 try {
                     const tile = await this.scrollToWorkflow(wfId);
@@ -4581,20 +4606,48 @@ if (btn) {
     btn.disabled = false;
     btn.textContent = '🚀 Upscale 1080p (Vídeos Identificados)';
 }
+// Esconde botão de parar
+const stopBtn2 = document.getElementById('fv-upscale-stop-btn');
+if (stopBtn2) stopBtn2.style.display = 'none';
 }
 
 async scrollToWorkflow(wfId) {
             const scroller = this.getScroller();
             if (!scroller) return null;
+
+            // Verifica se tiles existem (confirma que estamos num projeto)
+            const tilesExist = document.querySelectorAll('[data-tile-id]').length > 0;
+            if (!tilesExist) {
+                this.logVideoDebug('⚠️ scrollToWorkflow: nenhum tile encontrado. Pode ter saído do projeto.', 'warning');
+                return null;
+            }
+
+            // Primeiro tenta achar sem scrollar (já visível)
+            const linkDirect = document.querySelector(`a[href*="/edit/${wfId}"]`);
+            if (linkDirect) {
+                const tileDirect = linkDirect.closest('[data-tile-id]');
+                if (tileDirect) return tileDirect;
+            }
+
+            // Scroll pro topo do virtualizer (não da página)
             scroller.scrollTop = 0;
             await this.sleep(600);
 
-            for (let iter = 0; iter < 100; iter++) {
+            for (let iter = 0; iter < 80; iter++) {
+                // Check de parada
+                if (this.upscaleShouldStop) return null;
+
+                // Verifica se ainda tem tiles (não saiu do projeto)
+                if (document.querySelectorAll('[data-tile-id]').length === 0) {
+                    this.logVideoDebug('⚠️ scrollToWorkflow: tiles sumiram durante scroll. Abortando.', 'warning');
+                    return null;
+                }
+
                 const link = document.querySelector(`a[href*="/edit/${wfId}"]`);
                 if (link) {
                     const tile = link.closest('[data-tile-id]');
                     if (tile) {
-                        // Pequeno scroll de ajuste para garantir que o menu do tile não seja coberto no bottom/top do virtualizer
+                        // Ajuste de posição para ficar visível
                         const rect = tile.getBoundingClientRect();
                         const scrollerRect = scroller.getBoundingClientRect();
                         if (rect.top < scrollerRect.top + 50 || rect.bottom > scrollerRect.bottom - 50) {
