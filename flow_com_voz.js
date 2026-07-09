@@ -750,6 +750,7 @@ function triggerTrustedClick(el) {
                 <button class="flow-validate-btn" id="fv-dl-all" style="margin:0;">📦 Completo (Todas as Geradas)</button>
                 <button class="flow-validate-btn" id="fv-upscale-btn" style="margin:0; background:linear-gradient(135deg, #8b5cf6, #6d28d9); color:#fff; border:none; margin-top: 6px;">🚀 Upscale 1080p (Vídeos Identificados)</button>
                 <button class="flow-validate-btn" id="fv-upscale-stop-btn" style="margin:0; margin-top:6px; display:none; background:#fef2f2; color:#991b1b; border:1px solid #fecaca;">⏹ Parar Upscale</button>
+                <button class="flow-validate-btn" id="fv-upscale-retry-btn" style="margin:0; margin-top:6px; display:none; background:linear-gradient(135deg, #f59e0b, #d97706); color:#fff; border:none;">🔄 Retentar Falhas do Upscale</button>
              
               <button class="flow-validate-btn" id="fv-upscale-debug-btn" style="margin:0; margin-top:6px;">
   🔎 Diagnosticar vídeos do upscale
@@ -1113,6 +1114,12 @@ if (fvUpscaleStopBtn) {
         this.logVideoDebug('⏹ Upscale parado pelo usuário.', 'warning');
         this.setVideoStatus('warning', '⏹ Parando upscale...');
     });
+}
+
+// Upscale retry button
+const fvUpscaleRetryBtn = $('fv-upscale-retry-btn');
+if (fvUpscaleRetryBtn) {
+    fvUpscaleRetryBtn.addEventListener('click', () => this.retryFailedUpscale());
 }
 
 const fvUpscaleDebugBtn = $('fv-upscale-debug-btn');
@@ -4514,6 +4521,7 @@ this.logVideoDebug(
 
             let count = 0;
             let fail = 0;
+            const failedWfIds = []; // guarda IDs que falharam para retry
 
             for (const wfId of wfIdsToUpscale) {
                 const videoInfo = identifiedVideosMap.get(wfId);
@@ -4535,6 +4543,7 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                     if (!tile) {
                         this.logVideoDebug(`❌ Tile não encontrado para ${wfId.substring(0, 8)}`, 'error');
                         fail++;
+                        failedWfIds.push(wfId);
                         continue;
                     }
 
@@ -4542,6 +4551,7 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                     if (!menuOpened) {
                         this.logVideoDebug(`❌ Menu não abriu para ${wfId.substring(0, 8)}`, 'error');
                         fail++;
+                        failedWfIds.push(wfId);
                         continue;
                     }
 
@@ -4555,6 +4565,7 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                             bubbles: true
                         }));
                         fail++;
+                        failedWfIds.push(wfId);
                         continue;
                     }
 
@@ -4568,6 +4579,7 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                             bubbles: true
                         }));
                         fail++;
+                        failedWfIds.push(wfId);
                         continue;
                     }
 
@@ -4588,6 +4600,7 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
 
                 } catch (err) {
                     fail++;
+                    failedWfIds.push(wfId);
                     this.logVideoDebug(`❌ Erro no upscale ${wfId.substring(0, 8)}: ${err.message}`, 'error');
                     document.dispatchEvent(new KeyboardEvent('keydown', {
                         key: 'Escape',
@@ -4609,7 +4622,120 @@ if (btn) {
 // Esconde botão de parar
 const stopBtn2 = document.getElementById('fv-upscale-stop-btn');
 if (stopBtn2) stopBtn2.style.display = 'none';
+
+// Salva falhas e mostra botão de retry se houver
+this._upscaleFailedWfIds = failedWfIds;
+this._upscaleVideosMap = identifiedVideosMap;
+const retryBtn = document.getElementById('fv-upscale-retry-btn');
+if (retryBtn) {
+    if (failedWfIds.length > 0) {
+        retryBtn.style.display = '';
+        retryBtn.textContent = `🔄 Retentar ${failedWfIds.length} Falha(s) do Upscale`;
+    } else {
+        retryBtn.style.display = 'none';
+    }
 }
+}
+
+        /** Retenta upscale apenas nos vídeos que falharam na tentativa anterior */
+        async retryFailedUpscale() {
+            if (!this._upscaleFailedWfIds || !this._upscaleFailedWfIds.length) {
+                this.setVideoStatus('warning', 'Nenhuma falha para retentar.');
+                return;
+            }
+
+            const btn = document.getElementById('fv-upscale-btn');
+            const retryBtn = document.getElementById('fv-upscale-retry-btn');
+            const stopBtn = document.getElementById('fv-upscale-stop-btn');
+
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Retentando Upscale...'; }
+            if (retryBtn) retryBtn.style.display = 'none';
+            if (stopBtn) stopBtn.style.display = '';
+            this.upscaleShouldStop = false;
+
+            const projectUrl = location.href;
+            const identifiedVideosMap = this._upscaleVideosMap || new Map();
+            const wfIdsToRetry = [...this._upscaleFailedWfIds];
+
+            this.logVideoDebug(`\n╔═══ RETENTANDO UPSCALE: ${wfIdsToRetry.length} VÍDEO(S) ═══╗`, 'info');
+            this.setVideoStatus('info', `🔄 Retentando upscale de ${wfIdsToRetry.length} vídeo(s)...`);
+
+            let count = 0;
+            let fail = 0;
+            const stillFailed = [];
+
+            for (let i = 0; i < wfIdsToRetry.length; i++) {
+                const wfId = wfIdsToRetry[i];
+                const videoInfo = identifiedVideosMap.get(wfId);
+                const videoLabel = videoInfo?.label || wfId.substring(0, 8);
+
+                if (this.upscaleShouldStop) break;
+
+                if (location.href !== projectUrl) {
+                    this.logVideoDebug('❌ Saiu do projeto! Parando retry.', 'error');
+                    this.setVideoStatus('error', '❌ Saiu do projeto durante o retry.');
+                    // Salva os restantes como falha
+                    for (let j = i; j < wfIdsToRetry.length; j++) stillFailed.push(wfIdsToRetry[j]);
+                    break;
+                }
+
+                this.logVideoDebug(`🔄 Retry ${i+1}/${wfIdsToRetry.length}: ${videoLabel}`, 'info');
+                this.setVideoStatus('info', `🔄 Retry ${i+1}/${wfIdsToRetry.length}: ${videoLabel}`);
+
+                try {
+                    const tile = await this.scrollToWorkflow(wfId);
+                    if (!tile) { fail++; stillFailed.push(wfId); continue; }
+
+                    const menuOpened = await this.openTileMenu(tile);
+                    if (!menuOpened) { fail++; stillFailed.push(wfId); continue; }
+
+                    const submenuOpened = await this.openDownloadSubmenu();
+                    if (!submenuOpened) {
+                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                        fail++; stillFailed.push(wfId); continue;
+                    }
+
+                    const clickResult = await this.click1080pOption();
+                    if (!clickResult.ok) {
+                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                        fail++; stillFailed.push(wfId); continue;
+                    }
+
+                    const toastOk = await this.waitForUpscaleToast();
+                    count++;
+                    this.logVideoDebug(`✅ Retry upscale OK: ${videoLabel}${toastOk ? '' : ' (sem toast)'}`, 'success');
+
+                    if (btn) btn.textContent = `⏳ Retry ${count}/${wfIdsToRetry.length}`;
+                    await this.sleep(2200);
+
+                } catch (err) {
+                    fail++;
+                    stillFailed.push(wfId);
+                    this.logVideoDebug(`❌ Retry falhou: ${wfId.substring(0, 8)}: ${err.message}`, 'error');
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                    await this.sleep(500);
+                }
+            }
+
+            this.logVideoDebug(`╚═══ FIM RETRY: ${count} recuperado(s), ${fail} falha(s) ═══╝`, 'info');
+            this.setVideoStatus(fail > 0 ? 'warning' : 'success',
+                `${fail > 0 ? '⚠️' : '✅'} Retry concluído: ${count} recuperado(s), ${fail} falha(s).`
+            );
+
+            if (btn) { btn.disabled = false; btn.textContent = '🚀 Upscale 1080p (Vídeos Identificados)'; }
+            if (stopBtn) stopBtn.style.display = 'none';
+
+            // Atualiza lista de falhas para possível novo retry
+            this._upscaleFailedWfIds = stillFailed;
+            if (retryBtn) {
+                if (stillFailed.length > 0) {
+                    retryBtn.style.display = '';
+                    retryBtn.textContent = `🔄 Retentar ${stillFailed.length} Falha(s) do Upscale`;
+                } else {
+                    retryBtn.style.display = 'none';
+                }
+            }
+        }
 
 async scrollToWorkflow(wfId) {
             const scroller = this.getScroller();
