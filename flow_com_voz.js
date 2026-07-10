@@ -853,6 +853,9 @@ function triggerTrustedClick(el) {
             this.setupDragDrop();
             log.success('Flow Automation v4.0 inicializado!');
             if (!_authToken) log.warn('Token ainda não capturado — faça qualquer ação na página.');
+
+            // Verifica se há estado salvo de crash anterior
+            this.checkCrashRecovery();
         }
 
         // ──────────────────────────────────────────────
@@ -1691,7 +1694,9 @@ clearReferencesForUI(source = 'images') {
             const e = this.getEditor();
             if (!e) throw new Error('Editor não encontrado');
             e.focus(); await this.dynamicSleep([250, 400]);
-            e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
+            // Usa execCommand que é compatível com editores React (Slate/ProseMirror)
+            // em vez de beforeinput que causa conflito de DOM (insertBefore error)
+            document.execCommand('insertText', false, text);
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
             // Verifica se o Flow crashou após inserção de texto
             if (this.isFlowCrashed()) {
@@ -1715,7 +1720,8 @@ clearReferencesForUI(source = 'images') {
                 if (opened) return;
                 this.logDebug(`⚠️ Diálogo @ não abriu (tentativa ${attempt}/${MAX_AT_RETRIES})`, 'error');
                 e.focus(); await this.sleep(200);
-                e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'deleteContentBackward' }));
+                // Usa execCommand para backspace (compatível com React)
+                document.execCommand('delete', false, null);
                 await this.sleep(200);
                 if (attempt < MAX_AT_RETRIES) {
                     await this.dynamicSleep([2000, 3000]);
@@ -1931,8 +1937,9 @@ clearReferencesForUI(source = 'images') {
                                  
                                  // Loop que repete o Backspace 3 vezes
                                  for (let b = 0; b < 3; b++) {
+                                     // Usa execCommand para backspace (compatível com React)
                                      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true }));
-                                     editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'deleteContentBackward' }));
+                                     document.execCommand('delete', false, null);
                                      await this.dynamicSleep([50, 100]); // Pausa bem rápida entre cada apagada
                                  }
                                  
@@ -1956,7 +1963,8 @@ clearReferencesForUI(source = 'images') {
 
                     // Detecta crash do Flow e tenta recuperar
                     if (this.isFlowCrashed()) {
-                        this.logDebug('🔴 Flow crashou! Recarregando página em 3s...', 'error');
+                        this.logDebug('🔴 Flow crashou! Salvando estado e recarregando em 3s...', 'error');
+                        this.saveRunState(promptObj.promptNum);
                         await this.sleep(3000);
                         location.reload();
                         return false;
@@ -1993,7 +2001,8 @@ clearReferencesForUI(source = 'images') {
             if (editor) {
                 editor.focus();
                 await this.sleep(200);
-                editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: ' reset' }));
+                // Usa execCommand para inserir texto de ativação (compatível com React)
+                document.execCommand('insertText', false, ' reset');
                 await this.sleep(500);
             }
 
@@ -2386,6 +2395,7 @@ if (this.genMode === 'refs') {
             }
 
             this.isRunning = false;
+            this.clearRunState(); // Limpa estado de crash (processo terminou)
             document.getElementById('flow-start-btn').disabled = false;
             document.getElementById('flow-stop-btn').disabled  = true;
             document.getElementById('flow-prompts-input').disabled = false;
@@ -4053,6 +4063,7 @@ if (this.videoGenMode === 'scenes') {
             }
 
             this.videoIsRunning = false;
+            this.clearRunState(); // Limpa estado de crash (processo terminou)
             document.getElementById('fv-start-btn').disabled = false;
             document.getElementById('fv-stop-btn').disabled  = true;
             document.getElementById('fv-prompts-input').disabled = false;
@@ -4825,6 +4836,149 @@ async scrollToWorkflow(wfId) {
                 window.addEventListener('message', handler);
                 window.postMessage({ type: 'CD_TO_BACKGROUND', action, data, id }, '*');
                 setTimeout(() => { window.removeEventListener('message', handler); resolve({ success: false, error: 'Timeout' }); }, 30000);
+            });
+        }
+
+        // ──────────────────────────────────────────────
+        // CRASH RECOVERY (memória de estado)
+        // ──────────────────────────────────────────────
+
+        /**
+         * Salva estado do run antes de reload por crash.
+         * Guarda: prompts, posição, modo, configurações.
+         */
+        saveRunState(currentPromptNum) {
+            try {
+                const imgInput = document.getElementById('flow-prompts-input');
+                const vidInput = document.getElementById('fv-prompts-input');
+                const isVideo = this.videoIsRunning;
+
+                const state = {
+                    timestamp: Date.now(),
+                    promptText: isVideo ? (vidInput?.value || '') : (imgInput?.value || ''),
+                    currentPromptNum: currentPromptNum,
+                    isVideo: isVideo,
+                    genMode: isVideo ? this.videoGenMode : this.genMode,
+                    speedMultiplier: this.speedMultiplier,
+                    batchSize: isVideo ? this.videoBatchSize : this.batchSize,
+                    imagesPerPrompt: isVideo ? this.videoResultsPerPrompt : this.imagesPerPrompt,
+                    projectUrl: location.href
+                };
+
+                localStorage.setItem('flow_crash_state', JSON.stringify(state));
+                console.log('[Flow] Estado salvo para crash recovery:', state);
+            } catch (e) {
+                console.error('[Flow] Falha ao salvar estado:', e);
+            }
+        }
+
+        /**
+         * Carrega estado salvo do crash anterior.
+         */
+        loadRunState() {
+            try {
+                const raw = localStorage.getItem('flow_crash_state');
+                if (!raw) return null;
+                const state = JSON.parse(raw);
+                // Expira estados com mais de 30 minutos
+                if (Date.now() - state.timestamp > 30 * 60 * 1000) {
+                    this.clearRunState();
+                    return null;
+                }
+                return state;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        /**
+         * Limpa estado salvo.
+         */
+        clearRunState() {
+            localStorage.removeItem('flow_crash_state');
+        }
+
+        /**
+         * Verifica se há estado salvo de crash e mostra banner de recuperação.
+         */
+        checkCrashRecovery() {
+            const state = this.loadRunState();
+            if (!state) return;
+
+            // Cria banner de recuperação
+            const banner = document.createElement('div');
+            banner.id = 'flow-crash-recovery-banner';
+            banner.style.cssText = `
+                position: fixed; bottom: 20px; right: 20px; z-index: 99999;
+                background: linear-gradient(135deg, #1e1b4b, #312e81);
+                border: 1px solid #6366f1; border-radius: 12px;
+                padding: 16px 20px; color: #e0e7ff;
+                font-family: 'Inter', sans-serif; font-size: 13px;
+                box-shadow: 0 8px 32px rgba(99,102,241,0.4);
+                max-width: 380px; line-height: 1.5;
+            `;
+
+            const modeLabel = state.isVideo ? '🎬 Vídeo' : '🖼️ Imagem';
+            const modeText = state.genMode === 'scenes' ? 'Cenas' : state.genMode === 'refs' ? 'Referências' : 'Livre';
+            const timeAgo = Math.round((Date.now() - state.timestamp) / 60000);
+
+            banner.innerHTML = `
+                <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:#a5b4fc;">
+                    🔄 Sessão anterior detectada
+                </div>
+                <div style="margin-bottom:4px;">
+                    ${modeLabel} • Modo ${modeText} • Parou no prompt <b>${state.currentPromptNum}</b>
+                </div>
+                <div style="font-size:11px; opacity:0.7; margin-bottom:12px;">
+                    Há ${timeAgo < 1 ? 'menos de 1' : timeAgo} minuto(s) atrás
+                </div>
+                <div style="display:flex; gap:8px;">
+                    <button id="flow-crash-resume" style="
+                        flex:1; padding:8px 12px; border:none; border-radius:8px;
+                        background:linear-gradient(135deg, #6366f1, #8b5cf6);
+                        color:white; font-weight:600; cursor:pointer; font-size:13px;
+                    ">▶ Continuar de onde parou</button>
+                    <button id="flow-crash-dismiss" style="
+                        padding:8px 12px; border:1px solid #4f46e5; border-radius:8px;
+                        background:transparent; color:#a5b4fc; cursor:pointer; font-size:13px;
+                    ">✕</button>
+                </div>
+            `;
+
+            document.body.appendChild(banner);
+
+            // Handler: Continuar
+            document.getElementById('flow-crash-resume').addEventListener('click', () => {
+                const s = state;
+                if (s.isVideo) {
+                    // Preenche aba de vídeo
+                    const vidInput = document.getElementById('fv-prompts-input');
+                    if (vidInput) vidInput.value = s.promptText;
+                    // Seta retomar de
+                    const resumeInput = document.getElementById('fv-start-from');
+                    if (resumeInput) resumeInput.value = String(s.currentPromptNum);
+                    // Abre aba de vídeo
+                    document.querySelector('[data-tab="video"]')?.click();
+                } else {
+                    // Preenche aba de imagem
+                    const imgInput = document.getElementById('flow-prompts-input');
+                    if (imgInput) imgInput.value = s.promptText;
+                    // Seta retomar de
+                    const resumeInput = document.getElementById('flow-start-from');
+                    if (resumeInput) resumeInput.value = String(s.currentPromptNum);
+                    // Dispara evento para atualizar contadores
+                    imgInput?.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+
+                this.setStatus('info', `✅ Prompts restaurados! "Retomar de" setado para ${s.currentPromptNum}. Clique Iniciar quando pronto.`);
+                this.clearRunState();
+                banner.remove();
+            });
+
+            // Handler: Dispensar
+            document.getElementById('flow-crash-dismiss').addEventListener('click', () => {
+                this.clearRunState();
+                banner.remove();
             });
         }
 
