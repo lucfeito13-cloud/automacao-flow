@@ -1693,6 +1693,10 @@ clearReferencesForUI(source = 'images') {
             e.focus(); await this.dynamicSleep([250, 400]);
             e.dispatchEvent(new InputEvent('beforeinput', { bubbles:true, cancelable:true, inputType:'insertText', data:text }));
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
+            // Verifica se o Flow crashou após inserção de texto
+            if (this.isFlowCrashed()) {
+                throw new Error('Flow crashou após inserção de texto');
+            }
         }
 
         async openAtSelector() {
@@ -1949,6 +1953,15 @@ clearReferencesForUI(source = 'images') {
                     return true;
                 } catch (err) {
                     this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
+
+                    // Detecta crash do Flow e tenta recuperar
+                    if (this.isFlowCrashed()) {
+                        this.logDebug('🔴 Flow crashou! Recarregando página em 3s...', 'error');
+                        await this.sleep(3000);
+                        location.reload();
+                        return false;
+                    }
+
                     if (attempt < MAX_SUBMIT_RETRIES) {
                         await this.resetEditor();
                         await this.dynamicSleep([2000, 3000]);
@@ -1962,6 +1975,12 @@ clearReferencesForUI(source = 'images') {
          * Força reset do editor: fecha dialogs, limpa conteúdo via botão "Apagar comando".
          */
         async resetEditor() {
+            // 0. Se o Flow crashou, não tenta nada — precisa recarregar
+            if (this.isFlowCrashed()) {
+                this.logDebug('⚠️ Flow crashou — resetEditor abortado. Recarregue a página.', 'error');
+                return;
+            }
+
             // 1. Fecha qualquer dialog aberto (seletor @)
             const dialog = document.querySelector('[role="dialog"], [role="presentation"]');
             if (dialog) {
@@ -4807,6 +4826,33 @@ async scrollToWorkflow(wfId) {
                 window.postMessage({ type: 'CD_TO_BACKGROUND', action, data, id }, '*');
                 setTimeout(() => { window.removeEventListener('message', handler); resolve({ success: false, error: 'Timeout' }); }, 30000);
             });
+        }
+
+        // ──────────────────────────────────────────────
+        // CRASH DETECTION
+        // ──────────────────────────────────────────────
+
+        /**
+         * Detecta se o Flow crashou (client-side exception).
+         * Verifica: texto de erro na página, editor ausente, ou body com overlay de erro.
+         */
+        isFlowCrashed() {
+            // 1. Texto explícito de crash do Next.js/React
+            const bodyText = document.body?.innerText || '';
+            if (bodyText.includes('Application error') && bodyText.includes('client-side exception')) return true;
+
+            // 2. Overlay de erro do Next.js
+            const errorOverlay = document.getElementById('__next-route-announcer__')?.parentElement;
+            if (errorOverlay && bodyText.includes('Error')) {
+                // Verifica se o editor sumiu (indica crash real)
+                const editor = this.getEditor?.();
+                const submitBtn = [...document.querySelectorAll('button')].find(b =>
+                    b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
+                );
+                if (!editor && !submitBtn) return true;
+            }
+
+            return false;
         }
 
         // ──────────────────────────────────────────────
