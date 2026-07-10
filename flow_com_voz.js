@@ -1694,11 +1694,53 @@ clearReferencesForUI(source = 'images') {
             const e = this.getEditor();
             if (!e) throw new Error('Editor não encontrado');
             e.focus(); await this.dynamicSleep([250, 400]);
-            // Usa execCommand que é compatível com editores React (Slate/ProseMirror)
-            // em vez de beforeinput que causa conflito de DOM (insertBefore error)
+
+            const textBefore = (e.innerText || e.textContent || '').trim();
+
+            // Estratégia 1: execCommand (seguro com React)
             document.execCommand('insertText', false, text);
+            await this.dynamicSleep([300, 500]);
+
+            // Verifica se texto foi realmente inserido
+            let textAfter = (e.innerText || e.textContent || '').trim();
+            if (textAfter.length > textBefore.length) {
+                await this.dynamicSleep([200, 400]);
+                if (this.isFlowCrashed()) throw new Error('Flow crashou após inserção de texto');
+                return; // Sucesso via execCommand
+            }
+
+            // Estratégia 2: Clipboard paste (mais confiável com Slate)
+            this.logDebug('⚠️ execCommand falhou, tentando via clipboard paste...', 'warning');
+            e.focus(); await this.dynamicSleep([200, 300]);
+            try {
+                const dataTransfer = new DataTransfer();
+                dataTransfer.setData('text/plain', text);
+                e.dispatchEvent(new InputEvent('beforeinput', {
+                    bubbles: true, cancelable: true,
+                    inputType: 'insertFromPaste',
+                    dataTransfer: dataTransfer
+                }));
+                await this.dynamicSleep([400, 600]);
+
+                textAfter = (e.innerText || e.textContent || '').trim();
+                if (textAfter.length > textBefore.length) {
+                    await this.dynamicSleep([200, 400]);
+                    if (this.isFlowCrashed()) throw new Error('Flow crashou após inserção via paste');
+                    return; // Sucesso via paste
+                }
+            } catch (pasteErr) {
+                this.logDebug('⚠️ Clipboard paste falhou: ' + pasteErr.message, 'warning');
+            }
+
+            // Estratégia 3: beforeinput insertText (último recurso)
+            this.logDebug('⚠️ Paste falhou, tentando via beforeinput...', 'warning');
+            e.focus(); await this.dynamicSleep([300, 500]);
+            e.dispatchEvent(new InputEvent('beforeinput', {
+                bubbles: true, cancelable: true,
+                inputType: 'insertText', data: text
+            }));
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
-            // Verifica se o Flow crashou após inserção de texto
+
             if (this.isFlowCrashed()) {
                 throw new Error('Flow crashou após inserção de texto');
             }
@@ -2001,8 +2043,16 @@ clearReferencesForUI(source = 'images') {
             if (editor) {
                 editor.focus();
                 await this.sleep(200);
-                // Usa execCommand para inserir texto de ativação (compatível com React)
+                // Tenta execCommand primeiro, fallback para beforeinput
                 document.execCommand('insertText', false, ' reset');
+                await this.sleep(300);
+                const hasText = (editor.innerText || '').trim().length > 0;
+                if (!hasText) {
+                    editor.dispatchEvent(new InputEvent('beforeinput', {
+                        bubbles: true, cancelable: true,
+                        inputType: 'insertText', data: ' reset'
+                    }));
+                }
                 await this.sleep(500);
             }
 
