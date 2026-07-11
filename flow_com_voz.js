@@ -1875,6 +1875,22 @@ clearReferencesForUI(source = 'images') {
         b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
     );
 
+    // Assinatura do conteúdo REAL do editor Slate.
+    // IMPORTANTE: NÃO usar innerText/textContent — quando o editor está vazio
+    // o Flow renderiza o placeholder ("What do you want to create?") DENTRO do
+    // editor, então innerText tem ~27 chars mesmo vazio. O conteúdo real fica
+    // nos nós [data-slate-string]; os chips de referência são nós void.
+    const editorSignature = () => {
+        const ed = this.getEditor?.();
+        if (!ed) return null;
+        const txt = [...ed.querySelectorAll('[data-slate-string="true"]')]
+            .map(n => n.textContent).join('')
+            .replace(/[﻿​]/g, '').trim();
+        const chips = ed.querySelectorAll('[data-slate-void="true"]').length;
+        return txt + '|' + chips;
+    };
+    const EMPTY_SIG = '|0';
+
     const btn = findSubmitBtn();
 
     if (!btn) {
@@ -1890,20 +1906,21 @@ clearReferencesForUI(source = 'images') {
         throw new Error('Botão enviar desabilitado');
     }
 
-    const editorBefore = this.getEditor?.();
-    const textBefore = (editorBefore?.innerText || editorBefore?.textContent || '').trim();
+    // Só dá pra confirmar "esvaziou" se havia conteúdo antes do clique.
+    const hadContentBefore = editorSignature() !== EMPTY_SIG;
 
     triggerTrustedClick(btn);
 
-    // Confirma se o Flow realmente aceitou o envio
+    // Confirma se o Flow realmente aceitou o envio.
+    // Sinais aceitos (qualquer um):
+    //   1. O editor esvaziou de verdade (conteúdo Slate == vazio) — principal.
+    //   2. O botão de enviar ficou desabilitado (nem sempre acontece).
     for (let i = 0; i < 30; i++) {
         await this.dynamicSleep([250, 400]);
 
-        const editor = this.getEditor?.();
-        const textNow = (editor?.innerText || editor?.textContent || '').trim();
         const currentBtn = findSubmitBtn();
 
-        const editorCleared = textBefore && textNow.length < Math.max(5, textBefore.length * 0.25);
+        const editorCleared = hadContentBefore && editorSignature() === EMPTY_SIG;
         const buttonReacted = currentBtn && currentBtn.disabled;
 
         if (editorCleared || buttonReacted) {
