@@ -347,6 +347,12 @@ function triggerTrustedClick(el) {
 .flow-assign-item .assign-status{font-size:12px;flex-shrink:0;}
 .flow-assign-item.assigned{background:#ecfdf5;border-color:#a7f3d0;opacity:.65;}
 .flow-assign-item.assigned .assign-name{text-decoration:line-through;color:var(--cd-text-muted);}
+/* ADD-ON Auto-Enumerador: conclusão (verde) e faltante (apagado) */
+.flow-assign-item.complete{background:#dcfce7;border-color:#4ade80;opacity:1;}
+.flow-assign-item.complete .assign-name{color:#166534;font-weight:600;text-decoration:none;}
+.flow-assign-item.missing{opacity:.5;border-style:dashed;}
+#flow-assign-auto{font-weight:700;color:var(--cd-primary);}
+#flow-assign-auto:hover{color:var(--cd-primary-dark);background:var(--cd-bg-secondary);}
 .flow-assign-prompt-preview{padding:0 16px 10px;font-size:11px;color:var(--cd-text-muted);line-height:1.5;min-height:20px;border-top:1px solid var(--cd-border-light);margin-top:4px;flex-shrink:0;overflow:hidden;}
 .flow-assign-prompt-preview .preview-label{font-weight:600;color:var(--cd-primary);margin-right:4px;}
 .flow-assign-prompt-preview .preview-text{color:var(--cd-text-muted);}
@@ -795,6 +801,7 @@ function triggerTrustedClick(el) {
     <span class="flow-assign-count" id="flow-assign-count"></span>
     <div class="flow-assign-header-btns">
       <button class="flow-assign-dl-btn" id="flow-assign-download" style="display:none;">⬇️ Baixar Cenas</button>
+      <button class="flow-assign-hbtn" id="flow-assign-auto" title="Enumerar automático: renomeia cada imagem gerada pelo início do prompt">⚡ Auto</button>
       <button class="flow-assign-hbtn" id="flow-assign-layout" title="Alternar Horizontal/Vertical">↔</button>
       <button class="flow-assign-hbtn" id="flow-assign-toggle" title="Minimizar">▲</button>
       <button class="flow-assign-hbtn close-btn" id="flow-assign-close" title="Fechar">✕</button>
@@ -958,6 +965,8 @@ if (fixUploadRefsBtn) {
             $('flow-assign-download').addEventListener('click', () => this.downloadScenes());
             $('flow-assign-toggle').addEventListener('click', () => this.toggleAssignPanel());
             $('flow-assign-refs-btn').addEventListener('click', () => this.openAssignRefsFromDetected());
+            const autoBtnEl = document.getElementById('flow-assign-auto');
+            if (autoBtnEl) autoBtnEl.addEventListener('click', () => this.autoEnumerarCenas());
 
             // ── Speed buttons (shared) ──
             document.querySelectorAll('[data-speed]').forEach(btn => {
@@ -2797,6 +2806,111 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
 
     return `${sceneName} (${count})`;
 }
+
+        // ──────────────────────────────────────────────
+        // ADD-ON: ENUMERAÇÃO AUTOMÁTICA (renomear pelo início do prompt)
+        // ──────────────────────────────────────────────
+
+        /** Deriva o nome a partir do início do prompt (sem numeração/refs/vozes). */
+        promptStartName(prompt, imgNum) {
+            let base = (prompt?.text || '').trim();
+            base = base.replace(/^\{[^}]*\}\s*/, '');       // remove {cena X}
+            base = base.replace(/^\s*\d+\s*[\-.):]\s*/, ''); // remove "11-" / "11." / "11)"
+            base = base.replace(/\[[^\]]*\]/g, ' ');         // remove [ref]
+            base = base.replace(/<voz:[^>]*>/gi, ' ');       // remove <voz:...>
+            base = base.replace(/\s+/g, ' ').trim();
+            const words = base.split(' ').filter(Boolean).slice(0, 6).join(' ');
+            const clean = (words || `Cena ${prompt?.promptNum ?? ''}`).substring(0, 45).trim();
+            return imgNum ? `${clean} ${imgNum}` : clean;
+        }
+
+        /** Renomeia automaticamente todas as imagens geradas, casando cada uma com seu prompt. */
+        async autoEnumerarCenas() {
+            if (this._videoAssignActive) {
+                this.setStatus('warning', 'Enumeração automática disponível para imagens nesta versão.');
+                return;
+            }
+
+            const slots = (this._lastMatrices || [])
+                .flatMap(m => Array.isArray(m) ? m : [])
+                .filter(s => s && s.state === 'loaded' && s.workflowId && s.promptNum);
+
+            if (!slots.length) {
+                this.setStatus('warning', 'Nenhuma imagem gerada encontrada para enumerar.');
+                return;
+            }
+
+            slots.sort((a, b) =>
+                (Number(a.promptNum) - Number(b.promptNum)) ||
+                (Number(a.imgNum || 0) - Number(b.imgNum || 0))
+            );
+
+            const btn = document.getElementById('flow-assign-auto');
+            const prevLabel = btn?.textContent;
+            if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+
+            const perScene = new Map();
+            let done = 0, fail = 0, skip = 0;
+
+            for (const slot of slots) {
+                if (this.tileAssignments.has(slot.workflowId)) { skip++; continue; }
+
+                const sceneName = `Cena ${slot.promptNum}`;
+                const prompt = this.prompts.find(p => Number(p.promptNum) === Number(slot.promptNum));
+
+                const n = (perScene.get(slot.promptNum) || 0) + 1;
+                perScene.set(slot.promptNum, n);
+
+                const newName = this.promptStartName(prompt, n);
+
+                const ok = await this.apiRename(slot.workflowId, newName);
+                await this.apiFavorite(slot.workflowId, true);
+
+                if (ok) {
+                    done++;
+                    const arr = this.sceneAssignments.get(sceneName) || [];
+                    arr.push({ imgNum: n, workflowId: slot.workflowId, src: slot.src || '' });
+                    this.sceneAssignments.set(sceneName, arr);
+                    this.tileAssignments.set(slot.workflowId, { label: newName, type: 'scene', scene: sceneName, imgNum: n });
+
+                    const link = document.querySelector(`a[href*="/edit/${slot.workflowId}"]`);
+                    const tile = link ? link.closest('[data-tile-id]') : null;
+                    if (tile) this.addLabelToTile(tile, newName, slot.workflowId, 'scene', sceneName);
+
+                    this.updateAssignItemUI(sceneName, true);
+                } else {
+                    fail++;
+                }
+            }
+
+            this.updateAssignCount();
+            this.repaintCompletion();
+            this.startLabelObserver();
+
+            if (btn) { btn.disabled = false; btn.textContent = prevLabel || '⚡ Auto'; }
+            this.setStatus('success',
+                `⚡ Enumeração automática: ${done} renomeadas${skip ? `, ${skip} já feitas` : ''}${fail ? `, ${fail} falharam` : ''}.`);
+        }
+
+        /** Recolore os itens do painel conforme a meta (verde = concluída) e atualiza a contagem. */
+        repaintCompletion() {
+            const target = parseInt(document.getElementById('flow-imgs-per-prompt')?.value, 10) || 0;
+            let complete = 0, totalScenes = 0;
+            for (const item of document.querySelectorAll('.flow-assign-item[data-type="scene"]')) {
+                totalScenes++;
+                const sceneName = item.dataset.scene;
+                const count = (this.sceneAssignments.get(sceneName) || []).length;
+                const isComplete = target > 0 && count >= target;
+                item.classList.toggle('complete', isComplete);
+                item.classList.toggle('missing', count === 0);
+                if (isComplete) complete++;
+                const status = item.querySelector('.assign-status');
+                if (status) status.textContent = isComplete ? '✅' : (count > 0 ? `${count}/${target || '?'}` : '⏳');
+            }
+            const el = document.getElementById('flow-assign-count');
+            if (el && totalScenes) el.textContent = `${complete}/${totalScenes} concluídas`;
+        }
+
         showAssignPanel(allMatrices) {
             this._videoAssignActive = false;
             const panel = document.getElementById('flow-assign-panel');
@@ -2804,6 +2918,9 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             const items = document.getElementById('flow-assign-items');
             const dlBtn = document.getElementById('flow-assign-download');
             const variationCounts = this.getSceneVariationCountsFromMatrices(allMatrices);
+            this._lastMatrices = allMatrices || [];   // ADD-ON: usado pela Enumeração Automática
+            const autoBtn = document.getElementById('flow-assign-auto');
+            if (autoBtn) autoBtn.style.display = (this.genMode === 'scenes' && !this._videoAssignActive) ? 'inline-flex' : 'none';
 
             items.innerHTML = '';
 
@@ -2847,6 +2964,13 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     item.dataset.scene = sceneName;
                     item.dataset.sceneNum = sceneNum;
                     const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, variationCounts);
+                    // ADD-ON: cor por meta variável (verde = atingiu "Imagens por prompt"; apagado = nenhuma)
+                    {
+                        const _gen = variationCounts.get(sceneNum) || 0;
+                        const _target = parseInt(document.getElementById('flow-imgs-per-prompt')?.value, 10) || 0;
+                        if (_target > 0 && _gen >= _target) item.classList.add('complete');
+                        else if (_gen === 0) item.classList.add('missing');
+                    }
 
 item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">⏳</span>`;
 item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;
