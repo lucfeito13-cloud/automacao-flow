@@ -2851,28 +2851,32 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     tilesById.set(wf, tile);
                 }
                 if (!tilesById.size) {
-                    this.setStatus('warning', 'Nenhuma imagem gerada encontrada na página.');
+                    this.setStatus('warning', 'Nenhuma mídia gerada encontrada na página.');
                     return;
                 }
 
-                this.setStatus('info', `⚡ Lendo ${tilesById.size} imagens...`);
+                this.setStatus('info', `⚡ Lendo ${tilesById.size} mídias...`);
 
-                // 2. Lê o nome (=prompt) de cada tile e agrupa as variações por cena
+                // 2. Lê o nome (=prompt) de cada tile e agrupa as variações por cena.
+                //    Funciona para IMAGEM e VÍDEO — detecta o tipo automaticamente.
                 const groups = new Map(); // base -> [{ wf, tile }]
+                let vids = 0, imgs = 0;
                 for (const [wf, tile] of tilesById) {
                     if (this.tileAssignments.has(wf)) continue; // já enumerada
                     if (!this.isTileLoaded(tile)) continue;
-                    if (this.isVideoTile(tile)) continue;
+                    const isVid = this.isVideoTile(tile);
                     const currentName = await this.getTileName(tile);
                     const base = this.cleanPromptToName(currentName);
                     if (!base) continue;
+                    if (isVid) vids++; else imgs++;
                     if (!groups.has(base)) groups.set(base, []);
                     groups.get(base).push({ wf, tile });
                 }
                 if (!groups.size) {
-                    this.setStatus('warning', 'Não consegui ler o nome das imagens. Passe o mouse sobre uma imagem e tente de novo.');
+                    this.setStatus('warning', 'Não consegui ler o nome das mídias. Passe o mouse sobre uma e tente de novo.');
                     return;
                 }
+                const mediaWord = (vids && !imgs) ? 'vídeo(s)' : ((imgs && !vids) ? 'imagem(ns)' : 'mídia(s)');
 
                 // 3. Renomeia cada grupo, numerando as variações
                 const target = parseInt(document.getElementById('flow-imgs-per-prompt')?.value, 10) || 0;
@@ -2901,7 +2905,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     this.setStatus('error', 'Não consegui renomear (token não capturado?). Clique numa imagem e tente de novo.');
                 } else {
                     this.setStatus('success',
-                        `⚡ ${groups.size} cena(s), ${done} imagem(ns) renomeada(s)` +
+                        `⚡ ${groups.size} cena(s), ${done} ${mediaWord} renomeada(s)` +
                         (target > 0 ? ` — ${scenesComplete}/${groups.size} concluída(s)` : '') +
                         (fail ? `, ${fail} falharam` : '') + '.');
                 }
