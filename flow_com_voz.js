@@ -2866,24 +2866,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
 
             try {
-                // 1. Coleta as imagens geradas direto do DOM (dedupe por workflowId)
-                const tilesById = new Map();
-                for (const link of document.querySelectorAll('a[href*="/edit/"]')) {
-                    const tile = link.closest('[data-tile-id]');
-                    if (!tile) continue;
-                    const wf = this.getWorkflowIdFromTile(tile);
-                    if (!wf || tilesById.has(wf)) continue;
-                    tilesById.set(wf, tile);
-                }
-                if (!tilesById.size) {
-                    this.setStatus('warning', 'Nenhuma mídia gerada encontrada na página.');
-                    return;
-                }
-
-                this.setStatus('info', `⚡ Lendo ${tilesById.size} mídias...`);
-
-                // 2. Descobre os PROMPTS que VOCÊ enviou — são a fonte dos nomes.
-                //    Usa this.prompts (se já rodou) ou lê do textarea que você colou.
+                // 1. Prompts que VOCÊ enviou — a CENA vem do "N-" de cada prompt.
                 let userPrompts = (this.prompts && this.prompts.length) ? this.prompts.slice() : [];
                 if (!userPrompts.length) {
                     const txt = document.getElementById('flow-prompts-input')?.value
@@ -2891,7 +2874,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     try { userPrompts = parsePromptsText(txt) || []; } catch (e) { userPrompts = []; }
                 }
 
-                // 3. Mapa EXATO de uma rodada da sessão (se houver): workflowId -> {promptNum,imgNum}
+                // 2. Mapa EXATO de uma rodada da sessão (se houver): workflowId -> {promptNum,imgNum}
                 const exactByWf = new Map();
                 for (const slot of (this._lastMatrices || []).flatMap(m => Array.isArray(m) ? m : [])) {
                     if (slot && slot.state === 'loaded' && slot.workflowId && slot.promptNum) {
@@ -2899,85 +2882,108 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     }
                 }
 
-                this.setStatus('info', `⚡ Lendo ${tilesById.size} mídias...`);
+                // 3. Varre a PÁGINA TODA dando scroll (o Flow só renderiza o que está visível).
+                const scroller = this.findFlowScroller();
+                const scrollEl = scroller || document.scrollingElement || document.documentElement;
+                if (scroller) scroller.scrollTop = 0; else window.scrollTo(0, 0);
+                await this.sleep(600);
 
-                // 4. Lê cada mídia e decide a que CENA (prompt) ela pertence.
-                //    Prioridade: (a) mapa exato da rodada, (b) casar título com o SEU prompt, (c) título do Flow.
-                const scenes = new Map(); // key -> { base, promptNum, items:[{wf,tile,imgNum}] }
-                let vids = 0, imgs = 0;
-                for (const [wf, tile] of tilesById) {
-                    if (this.tileAssignments.has(wf)) continue; // já enumerada
-                    if (!this.isTileLoaded(tile)) continue;
-                    const isVid = this.isVideoTile(tile);
-                    const title = await this.getTileName(tile);
-                    if (!title && !exactByWf.has(wf)) continue;
+                const processed = new Set();     // workflowIds já tratados
+                const sceneCounters = new Map();  // sceneNum -> nº de gerações já numeradas
+                let done = 0, fail = 0, unmatched = 0, vids = 0, imgs = 0;
+                let guard = 0, stuck = 0;
 
-                    let base = null, promptNum = null, imgNum = 0, key = null;
+                while (guard++ < 400) {
+                    // processa os tiles visíveis agora
+                    for (const link of document.querySelectorAll('a[href*="/edit/"]')) {
+                        const tile = link.closest('[data-tile-id]');
+                        if (!tile) continue;
+                        const wf = this.getWorkflowIdFromTile(tile);
+                        if (!wf || processed.has(wf)) continue;
+                        if (this.tileAssignments.has(wf)) { processed.add(wf); continue; } // já enumerada
+                        if (!this.isTileLoaded(tile)) continue;                            // ainda carregando; tenta depois
+                        processed.add(wf);
 
-                    if (exactByWf.has(wf)) {                                   // (a) exato
-                        const ex = exactByWf.get(wf);
-                        const p = userPrompts.find(pp => Number(pp.promptNum) === ex.promptNum);
-                        base = this.cleanPromptToName(p?.text) || this.cleanPromptToName(title);
-                        promptNum = ex.promptNum; imgNum = ex.imgNum; key = 'p' + promptNum;
-                    }
-                    if (!base && userPrompts.length) {                        // (b) casa com seu prompt
-                        const best = this.matchPromptForTitle(title, userPrompts);
-                        if (best) { base = this.cleanPromptToName(best.text); promptNum = best.promptNum; key = 'p' + promptNum; }
-                    }
-                    if (!base) { base = this.cleanPromptToName(title); key = 'title:' + base; } // (c) fallback
-                    if (!base) continue;
+                        const isVid = this.isVideoTile(tile);
+                        const title = await this.getTileName(tile);
 
-                    if (isVid) vids++; else imgs++;
-                    if (!scenes.has(key)) scenes.set(key, { base, promptNum, items: [] });
-                    scenes.get(key).items.push({ wf, tile, imgNum });
-                }
-                if (!scenes.size) {
-                    this.setStatus('warning', 'Não consegui identificar as cenas. Cole os prompts que você enviou e tente de novo.');
-                    return;
-                }
-                const mediaWord = (vids && !imgs) ? 'vídeo(s)' : ((imgs && !vids) ? 'imagem(ns)' : 'mídia(s)');
+                        // NÚMERO DA CENA = "N-" do seu prompt
+                        let sceneNum = null;
+                        if (exactByWf.has(wf)) {
+                            const p = userPrompts.find(pp => Number(pp.promptNum) === exactByWf.get(wf).promptNum);
+                            sceneNum = this.sceneNumFromPrompt(p) || String(exactByWf.get(wf).promptNum);
+                        }
+                        if (sceneNum == null && userPrompts.length) {
+                            const best = this.matchPromptForTitle(title, userPrompts);
+                            if (best) sceneNum = this.sceneNumFromPrompt(best);
+                        }
+                        if (sceneNum == null) { unmatched++; continue; }
 
-                // 5. Renomeia cada cena pelo SEU prompt, numerando as gerações corretamente.
-                const target = parseInt(document.getElementById('flow-imgs-per-prompt')?.value, 10) || 0;
-                let done = 0, fail = 0, scenesComplete = 0;
-                for (const [key, sc] of scenes) {
-                    sc.items.sort((a, b) => (a.imgNum || 0) - (b.imgNum || 0)); // ordena pelas gerações
-                    let n = 0;
-                    for (const { wf, tile, imgNum } of sc.items) {
-                        n++;
-                        const num = imgNum || n;                          // número da geração
-                        const newName = sc.items.length > 1 ? `${sc.base} ${num}` : sc.base;
-                        const sceneLabel = sc.promptNum ? `Cena ${sc.promptNum}` : sc.base;
+                        const g = (sceneCounters.get(sceneNum) || 0) + 1;
+                        sceneCounters.set(sceneNum, g);
+                        const sceneLabel = `Cena ${sceneNum}`;
+                        const newName = `${sceneLabel} - ${g}`;
+
                         const ok = await this.apiRename(wf, newName);
                         await this.apiFavorite(wf, true);
                         if (ok) {
-                            done++;
-                            this.tileAssignments.set(wf, { label: newName, type: 'scene', scene: sceneLabel, imgNum: num });
+                            done++; if (isVid) vids++; else imgs++;
+                            this.tileAssignments.set(wf, { label: newName, type: 'scene', scene: sceneLabel, imgNum: g });
                             if (tile) this.addLabelToTile(tile, newName, wf, 'scene', sceneLabel);
-                        } else {
-                            fail++;
-                        }
+                            this.setStatus('info', `⚡ Renomeando... ${done} feitas`);
+                        } else { fail++; }
                     }
-                    if (target > 0 && sc.items.length >= target) scenesComplete++;
+
+                    // rola para baixo
+                    const before = scrollEl.scrollTop;
+                    scrollEl.scrollTop = before + Math.max(300, Math.floor(scrollEl.clientHeight * 0.8));
+                    await this.sleep(500);
+                    const reachedBottom = scrollEl.scrollTop <= before + 2 ||
+                        (scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 4);
+                    if (reachedBottom) { if (++stuck >= 2) break; } else { stuck = 0; }
                 }
 
                 this.startLabelObserver();
 
+                const totalScenes = sceneCounters.size;
+                const mediaWord = (vids && !imgs) ? 'vídeo(s)' : ((imgs && !vids) ? 'imagem(ns)' : 'mídia(s)');
                 if (done === 0 && fail > 0) {
                     this.setStatus('error', 'Não consegui renomear (token não capturado?). Clique numa imagem e tente de novo.');
+                } else if (done === 0) {
+                    this.setStatus('warning', 'Nenhuma mídia casou com os prompts. Cole os prompts que você enviou (com "1- ...") e tente de novo.');
                 } else {
                     this.setStatus('success',
-                        `⚡ ${scenes.size} cena(s), ${done} ${mediaWord} renomeada(s)` +
-                        (target > 0 ? ` — ${scenesComplete}/${scenes.size} concluída(s)` : '') +
+                        `⚡ ${totalScenes} cena(s), ${done} ${mediaWord} renomeada(s)` +
+                        (unmatched ? `, ${unmatched} sem cena` : '') +
                         (fail ? `, ${fail} falharam` : '') + '.');
                 }
-                this.logDebug(`Enumeração automática: ${scenes.size} cenas, ${done} renomeadas, ${fail} falhas.`, done ? 'success' : 'error');
+                this.logDebug(`Enumeração automática: ${totalScenes} cenas, ${done} renomeadas, ${unmatched} sem cena, ${fail} falhas.`, done ? 'success' : 'error');
             } catch (err) {
                 this.setStatus('error', 'Erro na enumeração automática: ' + err.message);
                 this.logDebug('Erro autoEnumerarCenas: ' + (err?.message || err), 'error');
             } finally {
                 if (btn) { btn.disabled = false; btn.textContent = prevLabel || '⚡ Auto'; }
             }
+        }
+
+        /** Número da cena a partir do prefixo "N-"/"N."/"N)" do prompt (fallback: promptNum). */
+        sceneNumFromPrompt(p) {
+            if (!p) return null;
+            const m = (p.text || '').match(/^\s*(\d+(?:\.\d+)?)\s*[\-.):]/);
+            if (m) return m[1];
+            return (p.promptNum != null) ? String(p.promptNum) : null;
+        }
+
+        /** Acha o container de scroll do Flow (ignora os painéis da própria extensão). */
+        findFlowScroller() {
+            const els = [...document.querySelectorAll('div')].filter(el => {
+                if (el.closest('[id^="flow-"]')) return false;                  // UI da extensão
+                if ((el.className || '').toString().includes('flow-')) return false;
+                const s = getComputedStyle(el);
+                return (s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 50;
+            });
+            els.sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
+            return els[0] || null;
         }
 
         /** Recolore os itens do painel conforme a meta (verde = concluída) e atualiza a contagem. */
