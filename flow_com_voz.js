@@ -2829,6 +2829,31 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             return imgNum ? `${clean} ${imgNum}` : clean;
         }
 
+        /** Palavras significativas de um texto (para comparar título x prompt). */
+        _sigWords(s) {
+            const combining = new RegExp('[\\u0300-\\u036f]', 'g'); // acentos (só-ASCII no source)
+            return (s || '').toLowerCase()
+                .normalize('NFD').replace(combining, '')
+                .replace(/[^a-z0-9\s]/g, ' ')
+                .split(/\s+/).filter(w => w.length > 2);
+        }
+
+        /** Acha, entre os prompts que você enviou, o mais parecido com o título da mídia (coef. de Dice). */
+        matchPromptForTitle(title, prompts) {
+            const tw = new Set(this._sigWords(title));
+            if (!tw.size) return null;
+            let best = null, bestScore = 0;
+            for (const p of prompts) {
+                const pw = this._sigWords(this.cleanPromptToName(p.text) || p.text);
+                if (!pw.length) continue;
+                let hit = 0; const seen = new Set();
+                for (const w of pw) { if (tw.has(w) && !seen.has(w)) { hit++; seen.add(w); } }
+                const score = (2 * hit) / (pw.length + tw.size);  // Dice
+                if (score > bestScore) { bestScore = score; best = p; }
+            }
+            return bestScore >= 0.34 ? best : null;
+        }
+
         /**
          * Renomeia automaticamente todas as imagens geradas.
          * Funciona direto no DOM (não depende de rodada da sessão), então roda
@@ -2857,46 +2882,83 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
 
                 this.setStatus('info', `⚡ Lendo ${tilesById.size} mídias...`);
 
-                // 2. Lê o nome (=prompt) de cada tile e agrupa as variações por cena.
-                //    Funciona para IMAGEM e VÍDEO — detecta o tipo automaticamente.
-                const groups = new Map(); // base -> [{ wf, tile }]
+                // 2. Descobre os PROMPTS que VOCÊ enviou — são a fonte dos nomes.
+                //    Usa this.prompts (se já rodou) ou lê do textarea que você colou.
+                let userPrompts = (this.prompts && this.prompts.length) ? this.prompts.slice() : [];
+                if (!userPrompts.length) {
+                    const txt = document.getElementById('flow-prompts-input')?.value
+                             || document.getElementById('fv-prompts-input')?.value || '';
+                    try { userPrompts = parsePromptsText(txt) || []; } catch (e) { userPrompts = []; }
+                }
+
+                // 3. Mapa EXATO de uma rodada da sessão (se houver): workflowId -> {promptNum,imgNum}
+                const exactByWf = new Map();
+                for (const slot of (this._lastMatrices || []).flatMap(m => Array.isArray(m) ? m : [])) {
+                    if (slot && slot.state === 'loaded' && slot.workflowId && slot.promptNum) {
+                        exactByWf.set(slot.workflowId, { promptNum: Number(slot.promptNum), imgNum: Number(slot.imgNum || 0) });
+                    }
+                }
+
+                this.setStatus('info', `⚡ Lendo ${tilesById.size} mídias...`);
+
+                // 4. Lê cada mídia e decide a que CENA (prompt) ela pertence.
+                //    Prioridade: (a) mapa exato da rodada, (b) casar título com o SEU prompt, (c) título do Flow.
+                const scenes = new Map(); // key -> { base, promptNum, items:[{wf,tile,imgNum}] }
                 let vids = 0, imgs = 0;
                 for (const [wf, tile] of tilesById) {
                     if (this.tileAssignments.has(wf)) continue; // já enumerada
                     if (!this.isTileLoaded(tile)) continue;
                     const isVid = this.isVideoTile(tile);
-                    const currentName = await this.getTileName(tile);
-                    const base = this.cleanPromptToName(currentName);
+                    const title = await this.getTileName(tile);
+                    if (!title && !exactByWf.has(wf)) continue;
+
+                    let base = null, promptNum = null, imgNum = 0, key = null;
+
+                    if (exactByWf.has(wf)) {                                   // (a) exato
+                        const ex = exactByWf.get(wf);
+                        const p = userPrompts.find(pp => Number(pp.promptNum) === ex.promptNum);
+                        base = this.cleanPromptToName(p?.text) || this.cleanPromptToName(title);
+                        promptNum = ex.promptNum; imgNum = ex.imgNum; key = 'p' + promptNum;
+                    }
+                    if (!base && userPrompts.length) {                        // (b) casa com seu prompt
+                        const best = this.matchPromptForTitle(title, userPrompts);
+                        if (best) { base = this.cleanPromptToName(best.text); promptNum = best.promptNum; key = 'p' + promptNum; }
+                    }
+                    if (!base) { base = this.cleanPromptToName(title); key = 'title:' + base; } // (c) fallback
                     if (!base) continue;
+
                     if (isVid) vids++; else imgs++;
-                    if (!groups.has(base)) groups.set(base, []);
-                    groups.get(base).push({ wf, tile });
+                    if (!scenes.has(key)) scenes.set(key, { base, promptNum, items: [] });
+                    scenes.get(key).items.push({ wf, tile, imgNum });
                 }
-                if (!groups.size) {
-                    this.setStatus('warning', 'Não consegui ler o nome das mídias. Passe o mouse sobre uma e tente de novo.');
+                if (!scenes.size) {
+                    this.setStatus('warning', 'Não consegui identificar as cenas. Cole os prompts que você enviou e tente de novo.');
                     return;
                 }
                 const mediaWord = (vids && !imgs) ? 'vídeo(s)' : ((imgs && !vids) ? 'imagem(ns)' : 'mídia(s)');
 
-                // 3. Renomeia cada grupo, numerando as variações
+                // 5. Renomeia cada cena pelo SEU prompt, numerando as gerações corretamente.
                 const target = parseInt(document.getElementById('flow-imgs-per-prompt')?.value, 10) || 0;
                 let done = 0, fail = 0, scenesComplete = 0;
-                for (const [base, arr] of groups) {
+                for (const [key, sc] of scenes) {
+                    sc.items.sort((a, b) => (a.imgNum || 0) - (b.imgNum || 0)); // ordena pelas gerações
                     let n = 0;
-                    for (const { wf, tile } of arr) {
+                    for (const { wf, tile, imgNum } of sc.items) {
                         n++;
-                        const newName = arr.length > 1 ? `${base} ${n}` : base;
+                        const num = imgNum || n;                          // número da geração
+                        const newName = sc.items.length > 1 ? `${sc.base} ${num}` : sc.base;
+                        const sceneLabel = sc.promptNum ? `Cena ${sc.promptNum}` : sc.base;
                         const ok = await this.apiRename(wf, newName);
                         await this.apiFavorite(wf, true);
                         if (ok) {
                             done++;
-                            this.tileAssignments.set(wf, { label: newName, type: 'scene', scene: base, imgNum: n });
-                            if (tile) this.addLabelToTile(tile, newName, wf, 'scene', base);
+                            this.tileAssignments.set(wf, { label: newName, type: 'scene', scene: sceneLabel, imgNum: num });
+                            if (tile) this.addLabelToTile(tile, newName, wf, 'scene', sceneLabel);
                         } else {
                             fail++;
                         }
                     }
-                    if (target > 0 && arr.length >= target) scenesComplete++;
+                    if (target > 0 && sc.items.length >= target) scenesComplete++;
                 }
 
                 this.startLabelObserver();
@@ -2905,11 +2967,11 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     this.setStatus('error', 'Não consegui renomear (token não capturado?). Clique numa imagem e tente de novo.');
                 } else {
                     this.setStatus('success',
-                        `⚡ ${groups.size} cena(s), ${done} ${mediaWord} renomeada(s)` +
-                        (target > 0 ? ` — ${scenesComplete}/${groups.size} concluída(s)` : '') +
+                        `⚡ ${scenes.size} cena(s), ${done} ${mediaWord} renomeada(s)` +
+                        (target > 0 ? ` — ${scenesComplete}/${scenes.size} concluída(s)` : '') +
                         (fail ? `, ${fail} falharam` : '') + '.');
                 }
-                this.logDebug(`Enumeração automática: ${groups.size} cenas, ${done} renomeadas, ${fail} falhas.`, done ? 'success' : 'error');
+                this.logDebug(`Enumeração automática: ${scenes.size} cenas, ${done} renomeadas, ${fail} falhas.`, done ? 'success' : 'error');
             } catch (err) {
                 this.setStatus('error', 'Erro na enumeração automática: ' + err.message);
                 this.logDebug('Erro autoEnumerarCenas: ' + (err?.message || err), 'error');
