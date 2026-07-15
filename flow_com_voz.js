@@ -2811,85 +2811,107 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
         // ADD-ON: ENUMERAÇÃO AUTOMÁTICA (renomear pelo início do prompt)
         // ──────────────────────────────────────────────
 
-        /** Deriva o nome a partir do início do prompt (sem numeração/refs/vozes). */
-        promptStartName(prompt, imgNum) {
-            let base = (prompt?.text || '').trim();
-            base = base.replace(/^\{[^}]*\}\s*/, '');       // remove {cena X}
-            base = base.replace(/^\s*\d+\s*[\-.):]\s*/, ''); // remove "11-" / "11." / "11)"
-            base = base.replace(/\[[^\]]*\]/g, ' ');         // remove [ref]
-            base = base.replace(/<voz:[^>]*>/gi, ' ');       // remove <voz:...>
+        /** Núcleo: limpa um texto (prompt ou nome do Flow) para virar um nome curto. */
+        cleanPromptToName(text) {
+            let base = (text || '').trim();
+            base = base.replace(/^\{[^}]*\}\s*/, '');        // remove {cena X}
+            base = base.replace(/^\s*\d+\s*[\-.):]\s*/, '');  // remove "11-" / "11." / "11)"
+            base = base.replace(/\[[^\]]*\]/g, ' ');          // remove [ref]
+            base = base.replace(/<voz:[^>]*>/gi, ' ');        // remove <voz:...>
             base = base.replace(/\s+/g, ' ').trim();
-            const words = base.split(' ').filter(Boolean).slice(0, 6).join(' ');
-            const clean = (words || `Cena ${prompt?.promptNum ?? ''}`).substring(0, 45).trim();
+            const words = base.split(' ').filter(Boolean).slice(0, 8).join(' ');
+            return words.substring(0, 50).trim();
+        }
+
+        /** Deriva o nome a partir do início do prompt (compat.). */
+        promptStartName(prompt, imgNum) {
+            const clean = this.cleanPromptToName(prompt?.text) || `Cena ${prompt?.promptNum ?? ''}`.trim();
             return imgNum ? `${clean} ${imgNum}` : clean;
         }
 
-        /** Renomeia automaticamente todas as imagens geradas, casando cada uma com seu prompt. */
+        /**
+         * Renomeia automaticamente todas as imagens geradas.
+         * Funciona direto no DOM (não depende de rodada da sessão), então roda
+         * em projetos JÁ FINALIZADOS: lê o nome (=prompt) de cada imagem, agrupa
+         * as variações da mesma cena e renomeia numerando.
+         */
         async autoEnumerarCenas() {
-            if (this._videoAssignActive) {
-                this.setStatus('warning', 'Enumeração automática disponível para imagens nesta versão.');
-                return;
-            }
-
-            const slots = (this._lastMatrices || [])
-                .flatMap(m => Array.isArray(m) ? m : [])
-                .filter(s => s && s.state === 'loaded' && s.workflowId && s.promptNum);
-
-            if (!slots.length) {
-                this.setStatus('warning', 'Nenhuma imagem gerada encontrada para enumerar.');
-                return;
-            }
-
-            slots.sort((a, b) =>
-                (Number(a.promptNum) - Number(b.promptNum)) ||
-                (Number(a.imgNum || 0) - Number(b.imgNum || 0))
-            );
-
             const btn = document.getElementById('flow-assign-auto');
             const prevLabel = btn?.textContent;
             if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
 
-            const perScene = new Map();
-            let done = 0, fail = 0, skip = 0;
-
-            for (const slot of slots) {
-                if (this.tileAssignments.has(slot.workflowId)) { skip++; continue; }
-
-                const sceneName = `Cena ${slot.promptNum}`;
-                const prompt = this.prompts.find(p => Number(p.promptNum) === Number(slot.promptNum));
-
-                const n = (perScene.get(slot.promptNum) || 0) + 1;
-                perScene.set(slot.promptNum, n);
-
-                const newName = this.promptStartName(prompt, n);
-
-                const ok = await this.apiRename(slot.workflowId, newName);
-                await this.apiFavorite(slot.workflowId, true);
-
-                if (ok) {
-                    done++;
-                    const arr = this.sceneAssignments.get(sceneName) || [];
-                    arr.push({ imgNum: n, workflowId: slot.workflowId, src: slot.src || '' });
-                    this.sceneAssignments.set(sceneName, arr);
-                    this.tileAssignments.set(slot.workflowId, { label: newName, type: 'scene', scene: sceneName, imgNum: n });
-
-                    const link = document.querySelector(`a[href*="/edit/${slot.workflowId}"]`);
-                    const tile = link ? link.closest('[data-tile-id]') : null;
-                    if (tile) this.addLabelToTile(tile, newName, slot.workflowId, 'scene', sceneName);
-
-                    this.updateAssignItemUI(sceneName, true);
-                } else {
-                    fail++;
+            try {
+                // 1. Coleta as imagens geradas direto do DOM (dedupe por workflowId)
+                const tilesById = new Map();
+                for (const link of document.querySelectorAll('a[href*="/edit/"]')) {
+                    const tile = link.closest('[data-tile-id]');
+                    if (!tile) continue;
+                    const wf = this.getWorkflowIdFromTile(tile);
+                    if (!wf || tilesById.has(wf)) continue;
+                    tilesById.set(wf, tile);
                 }
+                if (!tilesById.size) {
+                    this.setStatus('warning', 'Nenhuma imagem gerada encontrada na página.');
+                    return;
+                }
+
+                this.setStatus('info', `⚡ Lendo ${tilesById.size} imagens...`);
+
+                // 2. Lê o nome (=prompt) de cada tile e agrupa as variações por cena
+                const groups = new Map(); // base -> [{ wf, tile }]
+                for (const [wf, tile] of tilesById) {
+                    if (this.tileAssignments.has(wf)) continue; // já enumerada
+                    if (!this.isTileLoaded(tile)) continue;
+                    if (this.isVideoTile(tile)) continue;
+                    const currentName = await this.getTileName(tile);
+                    const base = this.cleanPromptToName(currentName);
+                    if (!base) continue;
+                    if (!groups.has(base)) groups.set(base, []);
+                    groups.get(base).push({ wf, tile });
+                }
+                if (!groups.size) {
+                    this.setStatus('warning', 'Não consegui ler o nome das imagens. Passe o mouse sobre uma imagem e tente de novo.');
+                    return;
+                }
+
+                // 3. Renomeia cada grupo, numerando as variações
+                const target = parseInt(document.getElementById('flow-imgs-per-prompt')?.value, 10) || 0;
+                let done = 0, fail = 0, scenesComplete = 0;
+                for (const [base, arr] of groups) {
+                    let n = 0;
+                    for (const { wf, tile } of arr) {
+                        n++;
+                        const newName = arr.length > 1 ? `${base} ${n}` : base;
+                        const ok = await this.apiRename(wf, newName);
+                        await this.apiFavorite(wf, true);
+                        if (ok) {
+                            done++;
+                            this.tileAssignments.set(wf, { label: newName, type: 'scene', scene: base, imgNum: n });
+                            if (tile) this.addLabelToTile(tile, newName, wf, 'scene', base);
+                        } else {
+                            fail++;
+                        }
+                    }
+                    if (target > 0 && arr.length >= target) scenesComplete++;
+                }
+
+                this.startLabelObserver();
+
+                if (done === 0 && fail > 0) {
+                    this.setStatus('error', 'Não consegui renomear (token não capturado?). Clique numa imagem e tente de novo.');
+                } else {
+                    this.setStatus('success',
+                        `⚡ ${groups.size} cena(s), ${done} imagem(ns) renomeada(s)` +
+                        (target > 0 ? ` — ${scenesComplete}/${groups.size} concluída(s)` : '') +
+                        (fail ? `, ${fail} falharam` : '') + '.');
+                }
+                this.logDebug(`Enumeração automática: ${groups.size} cenas, ${done} renomeadas, ${fail} falhas.`, done ? 'success' : 'error');
+            } catch (err) {
+                this.setStatus('error', 'Erro na enumeração automática: ' + err.message);
+                this.logDebug('Erro autoEnumerarCenas: ' + (err?.message || err), 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = prevLabel || '⚡ Auto'; }
             }
-
-            this.updateAssignCount();
-            this.repaintCompletion();
-            this.startLabelObserver();
-
-            if (btn) { btn.disabled = false; btn.textContent = prevLabel || '⚡ Auto'; }
-            this.setStatus('success',
-                `⚡ Enumeração automática: ${done} renomeadas${skip ? `, ${skip} já feitas` : ''}${fail ? `, ${fail} falharam` : ''}.`);
         }
 
         /** Recolore os itens do painel conforme a meta (verde = concluída) e atualiza a contagem. */
@@ -2920,7 +2942,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             const variationCounts = this.getSceneVariationCountsFromMatrices(allMatrices);
             this._lastMatrices = allMatrices || [];   // ADD-ON: usado pela Enumeração Automática
             const autoBtn = document.getElementById('flow-assign-auto');
-            if (autoBtn) autoBtn.style.display = (this.genMode === 'scenes' && !this._videoAssignActive) ? 'inline-flex' : 'none';
+            if (autoBtn) autoBtn.style.display = 'inline-flex'; // ADD-ON: sempre disponível (funciona no DOM)
 
             items.innerHTML = '';
 
