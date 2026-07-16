@@ -4851,8 +4851,9 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                 // NÃO a URL inteira. Assim, abrir um vídeo (.../project/ID/edit/...) não é
                 // tratado como "saiu do projeto" (era o bug que abortava o upscale).
                 const getProj = u => (String(u).match(/project\/([a-f0-9-]{36})/) || [])[1] || null;
+                this.logVideoDebug(`🔗 URL atual: ${location.href}`, 'info');   // DIAGNÓSTICO
                 if (getProj(location.href) !== getProj(projectUrl)) {
-                    this.logVideoDebug('❌ Saiu do projeto! Parando upscale.', 'error');
+                    this.logVideoDebug(`❌ Saiu do projeto! Parando upscale. (esperado projeto=${getProj(projectUrl)}, atual=${getProj(location.href)}, url=${location.href})`, 'error');
                     this.setVideoStatus('error', '❌ O upscale parou porque a página saiu do projeto. Volte ao projeto e tente novamente.');
                     break;
                 }
