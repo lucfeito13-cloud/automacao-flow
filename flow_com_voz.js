@@ -4847,11 +4847,21 @@ this.logVideoDebug(`🎬 Processando upscale: ${videoLabel}`, 'info');
 this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                 if (this.upscaleShouldStop) break;
 
-                // Verifica se ainda está no mesmo projeto
-                if (location.href !== projectUrl) {
+                // Verifica se ainda está no MESMO PROJETO — comparando só o ID do projeto,
+                // NÃO a URL inteira. Assim, abrir um vídeo (.../project/ID/edit/...) não é
+                // tratado como "saiu do projeto" (era o bug que abortava o upscale).
+                const getProj = u => (String(u).match(/project\/([a-f0-9-]{36})/) || [])[1] || null;
+                if (getProj(location.href) !== getProj(projectUrl)) {
                     this.logVideoDebug('❌ Saiu do projeto! Parando upscale.', 'error');
                     this.setVideoStatus('error', '❌ O upscale parou porque a página saiu do projeto. Volte ao projeto e tente novamente.');
                     break;
+                }
+                // Continua no projeto, mas abriu uma subpágina (ex: um vídeo)? Volta pra grade.
+                if (/\/edit\//.test(location.href)) {
+                    this.logVideoDebug('↩️ Página abriu um vídeo; voltando à grade do projeto...', 'warning');
+                    history.back();
+                    await this.sleep(1500);
+                    await this.waitFor(() => document.querySelector('a[href*="/edit/"]'), 5000);
                 }
 
                 try {
