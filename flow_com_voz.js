@@ -4546,21 +4546,23 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
         }
 
         async waitForUpscaleToast() {
+            // Pega QUALQUER toast que aparecer (não só o de sucesso), pra a gente
+            // saber o que o Flow respondeu (ex: erro de "já tem upscale rodando").
             const toast = await this.waitFor(() => {
-                const toasts = [...document.querySelectorAll('li[data-sonner-toast], li[data-sonner-toast="true"]')];
-                return toasts.find(el =>
-                    /Upscaling your video/i.test(el.textContent || '')
-                );
-            }, 6000, 200);
+                const toasts = [...document.querySelectorAll('li[data-sonner-toast]')];
+                return toasts[0] || null;
+            }, 8000, 200);
 
-            if (!toast) return false;
+            if (!toast) return { ok: false, text: '(nenhum toast apareceu)', type: '' };
 
-            const dismissBtn = [...toast.querySelectorAll('button')].find(btn =>
-                /dismiss/i.test(btn.textContent || '')
-            );
+            const text = (toast.innerText || toast.textContent || '').replace(/\s*Dismiss\s*$/i, '').replace(/\s+/g, ' ').trim().slice(0, 130);
+            const type = toast.getAttribute('data-type') || '';
+            const isUpscaling = /upscal/i.test(text);   // "Upscaling your video..."
 
+            const dismissBtn = [...toast.querySelectorAll('button')].find(btn => /dismiss/i.test(btn.textContent || ''));
             if (dismissBtn) dismissBtn.click();
-            return true;
+
+            return { ok: isUpscaling, text, type };
         }
 
         getUpscaleRequestedSet() {
@@ -4914,20 +4916,21 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                         continue;
                     }
 
-                    const toastOk = await this.waitForUpscaleToast();
-                    if (toastOk) {
+                    const toastRes = await this.waitForUpscaleToast();
+                    if (toastRes.ok) {
                         requested.add(wfId);
                         count++;
                         this.logVideoDebug(`✅ Upscale solicitado para ${videoLabel}`, 'success');
                     } else {
-                        // em alguns casos o clique pega mesmo sem o toast aparecer
+                        // Não veio o "Upscaling your video". Loga o que o Flow respondeu.
                         requested.add(wfId);
                         count++;
-                        this.logVideoDebug(`⚠️ Clique em 1080p executado, mas toast não apareceu para ${videoLabel}`, 'warning');
+                        this.logVideoDebug(`⚠️ ${videoLabel}: Flow respondeu → "${toastRes.text}" (tipo: ${toastRes.type || '?'})`, 'warning');
                     }
 
                     if (btn) btn.textContent = `⏳ Upscale ${count}/${wfIdsToUpscale.length}`;
-                    await this.sleep(2200);
+                    // Respiro maior: o Flow pede pra não rodar vários upscales ao mesmo tempo.
+                    await this.sleep(3500);
 
                 } catch (err) {
                     fail++;
@@ -5032,9 +5035,9 @@ if (retryBtn) {
                         fail++; stillFailed.push(wfId); continue;
                     }
 
-                    const toastOk = await this.waitForUpscaleToast();
+                    const toastRes = await this.waitForUpscaleToast();
                     count++;
-                    this.logVideoDebug(`✅ Retry upscale OK: ${videoLabel}${toastOk ? '' : ' (sem toast)'}`, 'success');
+                    this.logVideoDebug(`✅ Retry upscale OK: ${videoLabel}${toastRes.ok ? '' : ` (Flow: "${toastRes.text}")`}`, 'success');
 
                     if (btn) btn.textContent = `⏳ Retry ${count}/${wfIdsToRetry.length}`;
                     await this.sleep(2200);
