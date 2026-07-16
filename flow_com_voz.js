@@ -2868,24 +2868,16 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             buttons.forEach(b => b.disabled = true);
 
             try {
-                // 1. Prompts: a CENA vem de {cena N} ou do "N-". A ORDEM importa.
-                let userPrompts = (this.prompts && this.prompts.length) ? this.prompts.slice() : [];
-                if (!userPrompts.length) {
-                    const txt = document.getElementById('flow-prompts-input')?.value
-                             || document.getElementById('fv-prompts-input')?.value || '';
-                    try { userPrompts = parsePromptsText(txt) || []; } catch (e) { userPrompts = []; }
-                }
-                const sceneSeq = userPrompts.map(p => this.sceneNumFromPrompt(p)).filter(v => v != null);
-
-                // 2. Mapa EXATO de uma rodada da sessão (se houver): workflowId -> {promptNum,imgNum}
+                // Mapa EXATO da rodada (fallback pra mídias cujo prompt não seja legível no DOM)
                 const exactByWf = new Map();
                 for (const slot of (this._lastMatrices || []).flatMap(m => Array.isArray(m) ? m : [])) {
                     if (slot && slot.state === 'loaded' && slot.workflowId && slot.promptNum) {
-                        exactByWf.set(slot.workflowId, { promptNum: Number(slot.promptNum), imgNum: Number(slot.imgNum || 0) });
+                        exactByWf.set(slot.workflowId, String(slot.promptNum));
                     }
                 }
 
-                // 3. COLETA todas as mídias varrendo a PÁGINA TODA (o Flow virtualiza os tiles).
+                // COLETA varrendo a PÁGINA TODA. Para cada mídia, lê a CENA direto do
+                // prompt guardado no tile ("97.2 - ..." -> cena 97.2). Confiável e exato.
                 this.setStatus('info', '⚡ Varrendo a página...');
                 const scroller = this.findFlowScroller();
                 const scrollEl = scroller || document.scrollingElement || document.documentElement;
@@ -2895,7 +2887,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                 const collected = [];      // ordem de aparição (topo -> baixo)
                 const seen = new Set();
                 let guard = 0, stuck = 0;
-                while (guard++ < 400) {
+                while (guard++ < 500) {
                     for (const link of document.querySelectorAll('a[href*="/edit/"]')) {
                         const tile = link.closest('[data-tile-id]');
                         if (!tile) continue;
@@ -2904,65 +2896,35 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                         if (!this.isTileLoaded(tile)) continue;
                         seen.add(wf);
                         const isVid = this.isVideoTile(tile);
-                        const title = await this.getTileName(tile);
-                        collected.push({ wf, title: title || '', isVid });
+                        const sceneNum = this.sceneNumFromTile(tile) || exactByWf.get(wf) || null;
+                        collected.push({ wf, isVid, sceneNum });
                         this.setStatus('info', `⚡ Varrendo... ${collected.length} mídias`);
                     }
                     const before = scrollEl.scrollTop;
                     scrollEl.scrollTop = before + Math.max(300, Math.floor(scrollEl.clientHeight * 0.8));
-                    await this.sleep(500);
+                    await this.sleep(450);
                     const bottom = scrollEl.scrollTop <= before + 2 ||
                         (scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 4);
                     if (bottom) { if (++stuck >= 2) break; } else stuck = 0;
                 }
                 if (!collected.length) { this.setStatus('warning', 'Nenhuma mídia encontrada na página.'); return; }
 
-                // 4. Monta o plano de renomeação
-                const titleBase = t => (t || '').replace(/\s*\d+\s*$/, '').trim();  // remove o número da variação
-                const alreadyNamed = t => /^\s*cena\s+\d+/i.test(t || '');
+                // Agrupa por CENA (o número lido do prompt) e numera as gerações (Vídeo/Imagem 1,2,...)
+                const counters = new Map();
                 const plan = [];  // {wf, sceneNum, g, isVid}
-                const useExact = exactByWf.size > 0;
-
-                if (useExact) {
-                    // MODO EXATO: cada wf sabe seu {cena N} e a variação
-                    const counters = new Map();
-                    for (const it of collected) {
-                        if (!exactByWf.has(it.wf)) continue;
-                        const ex = exactByWf.get(it.wf);
-                        const p = userPrompts.find(pp => Number(pp.promptNum) === ex.promptNum);
-                        const sceneNum = this.sceneNumFromPrompt(p) || String(ex.promptNum);
-                        const c = (counters.get(sceneNum) || 0) + 1; counters.set(sceneNum, c);
-                        plan.push({ wf: it.wf, sceneNum, g: ex.imgNum || c, isVid: it.isVid });
-                    }
-                } else {
-                    // MODO POR ORDEM: agrupa variações pelo título-base (mesmo título = mesma cena),
-                    // pula as já nomeadas "Cena N", e atribui os números das cenas EM SEQUÊNCIA.
-                    const groups = [];
-                    const byBase = new Map();
-                    for (const it of collected) {
-                        if (alreadyNamed(it.title)) continue;               // já nomeada -> não mexe
-                        const base = titleBase(it.title) || it.wf;
-                        const vm = (it.title || '').match(/(\d+)\s*$/);
-                        const varNum = vm ? parseInt(vm[1], 10) : null;
-                        if (!byBase.has(base)) { const g = { items: [] }; byBase.set(base, g); groups.push(g); }
-                        byBase.get(base).items.push({ wf: it.wf, isVid: it.isVid, varNum });
-                    }
-                    for (let i = 0; i < groups.length; i++) {
-                        const sceneNum = sceneSeq[i];
-                        if (sceneNum == null) break;                        // acabaram os prompts
-                        const items = groups[i].items.sort((a, b) => (a.varNum || 0) - (b.varNum || 0));
-                        items.forEach((it, idx) => plan.push({ wf: it.wf, sceneNum, g: it.varNum || (idx + 1), isVid: it.isVid }));
-                    }
+                let semCena = 0;
+                for (const it of collected) {
+                    if (it.sceneNum == null) { semCena++; continue; }
+                    const g = (counters.get(it.sceneNum) || 0) + 1;
+                    counters.set(it.sceneNum, g);
+                    plan.push({ wf: it.wf, sceneNum: it.sceneNum, g, isVid: it.isVid });
                 }
-
                 if (!plan.length) {
-                    this.setStatus('warning', useExact
-                        ? 'Não achei o mapa da rodada.'
-                        : 'Cole os prompts (com {cena N} ou "N- ...") pra eu saber os números das cenas.');
+                    this.setStatus('warning', 'Não consegui ler o número da cena nos prompts das mídias.');
                     return;
                 }
 
-                // 5. Renomeia conforme o plano
+                // Renomeia conforme o plano
                 let done = 0, fail = 0, vids = 0, imgs = 0;
                 for (const it of plan) {
                     const tipo = it.isVid ? 'Vídeo' : 'Imagem';
@@ -2981,19 +2943,63 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
 
                 this.startLabelObserver();
                 const mediaWord = (vids && !imgs) ? 'vídeo(s)' : ((imgs && !vids) ? 'imagem(ns)' : 'mídia(s)');
-                const modo = useExact ? 'exato' : 'por ordem';
                 if (done === 0 && fail > 0) {
                     this.setStatus('error', 'Não consegui renomear (token não capturado?). Clique numa mídia e tente de novo.');
                 } else {
-                    this.setStatus('success', `⚡ ${done} ${mediaWord} renomeada(s) — modo ${modo}${fail ? `, ${fail} falharam` : ''}.`);
+                    this.setStatus('success', `⚡ ${counters.size} cena(s), ${done} ${mediaWord} renomeada(s)` +
+                        (semCena ? `, ${semCena} sem número` : '') + (fail ? `, ${fail} falharam` : '') + '.');
                 }
-                this.logDebug(`Enumeração (${modo}): ${done} renomeadas, ${fail} falhas, ${collected.length} coletadas.`, done ? 'success' : 'error');
+                this.logDebug(`Enumeração: ${counters.size} cenas, ${done} renomeadas, ${semCena} sem número, ${fail} falhas.`, done ? 'success' : 'error');
             } catch (err) {
                 this.setStatus('error', 'Erro na enumeração automática: ' + (err?.message || err));
                 this.logDebug('Erro autoEnumerarCenas: ' + (err?.message || err), 'error');
             } finally {
                 buttons.forEach(b => b.disabled = false);
             }
+        }
+
+        /**
+         * Lê o PROMPT completo guardado no tile (campo interno "subtitle" do React).
+         * É onde fica o texto real do prompt, que começa com o número da cena
+         * (ex: "97.2 - Reference set..."). Rápido: não precisa hover nem abrir o vídeo.
+         */
+        getPromptSubtitleFromTile(tile) {
+            if (!tile) return null;
+            const key = Object.keys(tile).find(k => k.startsWith('__reactFiber$'));
+            let fiber = key ? tile[key] : null;
+            let hops = 0;
+            while (fiber && hops < 60) {
+                hops++;
+                for (const bag of [fiber.memoizedProps, fiber.memoizedState]) {
+                    if (bag && typeof bag === 'object') {
+                        const stack = [[bag, 0]]; let steps = 0;
+                        while (stack.length && steps < 200) {
+                            steps++;
+                            const [o, d] = stack.pop();
+                            if (!o || typeof o !== 'object' || d > 3) continue;
+                            for (const k of Object.keys(o)) {
+                                const v = o[k];
+                                if (typeof v === 'string' && v.length > 20 &&
+                                    (k === 'subtitle' || /^\s*\d+(?:\.\d+)?\s*[-.]\s/.test(v))) {
+                                    return v;
+                                } else if (v && typeof v === 'object') {
+                                    stack.push([v, d + 1]);
+                                }
+                            }
+                        }
+                    }
+                }
+                fiber = fiber.return;
+            }
+            return null;
+        }
+
+        /** Número da cena lido do início do prompt do tile (ex: "97.2 - ..." -> "97.2"). */
+        sceneNumFromTile(tile) {
+            const sub = this.getPromptSubtitleFromTile(tile);
+            if (!sub) return null;
+            const m = sub.match(/^\s*(\d+(?:\.\d+)?)/);
+            return m ? m[1] : null;
         }
 
         /** Número da cena a partir do prefixo "N-"/"N."/"N)" do prompt (fallback: promptNum). */
