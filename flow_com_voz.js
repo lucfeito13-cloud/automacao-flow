@@ -2864,18 +2864,18 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
          * as variações da mesma cena e renomeia numerando.
          */
         async autoEnumerarCenas() {
-            const btn = document.getElementById('flow-assign-auto');
-            const prevLabel = btn?.textContent;
-            if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+            const buttons = ['flow-assign-auto', 'flow-auto-enumerate-btn'].map(id => document.getElementById(id)).filter(Boolean);
+            buttons.forEach(b => b.disabled = true);
 
             try {
-                // 1. Prompts que VOCÊ enviou — a CENA vem do "N-" de cada prompt.
+                // 1. Prompts: a CENA vem de {cena N} ou do "N-". A ORDEM importa.
                 let userPrompts = (this.prompts && this.prompts.length) ? this.prompts.slice() : [];
                 if (!userPrompts.length) {
                     const txt = document.getElementById('flow-prompts-input')?.value
                              || document.getElementById('fv-prompts-input')?.value || '';
                     try { userPrompts = parsePromptsText(txt) || []; } catch (e) { userPrompts = []; }
                 }
+                const sceneSeq = userPrompts.map(p => this.sceneNumFromPrompt(p)).filter(v => v != null);
 
                 // 2. Mapa EXATO de uma rodada da sessão (se houver): workflowId -> {promptNum,imgNum}
                 const exactByWf = new Map();
@@ -2885,88 +2885,114 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     }
                 }
 
-                // 3. Varre a PÁGINA TODA dando scroll (o Flow só renderiza o que está visível).
+                // 3. COLETA todas as mídias varrendo a PÁGINA TODA (o Flow virtualiza os tiles).
+                this.setStatus('info', '⚡ Varrendo a página...');
                 const scroller = this.findFlowScroller();
                 const scrollEl = scroller || document.scrollingElement || document.documentElement;
                 if (scroller) scroller.scrollTop = 0; else window.scrollTo(0, 0);
                 await this.sleep(600);
 
-                const processed = new Set();     // workflowIds já tratados
-                const sceneCounters = new Map();  // sceneNum -> nº de gerações já numeradas
-                let done = 0, fail = 0, unmatched = 0, vids = 0, imgs = 0;
+                const collected = [];      // ordem de aparição (topo -> baixo)
+                const seen = new Set();
                 let guard = 0, stuck = 0;
-
                 while (guard++ < 400) {
-                    // processa os tiles visíveis agora
                     for (const link of document.querySelectorAll('a[href*="/edit/"]')) {
                         const tile = link.closest('[data-tile-id]');
                         if (!tile) continue;
                         const wf = this.getWorkflowIdFromTile(tile);
-                        if (!wf || processed.has(wf)) continue;
-                        if (this.tileAssignments.has(wf)) { processed.add(wf); continue; } // já enumerada
-                        if (!this.isTileLoaded(tile)) continue;                            // ainda carregando; tenta depois
-                        processed.add(wf);
-
+                        if (!wf || seen.has(wf)) continue;
+                        if (!this.isTileLoaded(tile)) continue;
+                        seen.add(wf);
                         const isVid = this.isVideoTile(tile);
                         const title = await this.getTileName(tile);
-
-                        // NÚMERO DA CENA = "N-" do seu prompt
-                        let sceneNum = null;
-                        if (exactByWf.has(wf)) {
-                            const p = userPrompts.find(pp => Number(pp.promptNum) === exactByWf.get(wf).promptNum);
-                            sceneNum = this.sceneNumFromPrompt(p) || String(exactByWf.get(wf).promptNum);
-                        }
-                        if (sceneNum == null && userPrompts.length) {
-                            const best = this.matchPromptForTitle(title, userPrompts);
-                            if (best) sceneNum = this.sceneNumFromPrompt(best);
-                        }
-                        if (sceneNum == null) { unmatched++; continue; }
-
-                        const g = (sceneCounters.get(sceneNum) || 0) + 1;
-                        sceneCounters.set(sceneNum, g);
-                        const sceneLabel = `Cena ${sceneNum}`;
-                        const tipo = isVid ? 'Vídeo' : 'Imagem';
-                        const newName = `${sceneLabel} - ${tipo} ${g}`;
-
-                        const ok = await this.apiRename(wf, newName);
-                        await this.apiFavorite(wf, true);
-                        if (ok) {
-                            done++; if (isVid) vids++; else imgs++;
-                            this.tileAssignments.set(wf, { label: newName, type: 'scene', scene: sceneLabel, imgNum: g });
-                            if (tile) this.addLabelToTile(tile, newName, wf, 'scene', sceneLabel);
-                            this.setStatus('info', `⚡ Renomeando... ${done} feitas`);
-                        } else { fail++; }
+                        collected.push({ wf, title: title || '', isVid });
+                        this.setStatus('info', `⚡ Varrendo... ${collected.length} mídias`);
                     }
-
-                    // rola para baixo
                     const before = scrollEl.scrollTop;
                     scrollEl.scrollTop = before + Math.max(300, Math.floor(scrollEl.clientHeight * 0.8));
                     await this.sleep(500);
-                    const reachedBottom = scrollEl.scrollTop <= before + 2 ||
+                    const bottom = scrollEl.scrollTop <= before + 2 ||
                         (scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 4);
-                    if (reachedBottom) { if (++stuck >= 2) break; } else { stuck = 0; }
+                    if (bottom) { if (++stuck >= 2) break; } else stuck = 0;
+                }
+                if (!collected.length) { this.setStatus('warning', 'Nenhuma mídia encontrada na página.'); return; }
+
+                // 4. Monta o plano de renomeação
+                const titleBase = t => (t || '').replace(/\s*\d+\s*$/, '').trim();  // remove o número da variação
+                const alreadyNamed = t => /^\s*cena\s+\d+/i.test(t || '');
+                const plan = [];  // {wf, sceneNum, g, isVid}
+                const useExact = exactByWf.size > 0;
+
+                if (useExact) {
+                    // MODO EXATO: cada wf sabe seu {cena N} e a variação
+                    const counters = new Map();
+                    for (const it of collected) {
+                        if (!exactByWf.has(it.wf)) continue;
+                        const ex = exactByWf.get(it.wf);
+                        const p = userPrompts.find(pp => Number(pp.promptNum) === ex.promptNum);
+                        const sceneNum = this.sceneNumFromPrompt(p) || String(ex.promptNum);
+                        const c = (counters.get(sceneNum) || 0) + 1; counters.set(sceneNum, c);
+                        plan.push({ wf: it.wf, sceneNum, g: ex.imgNum || c, isVid: it.isVid });
+                    }
+                } else {
+                    // MODO POR ORDEM: agrupa variações pelo título-base (mesmo título = mesma cena),
+                    // pula as já nomeadas "Cena N", e atribui os números das cenas EM SEQUÊNCIA.
+                    const groups = [];
+                    const byBase = new Map();
+                    for (const it of collected) {
+                        if (alreadyNamed(it.title)) continue;               // já nomeada -> não mexe
+                        const base = titleBase(it.title) || it.wf;
+                        const vm = (it.title || '').match(/(\d+)\s*$/);
+                        const varNum = vm ? parseInt(vm[1], 10) : null;
+                        if (!byBase.has(base)) { const g = { items: [] }; byBase.set(base, g); groups.push(g); }
+                        byBase.get(base).items.push({ wf: it.wf, isVid: it.isVid, varNum });
+                    }
+                    for (let i = 0; i < groups.length; i++) {
+                        const sceneNum = sceneSeq[i];
+                        if (sceneNum == null) break;                        // acabaram os prompts
+                        const items = groups[i].items.sort((a, b) => (a.varNum || 0) - (b.varNum || 0));
+                        items.forEach((it, idx) => plan.push({ wf: it.wf, sceneNum, g: it.varNum || (idx + 1), isVid: it.isVid }));
+                    }
+                }
+
+                if (!plan.length) {
+                    this.setStatus('warning', useExact
+                        ? 'Não achei o mapa da rodada.'
+                        : 'Cole os prompts (com {cena N} ou "N- ...") pra eu saber os números das cenas.');
+                    return;
+                }
+
+                // 5. Renomeia conforme o plano
+                let done = 0, fail = 0, vids = 0, imgs = 0;
+                for (const it of plan) {
+                    const tipo = it.isVid ? 'Vídeo' : 'Imagem';
+                    const newName = `Cena ${it.sceneNum} - ${tipo} ${it.g}`;
+                    const ok = await this.apiRename(it.wf, newName);
+                    await this.apiFavorite(it.wf, true);
+                    if (ok) {
+                        done++; if (it.isVid) vids++; else imgs++;
+                        this.tileAssignments.set(it.wf, { label: newName, type: 'scene', scene: `Cena ${it.sceneNum}`, imgNum: it.g });
+                        const link = document.querySelector(`a[href*="/edit/${it.wf}"]`);
+                        const tile = link ? link.closest('[data-tile-id]') : null;
+                        if (tile) this.addLabelToTile(tile, newName, it.wf, 'scene', `Cena ${it.sceneNum}`);
+                        this.setStatus('info', `⚡ Renomeando... ${done}/${plan.length}`);
+                    } else fail++;
                 }
 
                 this.startLabelObserver();
-
-                const totalScenes = sceneCounters.size;
                 const mediaWord = (vids && !imgs) ? 'vídeo(s)' : ((imgs && !vids) ? 'imagem(ns)' : 'mídia(s)');
+                const modo = useExact ? 'exato' : 'por ordem';
                 if (done === 0 && fail > 0) {
-                    this.setStatus('error', 'Não consegui renomear (token não capturado?). Clique numa imagem e tente de novo.');
-                } else if (done === 0) {
-                    this.setStatus('warning', 'Nenhuma mídia casou com os prompts. Cole os prompts que você enviou (com "1- ...") e tente de novo.');
+                    this.setStatus('error', 'Não consegui renomear (token não capturado?). Clique numa mídia e tente de novo.');
                 } else {
-                    this.setStatus('success',
-                        `⚡ ${totalScenes} cena(s), ${done} ${mediaWord} renomeada(s)` +
-                        (unmatched ? `, ${unmatched} sem cena` : '') +
-                        (fail ? `, ${fail} falharam` : '') + '.');
+                    this.setStatus('success', `⚡ ${done} ${mediaWord} renomeada(s) — modo ${modo}${fail ? `, ${fail} falharam` : ''}.`);
                 }
-                this.logDebug(`Enumeração automática: ${totalScenes} cenas, ${done} renomeadas, ${unmatched} sem cena, ${fail} falhas.`, done ? 'success' : 'error');
+                this.logDebug(`Enumeração (${modo}): ${done} renomeadas, ${fail} falhas, ${collected.length} coletadas.`, done ? 'success' : 'error');
             } catch (err) {
-                this.setStatus('error', 'Erro na enumeração automática: ' + err.message);
+                this.setStatus('error', 'Erro na enumeração automática: ' + (err?.message || err));
                 this.logDebug('Erro autoEnumerarCenas: ' + (err?.message || err), 'error');
             } finally {
-                if (btn) { btn.disabled = false; btn.textContent = prevLabel || '⚡ Auto'; }
+                buttons.forEach(b => b.disabled = false);
             }
         }
 
@@ -4336,6 +4362,7 @@ if (this.videoGenMode === 'scenes') {
             const items = document.getElementById('flow-assign-items');
             const dlBtn = document.getElementById('flow-assign-download');
             const variationCounts = this.getSceneVariationCountsFromMatrices(allMatrices);
+            this._lastMatrices = allMatrices || [];   // ADD-ON: modo exato do ⚡ Auto (vídeo, mesma sessão)
 
             items.innerHTML = '';
             title.textContent = 'Atribuir Cenas (Vídeos)';
