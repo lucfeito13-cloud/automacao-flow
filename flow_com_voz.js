@@ -440,6 +440,7 @@ function triggerTrustedClick(el) {
 <button class="flow-validate-btn" id="flow-mark-refs-valid-btn" style="margin-top:6px;">✅ Referências já validadas</button>
 <button class="flow-validate-btn" id="flow-clear-refs-btn" style="margin-top:6px;">🧽 Limpar referências validadas</button>
 <button class="flow-validate-btn" id="flow-fix-upload-refs-btn" style="margin-top:6px;">🧹 Corrigir uploads para referências</button>
+<button class="flow-validate-btn" id="flow-auto-enumerate-btn" style="margin-top:6px;font-weight:700;">⚡ Enumerar cenas automático (renomear "Cena N")</button>
 <button class="flow-validate-btn" id="flow-assign-refs-btn" style="display:none;margin-top:6px;">📌 Atribuir referências</button>
           </div>
         </div>
@@ -967,6 +968,8 @@ if (fixUploadRefsBtn) {
             $('flow-assign-refs-btn').addEventListener('click', () => this.openAssignRefsFromDetected());
             const autoBtnEl = document.getElementById('flow-assign-auto');
             if (autoBtnEl) autoBtnEl.addEventListener('click', () => this.autoEnumerarCenas());
+            const autoMainBtn = document.getElementById('flow-auto-enumerate-btn');
+            if (autoMainBtn) autoMainBtn.addEventListener('click', () => this.autoEnumerarCenas());
 
             // ── Speed buttons (shared) ──
             document.querySelectorAll('[data-speed]').forEach(btn => {
@@ -2922,7 +2925,8 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                         const g = (sceneCounters.get(sceneNum) || 0) + 1;
                         sceneCounters.set(sceneNum, g);
                         const sceneLabel = `Cena ${sceneNum}`;
-                        const newName = `${sceneLabel} - ${g}`;
+                        const tipo = isVid ? 'Vídeo' : 'Imagem';
+                        const newName = `${sceneLabel} - ${tipo} ${g}`;
 
                         const ok = await this.apiRename(wf, newName);
                         await this.apiFavorite(wf, true);
