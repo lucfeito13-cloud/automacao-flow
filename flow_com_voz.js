@@ -4857,12 +4857,16 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                     this.setVideoStatus('error', '❌ O upscale parou porque a página saiu do projeto. Volte ao projeto e tente novamente.');
                     break;
                 }
-                // Continua no projeto, mas abriu uma subpágina (ex: um vídeo)? Volta pra grade.
-                if (/\/edit\//.test(location.href)) {
-                    this.logVideoDebug('↩️ Página abriu um vídeo; voltando à grade do projeto...', 'warning');
-                    history.back();
-                    await this.sleep(1500);
-                    await this.waitFor(() => document.querySelector('a[href*="/edit/"]'), 5000);
+                // Continua no MESMO projeto, mas drifou pra uma subrota (/edit/, /collection/, etc)?
+                // Volta pra grade (history.back é client-side, não recarrega, então o loop sobrevive).
+                if (location.href !== projectUrl) {
+                    this.logVideoDebug(`↩️ Página saiu da grade (${location.href}); voltando...`, 'warning');
+                    for (let back = 0; back < 3 && location.href !== projectUrl; back++) {
+                        history.back();
+                        await this.sleep(1200);
+                    }
+                    await this.waitFor(() => document.querySelectorAll('[data-tile-id]').length > 0, 6000);
+                    await this.sleep(400);
                 }
 
                 try {
