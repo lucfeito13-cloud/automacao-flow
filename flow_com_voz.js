@@ -441,6 +441,10 @@ function triggerTrustedClick(el) {
 <button class="flow-validate-btn" id="flow-clear-refs-btn" style="margin-top:6px;">🧽 Limpar referências validadas</button>
 <button class="flow-validate-btn" id="flow-fix-upload-refs-btn" style="margin-top:6px;">🧹 Corrigir uploads para referências</button>
 <button class="flow-validate-btn" id="flow-auto-enumerate-btn" style="margin-top:6px;font-weight:700;">⚡ Enumerar cenas automático (renomear "Cena N")</button>
+<div id="flow-auto-results" style="display:none;margin-top:8px;border:1px solid var(--cd-border-light);border-radius:8px;padding:8px;background:var(--cd-bg-secondary,#f8fafc);">
+  <div id="flow-auto-results-head" style="font-size:12px;font-weight:700;color:var(--cd-primary);margin-bottom:6px;">Concluídas: 0</div>
+  <div id="flow-auto-results-list" style="max-height:170px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;"></div>
+</div>
 <button class="flow-validate-btn" id="flow-assign-refs-btn" style="display:none;margin-top:6px;">📌 Atribuir referências</button>
           </div>
         </div>
@@ -2924,22 +2928,27 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     return;
                 }
 
-                // Renomeia conforme o plano
+                // Renomeia conforme o plano (e vai marcando como CONCLUÍDO)
+                this._resetAutoResults();
                 let done = 0, fail = 0, vids = 0, imgs = 0;
                 for (const it of plan) {
                     const tipo = it.isVid ? 'Vídeo' : 'Imagem';
                     const newName = `Cena ${it.sceneNum} - ${tipo} ${it.g}`;
                     const ok = await this.apiRename(it.wf, newName);
-                    await this.apiFavorite(it.wf, true);
+                    await this.apiFavorite(it.wf, true);   // ⭐ favorita = "concluído"
                     if (ok) {
                         done++; if (it.isVid) vids++; else imgs++;
                         this.tileAssignments.set(it.wf, { label: newName, type: 'scene', scene: `Cena ${it.sceneNum}`, imgNum: it.g });
                         const link = document.querySelector(`a[href*="/edit/${it.wf}"]`);
                         const tile = link ? link.closest('[data-tile-id]') : null;
                         if (tile) this.addLabelToTile(tile, newName, it.wf, 'scene', `Cena ${it.sceneNum}`);
-                        this.setStatus('info', `⚡ Renomeando... ${done}/${plan.length}`);
+                        // marca como concluído: lista verde + chip do painel (se existir) + risca
+                        this._addAutoResult(newName);
+                        this.updateAssignItemUI(`Cena ${it.sceneNum}`, true);
+                        this.setStatus('info', `⚡ Renomeando e concluindo... ${done}/${plan.length}`);
                     } else fail++;
                 }
+                this.updateAssignCount();
 
                 this.startLabelObserver();
                 const mediaWord = (vids && !imgs) ? 'vídeo(s)' : ((imgs && !vids) ? 'imagem(ns)' : 'mídia(s)');
@@ -3020,6 +3029,29 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             });
             els.sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
             return els[0] || null;
+        }
+
+        /** Zera a lista de "Concluídas" e mostra o quadro. */
+        _resetAutoResults() {
+            const list = document.getElementById('flow-auto-results-list');
+            const box = document.getElementById('flow-auto-results');
+            const head = document.getElementById('flow-auto-results-head');
+            if (list) list.innerHTML = '';
+            if (box) box.style.display = '';
+            if (head) head.textContent = 'Concluídas: 0';
+        }
+
+        /** Adiciona uma linha verde "✅ <nome>" na lista de concluídas e atualiza o contador. */
+        _addAutoResult(name) {
+            const list = document.getElementById('flow-auto-results-list');
+            const head = document.getElementById('flow-auto-results-head');
+            if (!list) return;
+            const row = document.createElement('div');
+            row.style.cssText = 'font-size:12px;color:#166534;background:#dcfce7;border-radius:6px;padding:3px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+            row.textContent = '✅ ' + name;
+            list.appendChild(row);
+            list.scrollTop = list.scrollHeight;
+            if (head) head.textContent = `Concluídas: ${list.children.length}`;
         }
 
         /** Recolore os itens do painel conforme a meta (verde = concluída) e atualiza a contagem. */
