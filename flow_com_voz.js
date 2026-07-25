@@ -83,6 +83,41 @@
     };
 
     // ============================================================
+    // AGUENTA MINIMIZADO
+    // ============================================================
+    // requestAnimationFrame PARA quando a aba não está visível (minimizada / em
+    // segundo plano) — isso travava a automação. Esta versão resolve pelo rAF
+    // quando dá, ou por um setTimeout de plano B quando o rAF está congelado.
+    function nextFrame() {
+        return new Promise(resolve => {
+            let done = false;
+            const finish = () => { if (!done) { done = true; resolve(); } };
+            try { requestAnimationFrame(finish); } catch (_) {}
+            setTimeout(finish, 120);
+        });
+    }
+
+    // Mantém a aba "acordada" mesmo minimizada, reduzindo o freio do Chrome nos
+    // timers. Áudio praticamente inaudível. Best-effort: se falhar, não faz mal.
+    let _keepAliveCtx = null;
+    function startKeepAlive() {
+        if (_keepAliveCtx) { try { if (_keepAliveCtx.state === 'suspended') _keepAliveCtx.resume(); } catch (_) {} return; }
+        try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return;
+            const ctx = new AC();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            gain.gain.value = 0.0001;   // quase mudo, mas conta como "tocando"
+            osc.frequency.value = 30;
+            osc.connect(gain); gain.connect(ctx.destination);
+            osc.start();
+            if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+            _keepAliveCtx = ctx;
+        } catch (_) {}
+    }
+
+    // ============================================================
     // PARSERS
     // ============================================================
 function triggerTrustedClick(el) {
@@ -943,7 +978,7 @@ if (fixUploadRefsBtn) {
     fixUploadRefsBtn.addEventListener('click', () => this.renameUploadReferencesFromFilenames());
 }
             $('flow-show-logs').addEventListener('change', e => $('flow-logs-container').classList.toggle('visible', e.target.checked));
-            $('flow-start-btn').addEventListener('click', () => this.start());
+            $('flow-start-btn').addEventListener('click', () => { startKeepAlive(); this.start(); });
             $('flow-stop-btn').addEventListener('click',  () => this.stop());
             $('flow-close-popup').addEventListener('click', () => { $('flow-popup').style.display='none'; $('flow-popup-overlay').style.display='none'; });
             $('flow-popup-download').addEventListener('click', () => this.downloadLastRunMedia());
@@ -971,9 +1006,9 @@ if (fixUploadRefsBtn) {
             $('flow-assign-toggle').addEventListener('click', () => this.toggleAssignPanel());
             $('flow-assign-refs-btn').addEventListener('click', () => this.openAssignRefsFromDetected());
             const autoBtnEl = document.getElementById('flow-assign-auto');
-            if (autoBtnEl) autoBtnEl.addEventListener('click', () => this.autoEnumerarCenas());
+            if (autoBtnEl) autoBtnEl.addEventListener('click', () => { startKeepAlive(); this.autoEnumerarCenas(); });
             const autoMainBtn = document.getElementById('flow-auto-enumerate-btn');
-            if (autoMainBtn) autoMainBtn.addEventListener('click', () => this.autoEnumerarCenas());
+            if (autoMainBtn) autoMainBtn.addEventListener('click', () => { startKeepAlive(); this.autoEnumerarCenas(); });
 
             // ── Speed buttons (shared) ──
             document.querySelectorAll('[data-speed]').forEach(btn => {
@@ -1113,7 +1148,7 @@ if (clearVideoRefsBtn) {
     clearVideoRefsBtn.addEventListener('click', () => this.clearReferencesForUI('video'));
 }
             $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
-            $('fv-start-btn').addEventListener('click', () => this.startVideo());
+            $('fv-start-btn').addEventListener('click', () => { startKeepAlive(); this.startVideo(); });
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
             $('fv-analyze-btn').addEventListener('click', () => this.analyzeProject('video'));
             $('fv-dl-identified').addEventListener('click', () => this.downloadProjectImages('identified'));
@@ -1123,7 +1158,7 @@ if (clearVideoRefsBtn) {
             
             // BOTÃO NOVO (UPSCALE) INJETADO AQUI
             const fvUpscaleBtn = $('fv-upscale-btn');
-if (fvUpscaleBtn) fvUpscaleBtn.addEventListener('click', () => this.startUpscaleProcess());
+if (fvUpscaleBtn) fvUpscaleBtn.addEventListener('click', () => { startKeepAlive(); this.startUpscaleProcess(); });
 
 // Upscale stop button
 const fvUpscaleStopBtn = $('fv-upscale-stop-btn');
@@ -1716,7 +1751,7 @@ clearReferencesForUI(source = 'images') {
             // O crash anterior (insertBefore) era causado por beforeinput de backspace
             // em sequência rápida, não pela inserção de texto.
             // Proteção: aguardar animationFrame para não conflitar com React render.
-            await new Promise(resolve => requestAnimationFrame(resolve));
+            await nextFrame();
             e.dispatchEvent(new InputEvent('beforeinput', {
                 bubbles: true, cancelable: true,
                 inputType: 'insertText', data: text
@@ -1981,7 +2016,7 @@ clearReferencesForUI(source = 'images') {
                                  // Loop que repete o Backspace 3 vezes
                                  for (let b = 0; b < 3; b++) {
                                      // Backspace com delay adequado entre cada para evitar conflito React
-                                     await new Promise(resolve => requestAnimationFrame(resolve));
+                                     await nextFrame();
                                      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true }));
                                      document.execCommand('delete', false, null);
                                      await this.dynamicSleep([100, 200]);
@@ -2045,7 +2080,7 @@ clearReferencesForUI(source = 'images') {
             if (editor) {
                 editor.focus();
                 await this.sleep(200);
-                await new Promise(resolve => requestAnimationFrame(resolve));
+                await nextFrame();
                 editor.dispatchEvent(new InputEvent('beforeinput', {
                     bubbles: true, cancelable: true,
                     inputType: 'insertText', data: ' reset'
