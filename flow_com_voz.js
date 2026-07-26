@@ -88,12 +88,47 @@
     // requestAnimationFrame PARA quando a aba não está visível (minimizada / em
     // segundo plano) — isso travava a automação. Esta versão resolve pelo rAF
     // quando dá, ou por um setTimeout de plano B quando o rAF está congelado.
+    // O Chrome FREIA setTimeout (mínimo ~1s) em aba oculta/minimizada. Timers
+    // dentro de um Web Worker NÃO sofrem esse freio — então toda a espera da
+    // automação passa por aqui e roda em velocidade cheia mesmo minimizado.
+    let _timerWorker = null, _timerSeq = 0;
+    const _timerWaiters = new Map();
+    function getTimerWorker() {
+        if (_timerWorker !== null) return _timerWorker;
+        try {
+            const src = 'self.onmessage=function(e){setTimeout(function(){self.postMessage(e.data.id);},e.data.ms);};';
+            const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'application/javascript' })));
+            w.onmessage = ev => {
+                const done = _timerWaiters.get(ev.data);
+                if (done) { _timerWaiters.delete(ev.data); done(); }
+            };
+            _timerWorker = w;
+        } catch (_) {
+            _timerWorker = false;   // sem worker: cai no setTimeout normal
+        }
+        return _timerWorker;
+    }
+
+    function wait(ms) {
+        const w = getTimerWorker();
+        if (!w) return new Promise(r => setTimeout(r, ms));
+        return new Promise(resolve => {
+            const id = ++_timerSeq;
+            _timerWaiters.set(id, resolve);
+            // rede de segurança: se o worker não responder, destrava assim mesmo
+            setTimeout(() => {
+                if (_timerWaiters.has(id)) { _timerWaiters.delete(id); resolve(); }
+            }, ms + 2500);
+            w.postMessage({ id, ms });
+        });
+    }
+
     function nextFrame() {
         return new Promise(resolve => {
             let done = false;
             const finish = () => { if (!done) { done = true; resolve(); } };
             try { requestAnimationFrame(finish); } catch (_) {}
-            setTimeout(finish, 120);
+            wait(80).then(finish);   // rAF congela em aba oculta; o worker não
         });
     }
 
@@ -1326,7 +1361,7 @@ this.validatedRefs[this.referenceKey(ref)] = true;
         // HELPERS
         // ──────────────────────────────────────────────
 
-        sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+        sleep(ms) { return wait(ms); }   // via Web Worker: não é freado minimizado
 
         dynamicSleep(val) {
             const m = this.speedMultiplier || 1.0;
