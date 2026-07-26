@@ -74,7 +74,7 @@
         MAX_RETRIES:              3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
-        VERSION: '4.3 (Flow Voz + Velocidade + Enum Bloco)',
+        VERSION: '4.4 (Flow Voz + Enum Auto + Aguenta Minimizado)',
         SPEED_PROFILES: {
             slow:   { label: '🐢 Lento',  multiplier: 1.5 },
             normal: { label: '🔄 Normal', multiplier: 1.0 },
@@ -4996,8 +4996,9 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                     }
 
                     if (btn) btn.textContent = `⏳ Upscale ${count}/${wfIdsToUpscale.length}`;
-                    // Respiro maior: o Flow pede pra não rodar vários upscales ao mesmo tempo.
-                    await this.sleep(3500);
+                    // Pausa adaptativa: se o Flow confirmou, segue rápido; se não
+                    // confirmou, dá um respiro maior (ele pede pra não rodar vários juntos).
+                    await this.sleep(toastRes.ok ? 1800 : 4000);
 
                 } catch (err) {
                     fail++;
