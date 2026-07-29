@@ -123,13 +123,36 @@
         });
     }
 
-    function nextFrame() {
+    // Cede a vez para o React terminar de reconciliar. MessageChannel é o mesmo
+    // mecanismo do agendador do React e, ao contrário do setTimeout, NÃO é freado
+    // com a aba oculta.
+    function yieldTask() {
         return new Promise(resolve => {
-            let done = false;
-            const finish = () => { if (!done) { done = true; resolve(); } };
-            try { requestAnimationFrame(finish); } catch (_) {}
-            wait(80).then(finish);   // rAF congela em aba oculta; o worker não
+            try {
+                const ch = new MessageChannel();
+                ch.port1.onmessage = () => resolve();
+                ch.port2.postMessage(0);
+            } catch (_) { resolve(); }
         });
+    }
+
+    async function nextFrame() {
+        // Aba visível: espera o frame de verdade (é o comportamento original).
+        if (document.visibilityState === 'visible') {
+            return new Promise(resolve => {
+                let done = false;
+                const finish = () => { if (!done) { done = true; resolve(); } };
+                try { requestAnimationFrame(finish); } catch (_) {}
+                wait(150).then(finish);
+            });
+        }
+        // Minimizado o rAF NUNCA dispara. Não dá pra "esperar o frame" — então
+        // damos tempo real + deixamos o agendador do React esvaziar a fila.
+        // Sem isso o Slate recebe input antes de reconciliar e o Flow quebra
+        // com "Application error / client-side exception".
+        await wait(260);
+        await yieldTask();
+        await yieldTask();
     }
 
     // Mantém a aba "acordada" mesmo minimizada, reduzindo o freio do Chrome nos
@@ -1364,7 +1387,10 @@ this.validatedRefs[this.referenceKey(ref)] = true;
         sleep(ms) { return wait(ms); }   // via Web Worker: não é freado minimizado
 
         dynamicSleep(val) {
-            const m = this.speedMultiplier || 1.0;
+            // Minimizado o React não tem frames pra reconciliar; um respiro extra
+            // evita quebrar o editor do Flow (client-side exception).
+            const oculto = (document.visibilityState === 'hidden') ? 1.25 : 1;
+            const m = (this.speedMultiplier || 1.0) * oculto;
             if (Array.isArray(val)) {
                 const [min, max] = val;
                 const scaled = Math.round((min + Math.random() * (max - min)) * m);
