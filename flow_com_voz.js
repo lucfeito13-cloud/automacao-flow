@@ -1917,47 +1917,20 @@ clearReferencesForUI(source = 'images') {
                             break;
                         }
                     }
-                    const nomeDoItem = it => {
-                        const d = [...it.querySelectorAll('div')].find(x => x.children.length === 0 && x.textContent?.trim().length > 0);
-                        return (d?.textContent || it.querySelector('img')?.alt || '').trim().toLowerCase()
-                            .replace(/ _$/, '')
-                            .replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '').trim();
-                    };
-                    // Prefere nome exato entre os que têm miniatura (ajuda com nomes
-                    // repetidos), mas NUNCA deixa de escolher: se nada casar, usa o
-                    // primeiro — que era o comportamento original e comprovado.
-                    const midias = [...items].filter(it => it.querySelector('img'));
-                    const exatas = midias.filter(it => {
-                        const n = nomeDoItem(it);
-                        return n === cleanSearch || n === nameLower;
-                    });
-                    const chosen = exatas[0] || bestItem || midias[0] || items[0];
-                    if (!chosen) continue;
+                    const chosen = bestItem || items[0];
                     target = chosen.querySelector('div[role="button"]') || chosen.querySelector('img')?.closest('div') || chosen.querySelector('div');
                     if (target) break;
                 }
             }
             if (!target) throw new Error(`Sem resultado para "${name}"`);
             await this.dynamicSleep([250, 400]);
-
-            const edAntes = this.getEditor();
-            const chipsAntes = edAntes ? edAntes.querySelectorAll('[data-slate-void="true"]').length : 0;
-
             target.click();
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                if (!document.querySelector('[role="dialog"]')) break;
+                if (!document.querySelector('[role="dialog"]')) return;
             }
-            await this.closeDialogSafely();
-
-            // Só AVISA se a referência não entrou — não derruba mais o prompt.
-            // (Transformar isso em erro criava um ciclo de retry que quebrava o Flow.)
-            const edDepois = this.getEditor();
-            const chipsDepois = edDepois ? edDepois.querySelectorAll('[data-slate-void="true"]').length : 0;
-            if (chipsDepois <= chipsAntes) {
-                this.logDebug(`⚠️ A referência "${name}" pode não ter entrado no prompt.`, 'warning');
-            }
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
         }
 
         // ============================================
@@ -2071,77 +2044,6 @@ clearReferencesForUI(source = 'images') {
     throw new Error('Clique de envio não confirmado pelo Flow');
 }
 
-        /**
-         * Tenta voltar a um estado utilizável SEM recarregar a página:
-         * fecha diálogos abertos e limpa o editor. Retorna true se o editor
-         * ainda está vivo (dá pra seguir para o próximo prompt).
-         */
-        async recoverFromError() {
-            try {
-                await this.closeDialogSafely();
-                if (this.getEditor()) { try { await this.clearEditor(); } catch (_) {} }
-                await this.dynamicSleep([600, 1000]);
-                const body = document.body?.innerText || '';
-                const paginaMorta = body.includes('Application error') && body.includes('client-side exception');
-                return !!this.getEditor() && !paginaMorta;
-            } catch (_) {
-                return false;
-            }
-        }
-
-        /**
-         * Se a rodada começou DENTRO de uma coleção, garante que continuamos nela.
-         * O Flow costuma jogar a página de volta pro projeto ao gerar; aqui voltamos
-         * usando o roteador interno (navegação sem recarregar, então a automação segue viva).
-         */
-        async ensureCollection() {
-            const alvo = this._colecaoPath;
-            if (!alvo || location.pathname === alvo) return;
-            try {
-                const r = window.next && window.next.router;
-                if (r && typeof r.push === 'function') {
-                    this.logDebug('↩️ Saiu da coleção — voltando pra ela...', 'warning');
-                    r.push(alvo.replace(/^\/fx/, ''));
-                    await this.sleep(1600);
-                    await this.waitFor(() => !!this.getEditor(), 6000);
-                    await this.dynamicSleep([400, 700]);
-                }
-            } catch (_) {}
-        }
-
-        /**
-         * Correção SUAVE da URL: o seletor "@" de referências faz um pushState que
-         * tira a página da coleção. Aqui devolvemos a URL com replaceState — que NÃO
-         * re-renderiza, então o prompt já montado no editor é preservado (com
-         * router.push o texto seria apagado).
-         */
-        /**
-         * Fecha um diálogo aberto SEM deixar a página navegar.
-         * IMPORTANTE: o Escape faz o Flow voltar no histórico — apertar várias vezes
-         * joga a página pra fora da coleção (e até do projeto). Então: no máximo UM
-         * Escape, e se a URL mudar, devolvemos com replaceState (não re-renderiza).
-         */
-        async closeDialogSafely() {
-            const urlAntes = location.pathname;
-            if (document.querySelector('[role="dialog"], [role="presentation"]')) {
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                await this.sleep(500);
-            }
-            if (location.pathname !== urlAntes) {
-                try { history.replaceState({}, '', urlAntes); } catch (_) {}
-                this.logDebug('📁 O Escape mexeu na URL — devolvida para onde estava.', 'info');
-            }
-        }
-
-        ensureCollectionSoft() {
-            const alvo = this._colecaoPath;
-            if (!alvo || location.pathname === alvo) return;
-            try {
-                history.replaceState({}, '', alvo);
-                this.logDebug('📁 URL devolvida para a coleção (prompt preservado).', 'info');
-            } catch (_) {}
-        }
-
         async prepareAndSubmit(promptObj) {
             const MAX_SUBMIT_RETRIES = 2;
 
@@ -2193,24 +2095,15 @@ clearReferencesForUI(source = 'images') {
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         }
                     }
-                    this.ensureCollectionSoft();   // o seletor @ tira da coleção; devolve antes de enviar
                     await this.clickSubmit();
                     this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
                     return true;
                 } catch (err) {
                     this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
 
-                    // Flow acusou erro: tenta se recuperar SEM recarregar, pra não
-                    // perder a fila nem ficar parado. Só recarrega se a página
-                    // realmente morreu (editor sumiu) — aí não há o que fazer.
+                    // Detecta crash do Flow e tenta recuperar
                     if (this.isFlowCrashed()) {
-                        this.logDebug('🔴 Flow acusou erro. Tentando recuperar sem recarregar...', 'error');
-                        const recuperou = await this.recoverFromError();
-                        if (recuperou) {
-                            this.logDebug(`⏭️ Recuperado — prompt ${promptObj.promptNum} será pulado.`, 'warning');
-                            return false;
-                        }
-                        this.logDebug('🔴 Página não respondeu à recuperação. Salvando e recarregando em 3s...', 'error');
+                        this.logDebug('🔴 Flow crashou! Salvando estado e recarregando em 3s...', 'error');
                         this.saveRunState(promptObj.promptNum);
                         await this.sleep(3000);
                         location.reload();
@@ -2380,9 +2273,6 @@ clearReferencesForUI(source = 'images') {
 
             this.isRunning = true;
             this.shouldStop = false;
-            this._puladosPorErro = [];
-            this._colecaoPath = /\/collection\/[a-f0-9-]{36}/.test(location.pathname) ? location.pathname : null;
-            if (this._colecaoPath) this.logDebug('📁 Rodando dentro de uma coleção — vou manter a página nela.', 'info');
             document.getElementById('flow-start-btn').disabled = true;
             document.getElementById('flow-stop-btn').disabled  = false;
             document.getElementById('flow-prompts-input').disabled = true;
@@ -2462,22 +2352,8 @@ clearReferencesForUI(source = 'images') {
                     this.setStatus('info', `⚡ Submetendo lote ${bIdx+1}/${batches.length}...`);
                     for (let pi = 0; pi < batch.length; pi++) {
                         if (this.shouldStop) break;
-                        await this.ensureCollection();   // envia sempre de dentro da coleção
                         const ok = await this.prepareAndSubmit(batch[pi]);
-                        if (!ok) {
-                            // Parada do usuário: sai. Erro no prompt: PULA e segue,
-                            // mantendo as configurações — não trava mais a fila inteira.
-                            if (this.shouldStop) break;
-                            const num = batch[pi].promptNum;
-                            (this._puladosPorErro = this._puladosPorErro || []).push(num);
-                            const gi = this.prompts.findIndex(x => x.promptNum === num);
-                            if (gi >= 0) this.updatePromptItemStatus(gi, 'error');
-                            this.logDebug(`⏭️ Prompt ${num} PULADO por erro — seguindo para o próximo.`, 'error');
-                            this.setStatus('warning', `⏭️ Prompt ${num} pulado por erro — seguindo.`);
-                            await this.recoverFromError();
-                            await this.dynamicSleep([800, 1200]);
-                            continue;
-                        }
+                        if (!ok) break;
                         if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
                     }
                     if (this.shouldStop) break;
@@ -2642,10 +2518,6 @@ if (this.genMode === 'refs') {
 }
                     // Popup com detalhes de falhas
                     let popupMsg = `${doneCount} prompt(s) gerado(s) com sucesso.`;
-                    if (this._puladosPorErro && this._puladosPorErro.length) {
-                        popupMsg += `\n\n⏭️ Pulados por erro: ${[...new Set(this._puladosPorErro)].join(', ')}`;
-                        this.logDebug(`⏭️ Prompts pulados por erro: ${[...new Set(this._puladosPorErro)].join(', ')}`, 'error');
-                    }
                     if (this.genMode === 'refs') popupMsg += '\n\nArraste as referências do painel superior para as imagens desejadas.';
                     else if (this.genMode === 'scenes') popupMsg += '\n\nArraste as cenas do painel superior para as imagens desejadas.';
 
@@ -4335,9 +4207,6 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
 
             this.videoIsRunning = true;
             this.videoShouldStop = false;
-            this._puladosPorErro = [];
-            this._colecaoPath = /\/collection\/[a-f0-9-]{36}/.test(location.pathname) ? location.pathname : null;
-            if (this._colecaoPath) this.logVideoDebug('📁 Rodando dentro de uma coleção — vou manter a página nela.', 'info');
             document.getElementById('fv-start-btn').disabled = true;
             document.getElementById('fv-stop-btn').disabled  = false;
             document.getElementById('fv-prompts-input').disabled = true;
@@ -4417,19 +4286,8 @@ this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
                     this.setVideoStatus('info', `⚡ Submetendo lote ${bIdx+1}/${batches.length}...`);
                     for (let pi = 0; pi < batch.length; pi++) {
                         if (this.videoShouldStop) break;
-                        await this.ensureCollection();   // envia sempre de dentro da coleção
                         const ok = await this.prepareAndSubmit(batch[pi]);
-                        if (!ok) {
-                            // Parada do usuário: sai. Erro no prompt: PULA e segue.
-                            if (this.videoShouldStop) break;
-                            const num = batch[pi].promptNum;
-                            (this._puladosPorErro = this._puladosPorErro || []).push(num);
-                            this.logVideoDebug(`⏭️ Prompt ${num} PULADO por erro — seguindo para o próximo.`, 'error');
-                            this.setVideoStatus('warning', `⏭️ Prompt ${num} pulado por erro — seguindo.`);
-                            await this.recoverFromError();
-                            await this.dynamicSleep([800, 1200]);
-                            continue;
-                        }
+                        if (!ok) break;
                         if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
                     }
                     if (this.videoShouldStop) break;
@@ -4599,10 +4457,6 @@ if (this.videoGenMode === 'scenes') {
 }
                     // Popup com detalhes
                     let popupMsg = `${doneCount} prompt(s) de vídeo gerado(s) com sucesso.`;
-                    if (this._puladosPorErro && this._puladosPorErro.length) {
-                        popupMsg += `\n\n⏭️ Pulados por erro: ${[...new Set(this._puladosPorErro)].join(', ')}`;
-                        this.logVideoDebug(`⏭️ Prompts pulados por erro: ${[...new Set(this._puladosPorErro)].join(', ')}`, 'error');
-                    }
                     if (this.videoGenMode === 'scenes') popupMsg += '\n\nArraste as cenas do painel superior para os melhores vídeos.';
 
                     // Coleta mídias geradas nesta execução
@@ -5133,11 +4987,16 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                     this.setVideoStatus('error', '❌ O upscale parou porque a página saiu do projeto. Volte ao projeto e tente novamente.');
                     break;
                 }
-                // Estar numa subrota do mesmo projeto (/collection/, /edit/) NÃO atrapalha:
-                // os tiles continuam acessíveis e o upscale roda normal. Não navegamos mais
-                // sozinhos aqui — history.back() corria o risco de tirar você do projeto.
+                // Continua no MESMO projeto, mas drifou pra uma subrota (/edit/, /collection/, etc)?
+                // Volta pra grade (history.back é client-side, não recarrega, então o loop sobrevive).
                 if (location.href !== projectUrl) {
-                    this.logVideoDebug(`ℹ️ Em uma subrota do projeto (${location.href.slice(-40)}) — seguindo normalmente.`, 'info');
+                    this.logVideoDebug(`↩️ Página saiu da grade (${location.href}); voltando...`, 'warning');
+                    for (let back = 0; back < 3 && location.href !== projectUrl; back++) {
+                        history.back();
+                        await this.sleep(1200);
+                    }
+                    await this.waitFor(() => document.querySelectorAll('[data-tile-id]').length > 0, 6000);
+                    await this.sleep(400);
                 }
 
                 try {
