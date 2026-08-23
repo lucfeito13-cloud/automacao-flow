@@ -2095,6 +2095,26 @@ clearReferencesForUI(source = 'images') {
             }
         }
 
+        /**
+         * Se a rodada começou DENTRO de uma coleção, garante que continuamos nela.
+         * O Flow costuma jogar a página de volta pro projeto ao gerar; aqui voltamos
+         * usando o roteador interno (navegação sem recarregar, então a automação segue viva).
+         */
+        async ensureCollection() {
+            const alvo = this._colecaoPath;
+            if (!alvo || location.pathname === alvo) return;
+            try {
+                const r = window.next && window.next.router;
+                if (r && typeof r.push === 'function') {
+                    this.logDebug('↩️ Saiu da coleção — voltando pra ela...', 'warning');
+                    r.push(alvo.replace(/^\/fx/, ''));
+                    await this.sleep(1600);
+                    await this.waitFor(() => !!this.getEditor(), 6000);
+                    await this.dynamicSleep([400, 700]);
+                }
+            } catch (_) {}
+        }
+
         async prepareAndSubmit(promptObj) {
             const MAX_SUBMIT_RETRIES = 2;
 
@@ -2333,6 +2353,8 @@ clearReferencesForUI(source = 'images') {
             this.isRunning = true;
             this.shouldStop = false;
             this._puladosPorErro = [];
+            this._colecaoPath = /\/collection\/[a-f0-9-]{36}/.test(location.pathname) ? location.pathname : null;
+            if (this._colecaoPath) this.logDebug('📁 Rodando dentro de uma coleção — vou manter a página nela.', 'info');
             document.getElementById('flow-start-btn').disabled = true;
             document.getElementById('flow-stop-btn').disabled  = false;
             document.getElementById('flow-prompts-input').disabled = true;
@@ -2412,6 +2434,7 @@ clearReferencesForUI(source = 'images') {
                     this.setStatus('info', `⚡ Submetendo lote ${bIdx+1}/${batches.length}...`);
                     for (let pi = 0; pi < batch.length; pi++) {
                         if (this.shouldStop) break;
+                        await this.ensureCollection();   // envia sempre de dentro da coleção
                         const ok = await this.prepareAndSubmit(batch[pi]);
                         if (!ok) {
                             // Parada do usuário: sai. Erro no prompt: PULA e segue,
@@ -4285,6 +4308,8 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
             this.videoIsRunning = true;
             this.videoShouldStop = false;
             this._puladosPorErro = [];
+            this._colecaoPath = /\/collection\/[a-f0-9-]{36}/.test(location.pathname) ? location.pathname : null;
+            if (this._colecaoPath) this.logVideoDebug('📁 Rodando dentro de uma coleção — vou manter a página nela.', 'info');
             document.getElementById('fv-start-btn').disabled = true;
             document.getElementById('fv-stop-btn').disabled  = false;
             document.getElementById('fv-prompts-input').disabled = true;
@@ -4364,6 +4389,7 @@ this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
                     this.setVideoStatus('info', `⚡ Submetendo lote ${bIdx+1}/${batches.length}...`);
                     for (let pi = 0; pi < batch.length; pi++) {
                         if (this.videoShouldStop) break;
+                        await this.ensureCollection();   // envia sempre de dentro da coleção
                         const ok = await this.prepareAndSubmit(batch[pi]);
                         if (!ok) {
                             // Parada do usuário: sai. Erro no prompt: PULA e segue.
