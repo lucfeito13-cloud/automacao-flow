@@ -2115,6 +2115,21 @@ clearReferencesForUI(source = 'images') {
             } catch (_) {}
         }
 
+        /**
+         * Correção SUAVE da URL: o seletor "@" de referências faz um pushState que
+         * tira a página da coleção. Aqui devolvemos a URL com replaceState — que NÃO
+         * re-renderiza, então o prompt já montado no editor é preservado (com
+         * router.push o texto seria apagado).
+         */
+        ensureCollectionSoft() {
+            const alvo = this._colecaoPath;
+            if (!alvo || location.pathname === alvo) return;
+            try {
+                history.replaceState({}, '', alvo);
+                this.logDebug('📁 URL devolvida para a coleção (prompt preservado).', 'info');
+            } catch (_) {}
+        }
+
         async prepareAndSubmit(promptObj) {
             const MAX_SUBMIT_RETRIES = 2;
 
@@ -2166,6 +2181,7 @@ clearReferencesForUI(source = 'images') {
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
                         }
                     }
+                    this.ensureCollectionSoft();   // o seletor @ tira da coleção; devolve antes de enviar
                     await this.clickSubmit();
                     this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
                     return true;
