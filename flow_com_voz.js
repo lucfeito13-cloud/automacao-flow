@@ -5079,16 +5079,11 @@ this.setVideoStatus('info', `🚀 Pedindo upscale: ${videoLabel}`);
                     this.setVideoStatus('error', '❌ O upscale parou porque a página saiu do projeto. Volte ao projeto e tente novamente.');
                     break;
                 }
-                // Continua no MESMO projeto, mas drifou pra uma subrota (/edit/, /collection/, etc)?
-                // Volta pra grade (history.back é client-side, não recarrega, então o loop sobrevive).
+                // Estar numa subrota do mesmo projeto (/collection/, /edit/) NÃO atrapalha:
+                // os tiles continuam acessíveis e o upscale roda normal. Não navegamos mais
+                // sozinhos aqui — history.back() corria o risco de tirar você do projeto.
                 if (location.href !== projectUrl) {
-                    this.logVideoDebug(`↩️ Página saiu da grade (${location.href}); voltando...`, 'warning');
-                    for (let back = 0; back < 3 && location.href !== projectUrl; back++) {
-                        history.back();
-                        await this.sleep(1200);
-                    }
-                    await this.waitFor(() => document.querySelectorAll('[data-tile-id]').length > 0, 6000);
-                    await this.sleep(400);
+                    this.logVideoDebug(`ℹ️ Em uma subrota do projeto (${location.href.slice(-40)}) — seguindo normalmente.`, 'info');
                 }
 
                 try {
