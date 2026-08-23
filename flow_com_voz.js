@@ -1917,20 +1917,49 @@ clearReferencesForUI(source = 'images') {
                             break;
                         }
                     }
-                    const chosen = bestItem || items[0];
+                    const nomeDoItem = it => {
+                        const d = [...it.querySelectorAll('div')].find(x => x.children.length === 0 && x.textContent?.trim().length > 0);
+                        return (d?.textContent || it.querySelector('img')?.alt || '').trim().toLowerCase()
+                            .replace(/ _$/, '')
+                            .replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '').trim();
+                    };
+                    const midias = [...items].filter(it => it.querySelector('img'));
+                    const exatas = midias.filter(it => {
+                        const n = nomeDoItem(it);
+                        return n === cleanSearch || n === nameLower;
+                    });
+                    const chosen = exatas[0]
+                        || ((bestItem && bestItem.querySelector('img')) ? bestItem : null)
+                        || midias[0];
+                    if (!chosen) continue;
                     target = chosen.querySelector('div[role="button"]') || chosen.querySelector('img')?.closest('div') || chosen.querySelector('div');
                     if (target) break;
                 }
             }
             if (!target) throw new Error(`Sem resultado para "${name}"`);
             await this.dynamicSleep([250, 400]);
+
+            const edAntes = this.getEditor();
+            const chipsAntes = edAntes ? edAntes.querySelectorAll('[data-slate-void="true"]').length : 0;
+
             target.click();
             await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
             for (let i = 0; i < 20; i++) {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
-                if (!document.querySelector('[role="dialog"]')) return;
+                if (!document.querySelector('[role="dialog"]')) break;
             }
-            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+            if (document.querySelector('[role="dialog"]')) {
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                await this.dynamicSleep([300, 500]);
+            }
+
+            // Confirma que a referência REALMENTE entrou no prompt. Sem isso o
+            // envio ia adiante sem a imagem (ou com o seletor tendo entrado numa coleção).
+            const edDepois = this.getEditor();
+            const chipsDepois = edDepois ? edDepois.querySelectorAll('[data-slate-void="true"]').length : 0;
+            if (chipsDepois <= chipsAntes) {
+                throw new Error(`Referência "${name}" não entrou no prompt`);
+            }
         }
 
         // ============================================
@@ -2044,6 +2073,28 @@ clearReferencesForUI(source = 'images') {
     throw new Error('Clique de envio não confirmado pelo Flow');
 }
 
+        /**
+         * Tenta voltar a um estado utilizável SEM recarregar a página:
+         * fecha diálogos abertos e limpa o editor. Retorna true se o editor
+         * ainda está vivo (dá pra seguir para o próximo prompt).
+         */
+        async recoverFromError() {
+            try {
+                for (let i = 0; i < 4; i++) {
+                    if (!document.querySelector('[role="dialog"], [role="presentation"]')) break;
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                    await this.sleep(400);
+                }
+                if (this.getEditor()) { try { await this.clearEditor(); } catch (_) {} }
+                await this.dynamicSleep([600, 1000]);
+                const body = document.body?.innerText || '';
+                const paginaMorta = body.includes('Application error') && body.includes('client-side exception');
+                return !!this.getEditor() && !paginaMorta;
+            } catch (_) {
+                return false;
+            }
+        }
+
         async prepareAndSubmit(promptObj) {
             const MAX_SUBMIT_RETRIES = 2;
 
@@ -2101,9 +2152,17 @@ clearReferencesForUI(source = 'images') {
                 } catch (err) {
                     this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
 
-                    // Detecta crash do Flow e tenta recuperar
+                    // Flow acusou erro: tenta se recuperar SEM recarregar, pra não
+                    // perder a fila nem ficar parado. Só recarrega se a página
+                    // realmente morreu (editor sumiu) — aí não há o que fazer.
                     if (this.isFlowCrashed()) {
-                        this.logDebug('🔴 Flow crashou! Salvando estado e recarregando em 3s...', 'error');
+                        this.logDebug('🔴 Flow acusou erro. Tentando recuperar sem recarregar...', 'error');
+                        const recuperou = await this.recoverFromError();
+                        if (recuperou) {
+                            this.logDebug(`⏭️ Recuperado — prompt ${promptObj.promptNum} será pulado.`, 'warning');
+                            return false;
+                        }
+                        this.logDebug('🔴 Página não respondeu à recuperação. Salvando e recarregando em 3s...', 'error');
                         this.saveRunState(promptObj.promptNum);
                         await this.sleep(3000);
                         location.reload();
@@ -2273,6 +2332,7 @@ clearReferencesForUI(source = 'images') {
 
             this.isRunning = true;
             this.shouldStop = false;
+            this._puladosPorErro = [];
             document.getElementById('flow-start-btn').disabled = true;
             document.getElementById('flow-stop-btn').disabled  = false;
             document.getElementById('flow-prompts-input').disabled = true;
@@ -2353,7 +2413,20 @@ clearReferencesForUI(source = 'images') {
                     for (let pi = 0; pi < batch.length; pi++) {
                         if (this.shouldStop) break;
                         const ok = await this.prepareAndSubmit(batch[pi]);
-                        if (!ok) break;
+                        if (!ok) {
+                            // Parada do usuário: sai. Erro no prompt: PULA e segue,
+                            // mantendo as configurações — não trava mais a fila inteira.
+                            if (this.shouldStop) break;
+                            const num = batch[pi].promptNum;
+                            (this._puladosPorErro = this._puladosPorErro || []).push(num);
+                            const gi = this.prompts.findIndex(x => x.promptNum === num);
+                            if (gi >= 0) this.updatePromptItemStatus(gi, 'error');
+                            this.logDebug(`⏭️ Prompt ${num} PULADO por erro — seguindo para o próximo.`, 'error');
+                            this.setStatus('warning', `⏭️ Prompt ${num} pulado por erro — seguindo.`);
+                            await this.recoverFromError();
+                            await this.dynamicSleep([800, 1200]);
+                            continue;
+                        }
                         if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
                     }
                     if (this.shouldStop) break;
@@ -2518,6 +2591,10 @@ if (this.genMode === 'refs') {
 }
                     // Popup com detalhes de falhas
                     let popupMsg = `${doneCount} prompt(s) gerado(s) com sucesso.`;
+                    if (this._puladosPorErro && this._puladosPorErro.length) {
+                        popupMsg += `\n\n⏭️ Pulados por erro: ${[...new Set(this._puladosPorErro)].join(', ')}`;
+                        this.logDebug(`⏭️ Prompts pulados por erro: ${[...new Set(this._puladosPorErro)].join(', ')}`, 'error');
+                    }
                     if (this.genMode === 'refs') popupMsg += '\n\nArraste as referências do painel superior para as imagens desejadas.';
                     else if (this.genMode === 'scenes') popupMsg += '\n\nArraste as cenas do painel superior para as imagens desejadas.';
 
@@ -4207,6 +4284,7 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
 
             this.videoIsRunning = true;
             this.videoShouldStop = false;
+            this._puladosPorErro = [];
             document.getElementById('fv-start-btn').disabled = true;
             document.getElementById('fv-stop-btn').disabled  = false;
             document.getElementById('fv-prompts-input').disabled = true;
@@ -4287,7 +4365,17 @@ this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
                     for (let pi = 0; pi < batch.length; pi++) {
                         if (this.videoShouldStop) break;
                         const ok = await this.prepareAndSubmit(batch[pi]);
-                        if (!ok) break;
+                        if (!ok) {
+                            // Parada do usuário: sai. Erro no prompt: PULA e segue.
+                            if (this.videoShouldStop) break;
+                            const num = batch[pi].promptNum;
+                            (this._puladosPorErro = this._puladosPorErro || []).push(num);
+                            this.logVideoDebug(`⏭️ Prompt ${num} PULADO por erro — seguindo para o próximo.`, 'error');
+                            this.setVideoStatus('warning', `⏭️ Prompt ${num} pulado por erro — seguindo.`);
+                            await this.recoverFromError();
+                            await this.dynamicSleep([800, 1200]);
+                            continue;
+                        }
                         if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
                     }
                     if (this.videoShouldStop) break;
@@ -4457,6 +4545,10 @@ if (this.videoGenMode === 'scenes') {
 }
                     // Popup com detalhes
                     let popupMsg = `${doneCount} prompt(s) de vídeo gerado(s) com sucesso.`;
+                    if (this._puladosPorErro && this._puladosPorErro.length) {
+                        popupMsg += `\n\n⏭️ Pulados por erro: ${[...new Set(this._puladosPorErro)].join(', ')}`;
+                        this.logVideoDebug(`⏭️ Prompts pulados por erro: ${[...new Set(this._puladosPorErro)].join(', ')}`, 'error');
+                    }
                     if (this.videoGenMode === 'scenes') popupMsg += '\n\nArraste as cenas do painel superior para os melhores vídeos.';
 
                     // Coleta mídias geradas nesta execução
