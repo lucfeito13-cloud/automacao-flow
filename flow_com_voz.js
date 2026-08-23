@@ -1948,10 +1948,7 @@ clearReferencesForUI(source = 'images') {
                 await this.dynamicSleep(CONFIG.DELAY_SHORT);
                 if (!document.querySelector('[role="dialog"]')) break;
             }
-            if (document.querySelector('[role="dialog"]')) {
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                await this.dynamicSleep([300, 500]);
-            }
+            await this.closeDialogSafely();
 
             // Confirma que a referência REALMENTE entrou no prompt. Sem isso o
             // envio ia adiante sem a imagem (ou com o seletor tendo entrado numa coleção).
@@ -2080,11 +2077,7 @@ clearReferencesForUI(source = 'images') {
          */
         async recoverFromError() {
             try {
-                for (let i = 0; i < 4; i++) {
-                    if (!document.querySelector('[role="dialog"], [role="presentation"]')) break;
-                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                    await this.sleep(400);
-                }
+                await this.closeDialogSafely();
                 if (this.getEditor()) { try { await this.clearEditor(); } catch (_) {} }
                 await this.dynamicSleep([600, 1000]);
                 const body = document.body?.innerText || '';
@@ -2121,6 +2114,24 @@ clearReferencesForUI(source = 'images') {
          * re-renderiza, então o prompt já montado no editor é preservado (com
          * router.push o texto seria apagado).
          */
+        /**
+         * Fecha um diálogo aberto SEM deixar a página navegar.
+         * IMPORTANTE: o Escape faz o Flow voltar no histórico — apertar várias vezes
+         * joga a página pra fora da coleção (e até do projeto). Então: no máximo UM
+         * Escape, e se a URL mudar, devolvemos com replaceState (não re-renderiza).
+         */
+        async closeDialogSafely() {
+            const urlAntes = location.pathname;
+            if (document.querySelector('[role="dialog"], [role="presentation"]')) {
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                await this.sleep(500);
+            }
+            if (location.pathname !== urlAntes) {
+                try { history.replaceState({}, '', urlAntes); } catch (_) {}
+                this.logDebug('📁 O Escape mexeu na URL — devolvida para onde estava.', 'info');
+            }
+        }
+
         ensureCollectionSoft() {
             const alvo = this._colecaoPath;
             if (!alvo || location.pathname === alvo) return;
