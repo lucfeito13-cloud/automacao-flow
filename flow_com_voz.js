@@ -1923,14 +1923,15 @@ clearReferencesForUI(source = 'images') {
                             .replace(/ _$/, '')
                             .replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '').trim();
                     };
+                    // Prefere nome exato entre os que têm miniatura (ajuda com nomes
+                    // repetidos), mas NUNCA deixa de escolher: se nada casar, usa o
+                    // primeiro — que era o comportamento original e comprovado.
                     const midias = [...items].filter(it => it.querySelector('img'));
                     const exatas = midias.filter(it => {
                         const n = nomeDoItem(it);
                         return n === cleanSearch || n === nameLower;
                     });
-                    const chosen = exatas[0]
-                        || ((bestItem && bestItem.querySelector('img')) ? bestItem : null)
-                        || midias[0];
+                    const chosen = exatas[0] || bestItem || midias[0] || items[0];
                     if (!chosen) continue;
                     target = chosen.querySelector('div[role="button"]') || chosen.querySelector('img')?.closest('div') || chosen.querySelector('div');
                     if (target) break;
@@ -1950,12 +1951,12 @@ clearReferencesForUI(source = 'images') {
             }
             await this.closeDialogSafely();
 
-            // Confirma que a referência REALMENTE entrou no prompt. Sem isso o
-            // envio ia adiante sem a imagem (ou com o seletor tendo entrado numa coleção).
+            // Só AVISA se a referência não entrou — não derruba mais o prompt.
+            // (Transformar isso em erro criava um ciclo de retry que quebrava o Flow.)
             const edDepois = this.getEditor();
             const chipsDepois = edDepois ? edDepois.querySelectorAll('[data-slate-void="true"]').length : 0;
             if (chipsDepois <= chipsAntes) {
-                throw new Error(`Referência "${name}" não entrou no prompt`);
+                this.logDebug(`⚠️ A referência "${name}" pode não ter entrado no prompt.`, 'warning');
             }
         }
 
