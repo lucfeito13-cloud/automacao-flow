@@ -633,18 +633,18 @@ function triggerTrustedClick(el) {
             </div>
             <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <div class="flow-option-text">
-                <div class="flow-option-title">⏱️ Tempos da espera <span style="font-weight:400;color:var(--cd-text-light);">(imagens e vídeos)</span></div>
-                <div class="flow-option-desc">Ajuste fino. Valores menores = mais rápido; maiores = mais paciente.</div>
+                <div class="flow-option-title">⏱️ Tempos</div>
+                <div class="flow-option-desc">Os botões acima preenchem estes valores. Você pode ajustar à mão. Vale para imagens e vídeos.</div>
               </div>
               <div style="display:grid;grid-template-columns:1fr auto;gap:6px 8px;width:100%;align-items:center;font-size:12px;">
+                <label for="flow-t-lotes"><b>Pausa entre lotes (seg)</b><br><span style="color:var(--cd-text-light);font-size:11px;">Descanso após um lote terminar</span></label>
+                <input type="number" id="flow-t-lotes" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0" max="60" step="0.5" value="2">
                 <label for="flow-t-poll">Checar a cada (seg)</label>
-                <input type="number" id="flow-t-poll" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0.3" max="10" step="0.1" value="0.9">
+                <input type="number" id="flow-t-poll" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0.3" max="10" step="0.1" value="1">
                 <label for="flow-t-estab">Confirmar por (seg)</label>
-                <input type="number" id="flow-t-estab" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0" max="60" step="0.5" value="2">
+                <input type="number" id="flow-t-estab" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0" max="60" step="0.5" value="2.5">
                 <label for="flow-t-semprog">Desistir sem progresso (min)</label>
-                <input type="number" id="flow-t-semprog" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0.5" max="30" step="0.5" value="2.5">
-                <label for="flow-t-lotes">Pausa entre lotes (seg)</label>
-                <input type="number" id="flow-t-lotes" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0" max="30" step="0.5" value="1.3">
+                <input type="number" id="flow-t-semprog" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0.5" max="30" step="0.5" value="3">
               </div>
               <button class="flow-validate-btn" id="flow-t-reset" style="margin-top:2px;">↩️ Restaurar padrão</button>
               <div id="flow-t-info" style="font-size:11px;color:var(--cd-text-light);"></div>
@@ -820,6 +820,25 @@ function triggerTrustedClick(el) {
                 <button class="flow-mode-btn active" data-speed="normal">🔄 Normal</button>
                 <button class="flow-mode-btn" data-speed="fast">⚡ Rápido</button>
               </div>
+              <div id="fv-speed-info" style="font-size:11px;color:var(--cd-text-light);">Velocidade: Normal (1.0×)</div>
+            </div>
+            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+              <div class="flow-option-text">
+                <div class="flow-option-title">⏱️ Tempos</div>
+                <div class="flow-option-desc">Os botões acima preenchem estes valores. Você pode ajustar à mão. Vale para imagens e vídeos.</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr auto;gap:6px 8px;width:100%;align-items:center;font-size:12px;">
+                <label for="fv-t-lotes"><b>Pausa entre lotes (seg)</b><br><span style="color:var(--cd-text-light);font-size:11px;">Descanso após um lote terminar</span></label>
+                <input type="number" id="fv-t-lotes" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0" max="60" step="0.5" value="2">
+                <label for="fv-t-poll">Checar a cada (seg)</label>
+                <input type="number" id="fv-t-poll" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0.3" max="10" step="0.1" value="1">
+                <label for="fv-t-estab">Confirmar por (seg)</label>
+                <input type="number" id="fv-t-estab" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0" max="60" step="0.5" value="2.5">
+                <label for="fv-t-semprog">Desistir sem progresso (min)</label>
+                <input type="number" id="fv-t-semprog" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0.5" max="30" step="0.5" value="3">
+              </div>
+              <button class="flow-validate-btn" id="fv-t-reset" style="margin-top:2px;">↩️ Restaurar padrão</button>
+              <div id="fv-t-info" style="font-size:11px;color:var(--cd-text-light);"></div>
             </div>
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <input type="checkbox" id="fv-defer-retry">
@@ -1100,6 +1119,10 @@ if (fixUploadRefsBtn) {
                         if (infoEl) infoEl.textContent = `Velocidade: ${profile.label} (${profile.multiplier}×)`;
                         this.logDebug(`Velocidade: ${profile.label} (${profile.multiplier}×)`, 'info');
                     }
+                    // A velocidade É uma configuração: preenche os campos de tempo,
+                    // pra você VER o que cada perfil significa (e poder ajustar depois).
+                    const perfil = this.perfisTempo()[btn.dataset.speed];
+                    if (perfil) this.escreverTempos(perfil, `perfil ${btn.dataset.speed}`);
                 });
             });
 
@@ -1717,8 +1740,27 @@ clearReferencesForUI(source = 'images') {
         // TEMPOS AJUSTÁVEIS (valem para imagens e vídeos)
         // ──────────────────────────────────────────────
 
+        /**
+         * Espera EXATAMENTE o tempo escolhido no painel (com uma variaçãozinha de
+         * ±10% pra não ficar robótico). Não passa pelo multiplicador de velocidade —
+         * assim o número que aparece no painel é o número que acontece de verdade.
+         */
+        esperaFixa(ms) {
+            const base = Math.max(0, Number(ms) || 0);
+            return this.sleep(Math.round(base * (0.9 + Math.random() * 0.2)));
+        }
+
+        /** Cada velocidade é uma CONFIGURAÇÃO: ao clicar, preenche os campos abaixo. */
+        perfisTempo() {
+            return {
+                slow:   { lotes: 5,   poll: 2.0, estab: 5,   semProg: 6   },
+                normal: { lotes: 2,   poll: 1.0, estab: 2.5, semProg: 3   },
+                fast:   { lotes: 0.8, poll: 0.5, estab: 1,   semProg: 2   },
+            };
+        }
+
         temposPadrao() {
-            return { poll: 0.9, estab: 2, semProg: 2.5, lotes: 1.3 };
+            return Object.assign({}, this.perfisTempo().normal);
         }
 
         carregarTempos() {
@@ -1735,50 +1777,65 @@ clearReferencesForUI(source = 'images') {
             CONFIG.SEM_PROGRESSO_TIMEOUT  = Math.round(Math.max(0.5, t.semProg) * 60000);
             const lote                    = Math.round(Math.max(0, t.lotes) * 1000);
             CONFIG.DELAY_BETWEEN_BATCHES  = [lote, Math.round(lote * 1.4)];
-            const info = document.getElementById('flow-t-info');
-            if (info) info.textContent = `Checa ${t.poll}s • confirma ${t.estab}s • desiste após ${t.semProg}min sem progresso • ${t.lotes}s entre lotes`;
+            const resumo = `⏸️ ${t.lotes}s entre lotes • checa ${t.poll}s • confirma ${t.estab}s • desiste após ${t.semProg}min sem progresso`;
+            for (const id of ['flow-t-info', 'fv-t-info']) {
+                const info = document.getElementById(id);
+                if (info) info.textContent = resumo;
+            }
+        }
+
+        /** Cada tempo aparece em DOIS lugares: aba Imagens e aba Vídeos. */
+        camposTempo() {
+            return {
+                lotes:   ['flow-t-lotes',   'fv-t-lotes'],
+                poll:    ['flow-t-poll',    'fv-t-poll'],
+                estab:   ['flow-t-estab',   'fv-t-estab'],
+                semProg: ['flow-t-semprog', 'fv-t-semprog'],
+            };
+        }
+
+        /** Lê os campos de uma das abas (0 = Imagens, 1 = Vídeos). */
+        lerTempos(coluna = 0) {
+            const t = Object.assign({}, this.perfisTempo().normal);
+            for (const [k, ids] of Object.entries(this.camposTempo())) {
+                const v = parseFloat(document.getElementById(ids[coluna])?.value);
+                if (!isNaN(v)) t[k] = v;
+            }
+            return t;
+        }
+
+        /** Preenche os campos das DUAS abas, aplica e salva. */
+        escreverTempos(t, origem) {
+            for (const [k, ids] of Object.entries(this.camposTempo())) {
+                for (const id of ids) {
+                    const el = document.getElementById(id);
+                    if (el && t[k] != null) el.value = t[k];
+                }
+            }
+            this.aplicarTempos(t);
+            try { localStorage.setItem('flow_tempos', JSON.stringify(t)); } catch (_) {}
+            if (origem) this.logDebug(`⏱️ Tempos (${origem}): ${t.lotes}s entre lotes • checa ${t.poll}s • confirma ${t.estab}s • desiste após ${t.semProg}min.`, 'info');
         }
 
         setupTempos() {
-            const campos = { poll: 'flow-t-poll', estab: 'flow-t-estab', semProg: 'flow-t-semprog', lotes: 'flow-t-lotes' };
-            const ler = () => {
-                const t = this.temposPadrao();
-                for (const [k, id] of Object.entries(campos)) {
-                    const v = parseFloat(document.getElementById(id)?.value);
-                    if (!isNaN(v)) t[k] = v;
-                }
-                return t;
-            };
-            const escrever = t => {
-                for (const [k, id] of Object.entries(campos)) {
+            this.escreverTempos(this.carregarTempos());
+
+            for (const ids of Object.values(this.camposTempo())) {
+                ids.forEach((id, coluna) => {
                     const el = document.getElementById(id);
-                    if (el) el.value = t[k];
-                }
-            };
-
-            const inicial = this.carregarTempos();
-            escrever(inicial);
-            this.aplicarTempos(inicial);
-
-            for (const id of Object.values(campos)) {
-                const el = document.getElementById(id);
-                if (!el) continue;
-                el.addEventListener('change', () => {
-                    const t = ler();
-                    this.aplicarTempos(t);
-                    try { localStorage.setItem('flow_tempos', JSON.stringify(t)); } catch (_) {}
-                    this.logDebug(`⏱️ Tempos atualizados: checa ${t.poll}s, confirma ${t.estab}s, desiste após ${t.semProg}min, ${t.lotes}s entre lotes.`, 'info');
+                    if (!el) return;
+                    // Mexeu numa aba, a outra acompanha na hora.
+                    el.addEventListener('change', () => this.escreverTempos(this.lerTempos(coluna), 'ajuste manual'));
                 });
             }
 
-            const reset = document.getElementById('flow-t-reset');
-            if (reset) reset.addEventListener('click', () => {
-                const t = this.temposPadrao();
-                escrever(t);
-                this.aplicarTempos(t);
-                try { localStorage.removeItem('flow_tempos'); } catch (_) {}
-                this.logDebug('⏱️ Tempos restaurados para o padrão.', 'success');
-            });
+            for (const id of ['flow-t-reset', 'fv-t-reset']) {
+                const b = document.getElementById(id);
+                if (b) b.addEventListener('click', () => {
+                    try { localStorage.removeItem('flow_tempos'); } catch (_) {}
+                    this.escreverTempos(this.temposPadrao(), 'padrão restaurado');
+                });
+            }
         }
 
         tilesGerando() {
@@ -1840,7 +1897,7 @@ clearReferencesForUI(source = 'images') {
                 if (loaded + errors > 0) { detected = true; break; }
                 // Passou do tempo normal, mas ainda há tiles GERANDO? Continua esperando.
                 if (Date.now() - start >= CONFIG.GENERATION_TIMEOUT && this.tilesGerando() === 0) break;
-                await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
+                await this.esperaFixa(CONFIG.TILE_CHECK_INTERVAL);
             }
             if (!detected) { for (const s of matrix) s.state = 'error'; return; }
 
@@ -1882,7 +1939,7 @@ clearReferencesForUI(source = 'images') {
                     this.logDebug(`✅ Lote finalizado: ${loaded} ok, ${errors} erros`, 'success');
                     break;
                 }
-                await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
+                await this.esperaFixa(CONFIG.TILE_CHECK_INTERVAL);
             }
 
             // Carência: se ainda tem tile gerando, espera terminar antes de classificar.
@@ -1891,7 +1948,7 @@ clearReferencesForUI(source = 'images') {
                 this.logDebug(`⏳ Ainda há ${this.tilesGerando()} gerando — aguardando antes de classificar...`, 'info');
                 for (let g = 0; g < 25 && this.tilesGerando() > 0; g++) {
                     if (this.shouldStop || this.videoShouldStop) return;
-                    await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
+                    await this.esperaFixa(CONFIG.TILE_CHECK_INTERVAL);
                 }
             }
 
@@ -2584,7 +2641,7 @@ while (retryCount[key] < maxRetries && !this.shouldStop) {
                         }
                     }
 
-                    if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
+                    if (bIdx < batches.length - 1) await this.esperaFixa(CONFIG.DELAY_BETWEEN_BATCHES[0]);
                 }
 
                 // ══════ DEFERRED RETRY: retentar falhas acumuladas ══════
@@ -4522,7 +4579,7 @@ while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
                         }
                     }
 
-                    if (bIdx < batches.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_BATCHES);
+                    if (bIdx < batches.length - 1) await this.esperaFixa(CONFIG.DELAY_BETWEEN_BATCHES[0]);
                 }
 
                 // ══════ DEFERRED RETRY (Vídeos): retentar falhas acumuladas ══════
