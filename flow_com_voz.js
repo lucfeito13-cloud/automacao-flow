@@ -67,10 +67,10 @@
         DELAY_MEDIUM:           [400, 650],
         DELAY_LONG:            [800, 1200],
         DELAY_BETWEEN_SUBMITS: [2000, 3000],
-        DELAY_BETWEEN_BATCHES: [1500, 2500],
+        DELAY_BETWEEN_BATCHES: [1000, 1600],
         GENERATION_TIMEOUT:  180000,
-        TILE_CHECK_INTERVAL:   2000,
-        STABILIZE_TIME:        5000,
+        TILE_CHECK_INTERVAL:    900,
+        STABILIZE_TIME:        2000,
         MAX_RETRIES:              3,
         API_BASE: 'https://aisandbox-pa.googleapis.com/v1/flowWorkflows',
         REF_SUFFIX: ' _',
@@ -1730,10 +1730,12 @@ clearReferencesForUI(source = 'images') {
             let detected = false;
             while (Date.now() - start < CONFIG.GENERATION_TIMEOUT) {
                 if (this.shouldStop || this.videoShouldStop) return;
-                await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
+                // Confere ANTES de dormir: imagens costumam ficar prontas rápido e
+                // dormir primeiro custava um ciclo inteiro à toa.
                 if (scroller) scroller.scrollTop = 0;
-                const { loaded, errors, pending } = countStates();
+                const { loaded, errors } = countStates();
                 if (loaded + errors > 0) { detected = true; break; }
+                await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
             }
             if (!detected) { for (const s of matrix) s.state = 'error'; return; }
 
@@ -1741,7 +1743,6 @@ clearReferencesForUI(source = 'images') {
             let lastPending = -1, pendingZeroAt = null;
             while (Date.now() - start < CONFIG.GENERATION_TIMEOUT) {
                 if (this.shouldStop || this.videoShouldStop) return;
-                await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
                 if (scroller) scroller.scrollTop = 0;
                 const { loaded, errors, pending } = countStates();
                 if (pending !== lastPending) {
@@ -1749,10 +1750,17 @@ clearReferencesForUI(source = 'images') {
                     pendingZeroAt = pending === 0 ? Date.now() : null;
                     this.logDebug(`Progresso: ${loaded} ✅  ${errors} ❌  ${pending} ⏳`, 'info');
                 }
+                // TODOS os slots esperados já resolveram: não há nada pra "estabilizar",
+                // segue direto pro próximo lote em vez de esperar à toa.
+                if (loaded + errors >= matrix.length) {
+                    this.logDebug(`✅ Lote finalizado: ${loaded} ok, ${errors} erros`, 'success');
+                    break;
+                }
                 if (pending === 0 && (Date.now() - (pendingZeroAt || Date.now())) >= CONFIG.STABILIZE_TIME) {
                     this.logDebug(`✅ Lote finalizado: ${loaded} ok, ${errors} erros`, 'success');
                     break;
                 }
+                await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
             }
 
             // Fase 3: classifica slots — apenas os que NÃO foram confirmados durante polling
