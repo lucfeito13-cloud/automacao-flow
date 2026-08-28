@@ -631,6 +631,24 @@ function triggerTrustedClick(el) {
               </div>
               <div id="flow-speed-info" style="font-size:11px;color:var(--cd-text-light);">Velocidade: Normal (1.0×)</div>
             </div>
+            <div class="flow-option" style="flex-direction:column;align-items:flex-start;gap:8px;cursor:default;margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+              <div class="flow-option-text">
+                <div class="flow-option-title">⏱️ Tempos da espera <span style="font-weight:400;color:var(--cd-text-light);">(imagens e vídeos)</span></div>
+                <div class="flow-option-desc">Ajuste fino. Valores menores = mais rápido; maiores = mais paciente.</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr auto;gap:6px 8px;width:100%;align-items:center;font-size:12px;">
+                <label for="flow-t-poll">Checar a cada (seg)</label>
+                <input type="number" id="flow-t-poll" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0.3" max="10" step="0.1" value="0.9">
+                <label for="flow-t-estab">Confirmar por (seg)</label>
+                <input type="number" id="flow-t-estab" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0" max="60" step="0.5" value="2">
+                <label for="flow-t-semprog">Desistir sem progresso (min)</label>
+                <input type="number" id="flow-t-semprog" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0.5" max="30" step="0.5" value="2.5">
+                <label for="flow-t-lotes">Pausa entre lotes (seg)</label>
+                <input type="number" id="flow-t-lotes" class="flow-select-imgs" style="width:82px;padding:4px 6px;" min="0" max="30" step="0.5" value="1.3">
+              </div>
+              <button class="flow-validate-btn" id="flow-t-reset" style="margin-top:2px;">↩️ Restaurar padrão</button>
+              <div id="flow-t-info" style="font-size:11px;color:var(--cd-text-light);"></div>
+            </div>
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <input type="checkbox" id="flow-defer-retry">
               <div class="flow-option-text">
@@ -1084,6 +1102,9 @@ if (fixUploadRefsBtn) {
                     }
                 });
             });
+
+            // ── Tempos da espera (ajustáveis pelo usuário, valem p/ imagem e vídeo) ──
+            this.setupTempos();
 
             // ── Enum mode buttons (shared) ──
             document.querySelectorAll('[data-enum]').forEach(btn => {
@@ -1692,6 +1713,74 @@ clearReferencesForUI(source = 'images') {
          * Quantos tiles ainda estão GERANDO (o Flow mostra o progresso, ex: "38%").
          * Enquanto houver algum, não faz sentido desistir nem marcar como falha.
          */
+        // ──────────────────────────────────────────────
+        // TEMPOS AJUSTÁVEIS (valem para imagens e vídeos)
+        // ──────────────────────────────────────────────
+
+        temposPadrao() {
+            return { poll: 0.9, estab: 2, semProg: 2.5, lotes: 1.3 };
+        }
+
+        carregarTempos() {
+            try {
+                const salvo = JSON.parse(localStorage.getItem('flow_tempos') || 'null');
+                return Object.assign(this.temposPadrao(), salvo || {});
+            } catch (_) { return this.temposPadrao(); }
+        }
+
+        /** Escreve os valores escolhidos no CONFIG que a espera usa. */
+        aplicarTempos(t) {
+            CONFIG.TILE_CHECK_INTERVAL    = Math.round(Math.max(0.3, t.poll) * 1000);
+            CONFIG.STABILIZE_TIME         = Math.round(Math.max(0, t.estab) * 1000);
+            CONFIG.SEM_PROGRESSO_TIMEOUT  = Math.round(Math.max(0.5, t.semProg) * 60000);
+            const lote                    = Math.round(Math.max(0, t.lotes) * 1000);
+            CONFIG.DELAY_BETWEEN_BATCHES  = [lote, Math.round(lote * 1.4)];
+            const info = document.getElementById('flow-t-info');
+            if (info) info.textContent = `Checa ${t.poll}s • confirma ${t.estab}s • desiste após ${t.semProg}min sem progresso • ${t.lotes}s entre lotes`;
+        }
+
+        setupTempos() {
+            const campos = { poll: 'flow-t-poll', estab: 'flow-t-estab', semProg: 'flow-t-semprog', lotes: 'flow-t-lotes' };
+            const ler = () => {
+                const t = this.temposPadrao();
+                for (const [k, id] of Object.entries(campos)) {
+                    const v = parseFloat(document.getElementById(id)?.value);
+                    if (!isNaN(v)) t[k] = v;
+                }
+                return t;
+            };
+            const escrever = t => {
+                for (const [k, id] of Object.entries(campos)) {
+                    const el = document.getElementById(id);
+                    if (el) el.value = t[k];
+                }
+            };
+
+            const inicial = this.carregarTempos();
+            escrever(inicial);
+            this.aplicarTempos(inicial);
+
+            for (const id of Object.values(campos)) {
+                const el = document.getElementById(id);
+                if (!el) continue;
+                el.addEventListener('change', () => {
+                    const t = ler();
+                    this.aplicarTempos(t);
+                    try { localStorage.setItem('flow_tempos', JSON.stringify(t)); } catch (_) {}
+                    this.logDebug(`⏱️ Tempos atualizados: checa ${t.poll}s, confirma ${t.estab}s, desiste após ${t.semProg}min, ${t.lotes}s entre lotes.`, 'info');
+                });
+            }
+
+            const reset = document.getElementById('flow-t-reset');
+            if (reset) reset.addEventListener('click', () => {
+                const t = this.temposPadrao();
+                escrever(t);
+                this.aplicarTempos(t);
+                try { localStorage.removeItem('flow_tempos'); } catch (_) {}
+                this.logDebug('⏱️ Tempos restaurados para o padrão.', 'success');
+            });
+        }
+
         tilesGerando() {
             let n = 0;
             for (const el of document.querySelectorAll('[data-tile-id]')) {
