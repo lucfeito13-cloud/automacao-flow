@@ -69,6 +69,8 @@
         DELAY_BETWEEN_SUBMITS: [2000, 3000],
         DELAY_BETWEEN_BATCHES: [1000, 1600],
         GENERATION_TIMEOUT:  180000,
+        SEM_PROGRESSO_TIMEOUT: 150000,   // só desiste após 2,5 min SEM nada progredir
+        TETO_TIMEOUT:         1800000,   // teto absoluto de segurança (30 min)
         TILE_CHECK_INTERVAL:    900,
         STABILIZE_TIME:        2000,
         MAX_RETRIES:              3,
@@ -1686,6 +1688,18 @@ clearReferencesForUI(source = 'images') {
             return matrix;
         }
 
+        /**
+         * Quantos tiles ainda estão GERANDO (o Flow mostra o progresso, ex: "38%").
+         * Enquanto houver algum, não faz sentido desistir nem marcar como falha.
+         */
+        tilesGerando() {
+            let n = 0;
+            for (const el of document.querySelectorAll('[data-tile-id]')) {
+                if (/\b\d{1,3}\s*%/.test((el.textContent || ''))) n++;
+            }
+            return n;
+        }
+
         async waitForMatrix(matrix, beforeUuids) {
             const scroller = this.getScroller();
             const rowsNeeded = Math.max(...matrix.map(s => s.row)) + 1;
@@ -1728,27 +1742,46 @@ clearReferencesForUI(source = 'images') {
 
             // Fase 1: aguarda primeiro slot resolver
             let detected = false;
-            while (Date.now() - start < CONFIG.GENERATION_TIMEOUT) {
+            while (Date.now() - start < CONFIG.TETO_TIMEOUT) {
                 if (this.shouldStop || this.videoShouldStop) return;
                 // Confere ANTES de dormir: imagens costumam ficar prontas rápido e
                 // dormir primeiro custava um ciclo inteiro à toa.
                 if (scroller) scroller.scrollTop = 0;
                 const { loaded, errors } = countStates();
                 if (loaded + errors > 0) { detected = true; break; }
+                // Passou do tempo normal, mas ainda há tiles GERANDO? Continua esperando.
+                if (Date.now() - start >= CONFIG.GENERATION_TIMEOUT && this.tilesGerando() === 0) break;
                 await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
             }
             if (!detected) { for (const s of matrix) s.state = 'error'; return; }
 
             // Fase 2: aguarda pending === 0 estável
             let lastPending = -1, pendingZeroAt = null;
-            while (Date.now() - start < CONFIG.GENERATION_TIMEOUT) {
+            let resolvidosAntes = -1, ultimoProgressoEm = Date.now();
+            while (Date.now() - start < CONFIG.TETO_TIMEOUT) {
                 if (this.shouldStop || this.videoShouldStop) return;
                 if (scroller) scroller.scrollTop = 0;
                 const { loaded, errors, pending } = countStates();
+
+                // Houve avanço (mais um slot resolveu) ou ainda há tile gerando?
+                // Enquanto isso acontecer, NÃO desistimos — era o que marcava como
+                // "falha" um lote que só estava demorando.
+                if (loaded + errors !== resolvidosAntes) {
+                    resolvidosAntes = loaded + errors;
+                    ultimoProgressoEm = Date.now();
+                }
+                const gerando = this.tilesGerando();
+                if (gerando > 0) ultimoProgressoEm = Date.now();
+
                 if (pending !== lastPending) {
                     lastPending = pending;
                     pendingZeroAt = pending === 0 ? Date.now() : null;
-                    this.logDebug(`Progresso: ${loaded} ✅  ${errors} ❌  ${pending} ⏳`, 'info');
+                    this.logDebug(`Progresso: ${loaded} ✅  ${errors} ❌  ${pending} ⏳${gerando ? `  (${gerando} gerando)` : ''}`, 'info');
+                }
+
+                if (Date.now() - ultimoProgressoEm >= CONFIG.SEM_PROGRESSO_TIMEOUT) {
+                    this.logDebug(`⏱️ Sem nenhum progresso por ${Math.round(CONFIG.SEM_PROGRESSO_TIMEOUT/1000)}s — encerrando a espera.`, 'warning');
+                    break;
                 }
                 // TODOS os slots esperados já resolveram: não há nada pra "estabilizar",
                 // segue direto pro próximo lote em vez de esperar à toa.
@@ -1761,6 +1794,16 @@ clearReferencesForUI(source = 'images') {
                     break;
                 }
                 await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
+            }
+
+            // Carência: se ainda tem tile gerando, espera terminar antes de classificar.
+            // (Sem isso, o que estava só demorando era marcado como falha e reenviado.)
+            if (this.tilesGerando() > 0) {
+                this.logDebug(`⏳ Ainda há ${this.tilesGerando()} gerando — aguardando antes de classificar...`, 'info');
+                for (let g = 0; g < 25 && this.tilesGerando() > 0; g++) {
+                    if (this.shouldStop || this.videoShouldStop) return;
+                    await this.dynamicSleep(CONFIG.TILE_CHECK_INTERVAL);
+                }
             }
 
             // Fase 3: classifica slots — apenas os que NÃO foram confirmados durante polling
