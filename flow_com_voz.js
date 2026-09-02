@@ -255,8 +255,24 @@ function triggerTrustedClick(el) {
         return [...s];
     }
 
+    // Como os prompts são separados. 'linha' = cada linha é um prompt (padrão antigo);
+    // 'vazia' = separa por linha em branco (permite prompt com várias linhas);
+    // 'custom' = separa por um caractere/texto escolhido por você (ex: ---).
+    let SEPARADOR = { modo: 'linha', texto: '---' };
+
+    function escaparRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+    function dividirEmPrompts(text) {
+        if (SEPARADOR.modo === 'vazia') return String(text).split(/\n\s*\n+/);
+        if (SEPARADOR.modo === 'custom') {
+            const sep = (SEPARADOR.texto || '').trim();
+            if (sep) return String(text).split(new RegExp(escaparRegex(sep), 'i'));
+        }
+        return String(text).split('\n');
+    }
+
     function parsePromptsText(text, startFrom = 1) {
-        const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+        const lines = dividirEmPrompts(text).map(l => l.trim()).filter(Boolean);
         const result = [];
         let nextNum = startFrom;
         for (const line of lines) {
@@ -521,6 +537,15 @@ function triggerTrustedClick(el) {
           <div class="flow-card-content">
             <textarea class="flow-textarea" id="flow-prompts-input" placeholder="Ex:&#10;Imagem de [Maria] sentada na [Sala]&#10;[João] caminhando no [Parque]"></textarea>
             <input type="number" id="flow-start-from" class="flow-select-imgs" style="margin-top:8px;width:100%;box-sizing:border-box;" placeholder="Retomar de (Cena X). Ex: 20 (Use 0 para pular)">
+            <div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap;font-size:12px;">
+              <span style="color:var(--cd-text-muted);">Separar prompts por:</span>
+              <select id="flow-sep-modo" class="flow-select-imgs" style="width:auto;padding:4px 6px;">
+                <option value="linha">Cada linha</option>
+                <option value="vazia">Linha em branco</option>
+                <option value="custom">Caractere...</option>
+              </select>
+              <input type="text" id="flow-sep-texto" class="flow-select-imgs" style="width:70px;padding:4px 6px;display:none;" value="---" placeholder="---">
+            </div>
             <div id="flow-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
@@ -720,6 +745,15 @@ function triggerTrustedClick(el) {
           <div class="flow-card-content">
             <textarea class="flow-textarea" id="fv-prompts-input" placeholder="Ex:&#10;{cena 10} [Maria] caminhando no [Parque] com vento forte &lt;voz: Algebra&gt;&#10;{cena 13} Close-up de [João] olhando para o horizonte&#10;&#10;Ou sem numeração:&#10;Paisagem noturna com lua cheia&#10;Carro andando na estrada"></textarea>
             <input type="number" id="fv-start-from" class="flow-select-imgs" style="margin-top:8px;width:100%;box-sizing:border-box;" placeholder="Retomar de (Cena X). Ex: 20 (Use 0 para pular)">
+            <div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap;font-size:12px;">
+              <span style="color:var(--cd-text-muted);">Separar prompts por:</span>
+              <select id="fv-sep-modo" class="flow-select-imgs" style="width:auto;padding:4px 6px;">
+                <option value="linha">Cada linha</option>
+                <option value="vazia">Linha em branco</option>
+                <option value="custom">Caractere...</option>
+              </select>
+              <input type="text" id="fv-sep-texto" class="flow-select-imgs" style="width:70px;padding:4px 6px;display:none;" value="---" placeholder="---">
+            </div>
             <div id="fv-prompt-count" style="font-size:11px;color:var(--cd-text-light);margin-top:6px;">0 prompts detectados</div>
           </div>
         </div>
@@ -1128,6 +1162,7 @@ if (fixUploadRefsBtn) {
 
             // ── Tempos da espera (ajustáveis pelo usuário, valem p/ imagem e vídeo) ──
             this.setupTempos();
+            this.setupSeparador();
 
             // ── Enum mode buttons (shared) ──
             document.querySelectorAll('[data-enum]').forEach(btn => {
@@ -1297,8 +1332,7 @@ setupTextWatcher() {
             const text    = document.getElementById('flow-prompts-input').value;
             const prompts = parsePromptsText(text);
             const refs    = extractReferences(prompts);
-            document.getElementById('flow-prompt-count').textContent =
-                `${prompts.length} prompt${prompts.length !== 1 ? 's' : ''} detectado${prompts.length !== 1 ? 's' : ''}`;
+            document.getElementById('flow-prompt-count').textContent = this.resumoDaLeitura(prompts);
             const list = document.getElementById('flow-ref-list');
             if (!refs.length) {
                 list.innerHTML = '<span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência. Prompts serão enviados como texto puro.</span>';
@@ -1327,8 +1361,7 @@ setupTextWatcher() {
             const refs    = extractReferences(prompts);
             const voices  = extractVoices(prompts);
             
-            document.getElementById('fv-prompt-count').textContent =
-                `${prompts.length} prompt${prompts.length !== 1 ? 's' : ''} detectado${prompts.length !== 1 ? 's' : ''}`;
+            document.getElementById('fv-prompt-count').textContent = this.resumoDaLeitura(prompts);
             const list = document.getElementById('fv-ref-list');
             if (!refs.length && !voices.length) {
                 list.innerHTML = '<span style="font-size:12px;color:var(--cd-text-light);">Nenhuma referência ou voz detectada.</span>';
@@ -1815,6 +1848,57 @@ clearReferencesForUI(source = 'images') {
             this.aplicarTempos(t);
             try { localStorage.setItem('flow_tempos', JSON.stringify(t)); } catch (_) {}
             if (origem) this.logDebug(`⏱️ Tempos (${origem}): ${t.lotes}s entre lotes • checa ${t.poll}s • confirma ${t.estab}s • desiste após ${t.semProg}min.`, 'info');
+        }
+
+        // ──────────────────────────────────────────────
+        // SEPARADOR DE PROMPTS (vale para imagens e vídeos)
+        // ──────────────────────────────────────────────
+
+        /** Texto de conferência: quantos prompts leu e quais cenas identificou. */
+        resumoDaLeitura(prompts) {
+            const n = prompts.length;
+            if (!n) return '0 prompts detectados';
+            const cenas = prompts.map(p => p.promptNum);
+            const amostra = cenas.length > 12
+                ? cenas.slice(0, 8).join(', ') + ' … ' + cenas.slice(-2).join(', ')
+                : cenas.join(', ');
+            const media = Math.round(prompts.reduce((s, p) => s + (p.text || '').length, 0) / n);
+            return `✅ ${n} prompt${n !== 1 ? 's' : ''} • cenas: ${amostra} • ~${media} caracteres cada`;
+        }
+
+        setupSeparador() {
+            const pares = [['flow-sep-modo', 'flow-sep-texto'], ['fv-sep-modo', 'fv-sep-texto']];
+
+            const refletir = () => {
+                for (const [idModo, idTexto] of pares) {
+                    const m = document.getElementById(idModo), t = document.getElementById(idTexto);
+                    if (m) m.value = SEPARADOR.modo;
+                    if (t) { t.value = SEPARADOR.texto; t.style.display = SEPARADOR.modo === 'custom' ? '' : 'none'; }
+                }
+                this.updateReferences?.();
+                this.updateVideoReferences?.();
+            };
+
+            try {
+                const salvo = JSON.parse(localStorage.getItem('flow_separador') || 'null');
+                if (salvo && salvo.modo) SEPARADOR = Object.assign(SEPARADOR, salvo);
+            } catch (_) {}
+
+            for (const [idModo, idTexto] of pares) {
+                const m = document.getElementById(idModo), t = document.getElementById(idTexto);
+                if (m) m.addEventListener('change', () => {
+                    SEPARADOR.modo = m.value;
+                    try { localStorage.setItem('flow_separador', JSON.stringify(SEPARADOR)); } catch (_) {}
+                    refletir();
+                    this.logDebug(`✂️ Separando prompts por: ${SEPARADOR.modo === 'linha' ? 'cada linha' : SEPARADOR.modo === 'vazia' ? 'linha em branco' : `"${SEPARADOR.texto}"`}`, 'info');
+                });
+                if (t) t.addEventListener('input', () => {
+                    SEPARADOR.texto = t.value;
+                    try { localStorage.setItem('flow_separador', JSON.stringify(SEPARADOR)); } catch (_) {}
+                    refletir();
+                });
+            }
+            refletir();
         }
 
         setupTempos() {
