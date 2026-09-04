@@ -147,6 +147,21 @@
 
     const txt = L.join('\n');
     console.log(txt);
-    try { copy(txt); console.log('>>> RELATORIO COPIADO. E so colar pro Claude. <<<'); }
+    // Salva o relatorio como arquivo em Downloads: assim o Claude le direto
+    // do disco, sem voce precisar copiar e colar nada.
+    try {
+        const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'flow-diagnostico.txt';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+        console.log('>>> SALVO: flow-diagnostico.txt na sua pasta Downloads <<<');
+    } catch (e) {
+        console.log('>>> nao consegui salvar o arquivo: ' + e.message);
+    }
+
+    try { copy(txt); console.log('>>> (tambem copiado para a area de transferencia) <<<'); }
     catch (e) { console.log('>>> rode:  copy(window.__diag)  para copiar <<<'); }
 })();
