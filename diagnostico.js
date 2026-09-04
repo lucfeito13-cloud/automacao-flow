@@ -94,7 +94,7 @@
         const mapa = new Map();
         for (const m of midias) {
             let cur = m;
-            for (let n = 0; n < 6 && cur.parentElement; n++) {
+            for (let n = 0; n < 14 && cur.parentElement; n++) {
                 cur = cur.parentElement;
                 mapa.set(cur, (mapa.get(cur) || 0) + 1);
             }
@@ -114,7 +114,12 @@
             const link = item.querySelector('a[href]');
             if (link) say('  link do item: ' + link.getAttribute('href').replace(/[a-f0-9-]{20,}/g, '<id>'));
         } else {
-            say('  !!! nao consegui identificar a grade');
+            say('  !!! heuristica falhou — dump direto das midias:');
+            midias.slice(0, 3).forEach((m, i) => {
+                say('  MIDIA ' + i + ':');
+                let cur = m;
+                for (let n = 0; n < 8 && cur; n++) { say('      ' + '  '.repeat(n) + attrs(cur, 6)); cur = cur.parentElement; }
+            });
         }
     }
 
@@ -127,6 +132,10 @@
     say('--- 4. OUTROS ---');
     ['[data-testid]', '[role="listbox"]', '[role="option"]', '[role="menuitem"]', '[role="dialog"]', 'li[data-sonner-toast]']
         .forEach(s => say('  ' + s.padEnd(24) + ' => ' + document.querySelectorAll(s).length));
+    const custom = {};
+    document.querySelectorAll('*').forEach(e => { const n = e.tagName.toLowerCase(); if (n.includes('-')) custom[n] = (custom[n] || 0) + 1; });
+    say('  componentes Angular na pagina:');
+    Object.entries(custom).sort((a,b) => b[1]-a[1]).slice(0, 22).forEach(([n,c]) => say('      ' + n + ' x' + c));
     say('  Trusted Types ativo: ' + !!(window.trustedTypes && window.trustedTypes.defaultPolicy));
     say('  painel Criadores Dark presente: ' + !!document.getElementById('flow-sidebar'));
 

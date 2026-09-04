@@ -2090,17 +2090,49 @@ clearReferencesForUI(source = 'images') {
         // ──────────────────────────────────────────────
 
         getEditor() {
+            // Flow ANTIGO (React + Slate)
             return document.querySelector('[data-slate-editor="true"]')
+                // Flow NOVO (Angular + ProseMirror)
+                || document.querySelector('flow-rich-text-editor div.ProseMirror[contenteditable="true"]')
+                || document.querySelector('div.ProseMirror[contenteditable="true"]')
                 || document.querySelector('div[role="textbox"][contenteditable="true"]')
-                || document.querySelector('div[role="textbox"]');
+                || document.querySelector('div[role="textbox"]')
+                || document.querySelector('[contenteditable="true"]');
+        }
+
+        /**
+         * Texto REAL digitado no editor, sem o placeholder.
+         * Slate guarda em [data-slate-string]; no ProseMirror usamos textContent
+         * (innerText NAO serve: inclui o placeholder, que e desenhado via ::before).
+         */
+        editorPlainText() {
+            const ed = this.getEditor();
+            if (!ed) return '';
+            const slate = ed.querySelectorAll('[data-slate-string="true"]');
+            const txt = slate.length
+                ? [...slate].map(n => n.textContent).join('')
+                : (ed.textContent || '');
+            return txt.replace(/[\uFEFF\u200B]/g, '').trim();
         }
 
         async clearEditor() {
             const e = this.getEditor();
-            if (!e) throw new Error('Editor Slate não encontrado');
+            if (!e) throw new Error('Editor de prompt não encontrado');
             e.focus(); await this.dynamicSleep(CONFIG.DELAY_SHORT);
             document.execCommand('selectAll', false, null); await this.dynamicSleep([250, 400]);
             document.execCommand('delete', false, null); await this.dynamicSleep(CONFIG.DELAY_SHORT);
+
+            // ProseMirror as vezes ignora o delete quando a selecao veio de fora:
+            // refaz a selecao pelo DOM e tenta de novo antes de desistir.
+            if (this.editorPlainText()) {
+                const sel = window.getSelection(), r = document.createRange();
+                r.selectNodeContents(e); sel.removeAllRanges(); sel.addRange(r);
+                e.dispatchEvent(new InputEvent('beforeinput', {
+                    bubbles: true, cancelable: true, inputType: 'deleteContentBackward'
+                }));
+                try { document.execCommand('delete', false, null); } catch (_) {}
+                await this.dynamicSleep(CONFIG.DELAY_SHORT);
+            }
         }
 
         async insertText(text) {
@@ -2114,13 +2146,24 @@ clearReferencesForUI(source = 'images') {
             // em sequência rápida, não pela inserção de texto.
             // Proteção: aguardar animationFrame para não conflitar com React render.
             await nextFrame();
-            e.dispatchEvent(new InputEvent('beforeinput', {
-                bubbles: true, cancelable: true,
-                inputType: 'insertText', data: text
-            }));
 
-            // Delay extra para React reconciliar o DOM após a inserção
-            await this.dynamicSleep([400, 600]);
+            const antes = this.editorPlainText();
+
+            // Flow NOVO (ProseMirror): execCommand gera beforeinput/input NATIVOS,
+            // que e a unica forma do ProseMirror aceitar texto programatico.
+            let ok = false;
+            try { ok = document.execCommand('insertText', false, text); } catch (_) { ok = false; }
+            await this.dynamicSleep([250, 400]);
+
+            // Flow ANTIGO (Slate): so aceita o beforeinput sintetico.
+            if (!ok || this.editorPlainText() === antes) {
+                e.dispatchEvent(new InputEvent('beforeinput', {
+                    bubbles: true, cancelable: true,
+                    inputType: 'insertText', data: text
+                }));
+                // Delay extra para o editor reconciliar o DOM após a inserção
+                await this.dynamicSleep([400, 600]);
+            }
 
             if (this.isFlowCrashed()) {
                 throw new Error('Flow crashou após inserção de texto');
@@ -2284,9 +2327,29 @@ clearReferencesForUI(source = 'images') {
        async clickSubmit() {
     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
 
-    const findSubmitBtn = () => [...document.querySelectorAll('button')].find(b =>
-        b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
-    );
+    // O Flow NOVO (Angular) nao usa mais <i class="google-symbols">: o botao e
+    // um <button type="submit" aria-label="Start generation"> com o texto
+    // "arrow_forward". Procuramos por rotulo, depois pelo icone antigo, depois
+    // pelo type=submit dentro do bloco do prompt.
+    const findSubmitBtn = () => {
+        const porRotulo = document.querySelector(
+            'button[aria-label="Start generation"], button[aria-label*="Start generation"],' +
+            'button[aria-label*="Iniciar geração"], button[aria-label*="Gerar"]');
+        if (porRotulo) return porRotulo;
+
+        const porIcone = [...document.querySelectorAll('button')].find(b =>
+            b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward');
+        if (porIcone) return porIcone;
+
+        const ed = this.getEditor?.();
+        let bloco = ed;
+        for (let i = 0; i < 8 && bloco && bloco.parentElement; i++) bloco = bloco.parentElement;
+        const porTipo = (bloco || document).querySelector('button[type="submit"]');
+        if (porTipo) return porTipo;
+
+        return [...document.querySelectorAll('button')].find(b =>
+            (b.textContent || '').trim() === 'arrow_forward');
+    };
 
     // Assinatura do conteúdo REAL do editor Slate.
     // IMPORTANTE: NÃO usar innerText/textContent — quando o editor está vazio
@@ -2296,11 +2359,8 @@ clearReferencesForUI(source = 'images') {
     const editorSignature = () => {
         const ed = this.getEditor?.();
         if (!ed) return null;
-        const txt = [...ed.querySelectorAll('[data-slate-string="true"]')]
-            .map(n => n.textContent).join('')
-            .replace(/[﻿​]/g, '').trim();
-        const chips = ed.querySelectorAll('[data-slate-void="true"]').length;
-        return txt + '|' + chips;
+        const chips = ed.querySelectorAll('[data-slate-void="true"], .flow-chip, [data-chip]').length;
+        return this.editorPlainText() + '|' + chips;
     };
     const EMPTY_SIG = '|0';
 
