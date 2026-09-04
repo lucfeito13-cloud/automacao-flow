@@ -16,6 +16,8 @@
         return p.join('\n      > ');
     };
 
+    let editor = null;
+
     say('===== DIAGNOSTICO FLOW =====');
     say('url: ' + location.href.replace(/[a-f0-9-]{30,}/g, '<id>'));
     say('idioma da UI: ' + (document.documentElement.lang || '?'));
@@ -31,7 +33,6 @@
         'textarea': 'textarea',
         'input texto': 'input[type="text"]'
     };
-    let editor = null;
     for (const [nome, sel] of Object.entries(testes)) {
         const achados = document.querySelectorAll(sel);
         say(`  ${achados.length ? 'OK ' : '-- '} ${nome.padEnd(24)} (${sel}) => ${achados.length}`);
@@ -138,5 +139,5 @@
     const txt = L.join('\n');
     console.log(txt);
     try { copy(txt); console.log('>>> RELATORIO COPIADO. E so colar pro Claude. <<<'); }
-    catch (e) { console.log('>>> selecione o texto acima e copie <<<'); }
+    catch (e) { console.log('>>> rode:  copy(window.__diag)  para copiar <<<'); }
 })();
