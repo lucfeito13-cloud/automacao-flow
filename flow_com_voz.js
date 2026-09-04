@@ -177,10 +177,20 @@
         return new Promise(resolve => {
             const id = ++_timerSeq;
             _timerWaiters.set(id, resolve);
-            // rede de segurança: se o worker não responder, destrava assim mesmo
+            // Rede de segurança. O Flow NOVO bloqueia Web Worker de blob
+            // ('worker-src self') e o worker fica mudo: esperar 2,5s a mais em CADA
+            // espera arrastava a automação inteira (o retrato da galeria levava 4min).
+            // Na primeira falha, desligamos o worker e usamos setTimeout normal.
             setTimeout(() => {
-                if (_timerWaiters.has(id)) { _timerWaiters.delete(id); resolve(); }
-            }, ms + 2500);
+                if (!_timerWaiters.has(id)) return;
+                _timerWaiters.delete(id);
+                if (_timerWorker) {
+                    try { _timerWorker.terminate(); } catch (_) {}
+                    _timerWorker = false;
+                    console.warn('[Flow] Web Worker bloqueado pelo Flow — usando cronômetro comum.');
+                }
+                resolve();
+            }, ms + 250);
             w.postMessage({ id, ms });
         });
     }
