@@ -20,7 +20,8 @@
     say('url: ' + location.href.replace(/[a-f0-9-]{30,}/g, '<id>'));
     say('idioma da UI: ' + (document.documentElement.lang || '?'));
 
-    // ---------- 1. CAIXA DE PROMPT ----------
+    try {
+// ---------- 1. CAIXA DE PROMPT ----------
     say('');
     say('--- 1. CAIXA DE PROMPT ---');
     const testes = {
@@ -45,7 +46,11 @@
         say('  !!! NENHUMA caixa de prompt encontrada');
     }
 
-    // ---------- 2. BOTAO DE ENVIAR ----------
+    
+    } catch (e) { say('  !!! ERRO nesta secao: ' + e.message); }
+
+    try {
+// ---------- 2. BOTAO DE ENVIAR ----------
     say('');
     say('--- 2. BOTOES PERTO DA CAIXA DE PROMPT ---');
     say('  i.google-symbols na pagina: ' + document.querySelectorAll('i.google-symbols').length);
@@ -62,7 +67,11 @@
             ` desab=${b.disabled}`);
     });
 
-    // ---------- 3. MIDIAS / TILES ----------
+    
+    } catch (e) { say('  !!! ERRO nesta secao: ' + e.message); }
+
+    try {
+// ---------- 3. MIDIAS / TILES ----------
     say('');
     say('--- 3. MIDIAS NA GRADE ---');
     const tiles = document.querySelectorAll('[data-tile-id]');
@@ -75,28 +84,53 @@
         say('  EXEMPLO DE TILE:');
         say('      ' + attrs(tiles[0], 8));
     } else {
-        // tenta achar o container repetido das midias
-        const imgs = [...document.querySelectorAll('img')].filter(i => i.naturalWidth > 80);
-        if (imgs.length > 3) {
-            const mapa = new Map();
-            imgs.forEach(i => { const p = i.closest('[class],[data-*]'); if (p) mapa.set(p.parentElement, (mapa.get(p.parentElement) || 0) + 1); });
-            const [maior] = [...mapa.entries()].sort((a, b) => b[1] - a[1]);
-            if (maior) {
-                say('  container com mais imagens (' + maior[1] + ' itens):');
-                say('      ' + attrs(maior[0], 6));
-                say('  1o item dentro dele:');
-                say('      ' + caminho(maior[0].firstElementChild, 2));
+        say('  (data-tile-id nao existe mais — procurando o novo container)');
+        // Sobe alguns niveis a partir de cada midia e conta quem repete mais:
+        // o pai que aparece muitas vezes e' a grade, e seus filhos sao os tiles.
+        const midias = [...document.querySelectorAll('img, video')]
+            .filter(m => (m.naturalWidth || m.videoWidth || m.clientWidth) > 80);
+        say('  midias grandes na tela: ' + midias.length);
+        const mapa = new Map();
+        for (const m of midias) {
+            let cur = m;
+            for (let n = 0; n < 6 && cur.parentElement; n++) {
+                cur = cur.parentElement;
+                mapa.set(cur, (mapa.get(cur) || 0) + 1);
             }
+        }
+        const grades = [...mapa.entries()]
+            .filter(([el, c]) => c >= 3 && el.children.length >= 3)
+            .sort((a, b) => b[1] - a[1]);
+        if (grades.length) {
+            const [grade, qtd] = grades[0];
+            say('  GRADE provavel (' + qtd + ' midias, ' + grade.children.length + ' filhos):');
+            say('      ' + attrs(grade, 8));
+            const item = grade.firstElementChild;
+            say('  1o ITEM da grade:');
+            say('      ' + attrs(item, 10));
+            say('  dentro do item:');
+            [...item.querySelectorAll('*')].slice(0, 10).forEach(e => say('        ' + attrs(e, 6)));
+            const link = item.querySelector('a[href]');
+            if (link) say('  link do item: ' + link.getAttribute('href').replace(/[a-f0-9-]{20,}/g, '<id>'));
+        } else {
+            say('  !!! nao consegui identificar a grade');
         }
     }
 
-    // ---------- 4. OUTROS ----------
+    
+    } catch (e) { say('  !!! ERRO nesta secao: ' + e.message); }
+
+    try {
+// ---------- 4. OUTROS ----------
     say('');
     say('--- 4. OUTROS ---');
     ['[data-testid]', '[role="listbox"]', '[role="option"]', '[role="menuitem"]', '[role="dialog"]', 'li[data-sonner-toast]']
         .forEach(s => say('  ' + s.padEnd(24) + ' => ' + document.querySelectorAll(s).length));
     say('  Trusted Types ativo: ' + !!(window.trustedTypes && window.trustedTypes.defaultPolicy));
     say('  painel Criadores Dark presente: ' + !!document.getElementById('flow-sidebar'));
+
+    
+    } catch (e) { say('  !!! ERRO nesta secao: ' + e.message); }
 
     say('');
     say('===== FIM =====');
