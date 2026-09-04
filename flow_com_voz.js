@@ -23,6 +23,26 @@
     window.FlowAutomationInitialized = true;
 
     // ============================================================
+    // TRUSTED TYPES (Flow novo em flow.google.com)
+    // ============================================================
+    // O Flow novo exige TrustedHTML: passar uma string para innerHTML ou
+    // insertAdjacentHTML e bloqueado ('This document requires TrustedHTML
+    // assignment') e o painel nunca chegava a ser desenhado. Registrar a
+    // policy 'default' faz o navegador aceitar as strings de HTML que o
+    // painel ja usa, sem precisar mexer nos 22 pontos que montam HTML.
+    try {
+        if (window.trustedTypes && window.trustedTypes.createPolicy && !window.trustedTypes.defaultPolicy) {
+            window.trustedTypes.createPolicy('default', {
+                createHTML: (s) => s,
+                createScript: (s) => s,
+                createScriptURL: (s) => s
+            });
+        }
+    } catch (e) {
+        console.warn('[Flow] Trusted Types: nao foi possivel registrar a policy padrao.', e);
+    }
+
+    // ============================================================
     // TOKEN INTERCEPTION (captura Bearer token automaticamente)
     // ============================================================
     const _origFetch = window.fetch;
