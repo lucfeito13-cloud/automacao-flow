@@ -43,46 +43,6 @@
     }
 
     // ============================================================
-    // COMPATIBILIDADE COM O FLOW NOVO (Angular)
-    // ============================================================
-    // O Flow novo nao tem mais [data-tile-id] nem <a href="/edit/ID">.
-    // Cada midia virou:
-    //   <flow-grid-tile-container aria-label="NOME DA MIDIA">
-    //       <img class="image" data-media-id="ID"> (ou <video>)
-    // Em vez de reescrever os ~40 pontos que procuram [data-tile-id],
-    // marcamos os tiles novos com o MESMO atributo. O resto do codigo
-    // continua enxergando a pagina como antes.
-
-    function flowNovoDetectado() {
-        return !!document.querySelector('flow-grid-tile-container');
-    }
-
-    function sincronizarTilesNovos() {
-        let marcados = 0;
-        try {
-            for (const tile of document.querySelectorAll('flow-grid-tile-container')) {
-                const midia = tile.querySelector('[data-media-id]');
-                const id = midia && midia.getAttribute('data-media-id');
-                if (!id) continue;
-                if (tile.getAttribute('data-tile-id') !== id) {
-                    tile.setAttribute('data-tile-id', id);
-                    marcados++;
-                }
-                const nome = tile.getAttribute('aria-label');
-                if (nome && tile.getAttribute('data-flow-nome') !== nome) {
-                    tile.setAttribute('data-flow-nome', nome);
-                }
-            }
-        } catch (_) {}
-        return marcados;
-    }
-
-    // A grade e virtualizada: linhas entram e saem do DOM enquanto rola.
-    // Remarcar de tempos em tempos mantem os tiles novos sempre marcados.
-    setInterval(() => { sincronizarTilesNovos(); }, 1000);
-    sincronizarTilesNovos();
-
-    // ============================================================
     // TOKEN INTERCEPTION (captura Bearer token automaticamente)
     // ============================================================
     const _origFetch = window.fetch;
@@ -177,20 +137,10 @@
         return new Promise(resolve => {
             const id = ++_timerSeq;
             _timerWaiters.set(id, resolve);
-            // Rede de segurança. O Flow NOVO bloqueia Web Worker de blob
-            // ('worker-src self') e o worker fica mudo: esperar 2,5s a mais em CADA
-            // espera arrastava a automação inteira (o retrato da galeria levava 4min).
-            // Na primeira falha, desligamos o worker e usamos setTimeout normal.
+            // rede de segurança: se o worker não responder, destrava assim mesmo
             setTimeout(() => {
-                if (!_timerWaiters.has(id)) return;
-                _timerWaiters.delete(id);
-                if (_timerWorker) {
-                    try { _timerWorker.terminate(); } catch (_) {}
-                    _timerWorker = false;
-                    console.warn('[Flow] Web Worker bloqueado pelo Flow — usando cronômetro comum.');
-                }
-                resolve();
-            }, ms + 250);
+                if (_timerWaiters.has(id)) { _timerWaiters.delete(id); resolve(); }
+            }, ms + 2500);
             w.postMessage({ id, ms });
         });
     }
@@ -1099,8 +1049,8 @@ function triggerTrustedClick(el) {
             this.setupTextWatcher();
             this.setupVideoTextWatcher();
             this.setupDragDrop();
-            log.success('Flow Automation v4.0 inicializado!');
-            if (!_authToken) log.warn('Token ainda não capturado — faça qualquer ação na página.');
+            log.success('Flow Automation 4.2 — compatibilidade setembro/2026 inicializada!');
+            if (!location.hostname.endsWith('flow.google.com') && !_authToken) log.warn('Token ainda não capturado — faça qualquer ação na página.');
 
             // Verifica se há estado salvo de crash anterior
             this.checkCrashRecovery();
@@ -1549,10 +1499,7 @@ this.validatedRefs[this.referenceKey(ref)] = true;
         }
 
         getScroller() {
-            sincronizarTilesNovos();
-            // Flow NOVO: a lista rolavel e .virtual-scroll-container
-            return document.querySelector('.virtual-scroll-container') ||
-                   document.querySelector('[data-testid="virtuoso-scroller"]') ||
+            return document.querySelector('[data-testid="virtuoso-scroller"]') ||
                    document.querySelector('[data-virtuoso-scroller="true"]') ||
                    document.querySelector('div[scrollable="true"]') ||
                    document.querySelector('[class*="virtuoso"]') ||
@@ -1654,8 +1601,7 @@ clearReferencesForUI(source = 'images') {
             
             // Fallback: count tiles in first visual row by Y position
             if (!detected) {
-                sincronizarTilesNovos();
-            const allTiles = document.querySelectorAll('[data-tile-id]');
+                const allTiles = document.querySelectorAll('[data-tile-id]');
                 if (allTiles.length > 0) {
                     const firstTop = allTiles[0].getBoundingClientRect().top;
                     let cols = 0;
@@ -1713,24 +1659,14 @@ clearReferencesForUI(source = 'images') {
 
         getUuidFromTile(tile) {
             if (!tile) return null;
-            const media = tile.querySelector('img[data-media-id], img[src*="getMediaUrlRedirect"]') ||
-                          tile.querySelector('video[data-media-id], video[src*="getMediaUrlRedirect"]');
+            const media = tile.querySelector('img[src*="getMediaUrlRedirect"]') ||
+                          tile.querySelector('video[src*="getMediaUrlRedirect"]');
             if (!media) return null;
-            // Flow NOVO: o id vem do atributo; o src virou /asb/... sem ?name=
-            const novo = media.getAttribute('data-media-id');
-            if (novo) return novo;
             try { return new URL(media.src).searchParams.get('name'); } catch(e) { return null; }
         }
 
         getWorkflowIdFromTile(tile) {
             if (!tile) return null;
-
-            // Flow NOVO: nao existe mais link /edit/. O identificador da midia
-            // fica em data-media-id, na <img>/<video> de dentro do tile.
-            const midia = tile.querySelector('[data-media-id]')
-                || (tile.matches && tile.matches('[data-media-id]') ? tile : null);
-            if (midia) return midia.getAttribute('data-media-id');
-
             // O workflow ID está no href do link /edit/UUID, NÃO no data-tile-id
             const link = tile.querySelector('a[href*="/edit/"]');
             if (link) {
@@ -1762,7 +1698,7 @@ clearReferencesForUI(source = 'images') {
 
         isVideoTile(tile) {
             if (!tile) return false;
-            return !!tile.querySelector('video[data-media-id], video[src*="getMediaUrlRedirect"]');
+            return !!tile.querySelector('video[src*="getMediaUrlRedirect"]');
         }
 
         /**
@@ -1773,10 +1709,10 @@ clearReferencesForUI(source = 'images') {
         getMediaSrcFromTile(tile) {
             if (!tile) return '';
             // Vídeos: prioriza <video src>
-            const video = tile.querySelector('video[data-media-id], video[src*="getMediaUrlRedirect"]');
+            const video = tile.querySelector('video[src*="getMediaUrlRedirect"]');
             if (video?.src) return video.src;
             // Imagens: <img src>
-            const img = tile.querySelector('img[data-media-id], img[src*="getMediaUrlRedirect"]');
+            const img = tile.querySelector('img[src*="getMediaUrlRedirect"]');
             return img?.src || '';
         }
 
@@ -1786,11 +1722,11 @@ clearReferencesForUI(source = 'images') {
         isTileLoaded(tile) {
             if (!tile) return false;
             // Verifica thumbnail (existe em imagens e vídeos carregados)
-            const img = tile.querySelector('img[data-media-id], img[src*="getMediaUrlRedirect"]');
+            const img = tile.querySelector('img[src*="getMediaUrlRedirect"]');
             if (img && img.complete && parseFloat(getComputedStyle(img).opacity) >= 0.9) return true;
             // Vídeo sem thumbnail mas com src pode estar carregado
             // (verifica se o video tem src e NÃO tem indicador de progresso)
-            const video = tile.querySelector('video[data-media-id], video[src*="getMediaUrlRedirect"]');
+            const video = tile.querySelector('video[src*="getMediaUrlRedirect"]');
             if (video?.src && !this.tileHasProgress(tile)) {
                 // Checa se não é um tile "vazio" — deve ter pelo menos o play_circle icon
                 const playIcon = [...tile.querySelectorAll('i')].some(i => i.textContent?.trim() === 'play_circle');
@@ -1823,11 +1759,11 @@ clearReferencesForUI(source = 'images') {
 
         snapshotImageUuids() {
             const uuids = new Set();
-            document.querySelectorAll('[data-tile-id] img[data-media-id], [data-tile-id] img[data-media-id], img[src*="getMediaUrlRedirect"]').forEach(el => {
-                try { const u = el.getAttribute('data-media-id') || new URL(el.src).searchParams.get('name'); if (u) uuids.add(u); } catch(e) {}
+            document.querySelectorAll('[data-tile-id] img[src*="getMediaUrlRedirect"]').forEach(el => {
+                try { const u = new URL(el.src).searchParams.get('name'); if (u) uuids.add(u); } catch(e) {}
             });
-            document.querySelectorAll('[data-tile-id] video[data-media-id], [data-tile-id] video[data-media-id], video[src*="getMediaUrlRedirect"]').forEach(el => {
-                try { const u = el.getAttribute('data-media-id') || new URL(el.src).searchParams.get('name'); if (u) uuids.add(u); } catch(e) {}
+            document.querySelectorAll('[data-tile-id] video[src*="getMediaUrlRedirect"]').forEach(el => {
+                try { const u = new URL(el.src).searchParams.get('name'); if (u) uuids.add(u); } catch(e) {}
             });
             return uuids;
         }
@@ -2154,29 +2090,9 @@ clearReferencesForUI(source = 'images') {
         // ──────────────────────────────────────────────
 
         getEditor() {
-            // Flow ANTIGO (React + Slate)
             return document.querySelector('[data-slate-editor="true"]')
-                // Flow NOVO (Angular + ProseMirror)
-                || document.querySelector('flow-rich-text-editor div.ProseMirror[contenteditable="true"]')
-                || document.querySelector('div.ProseMirror[contenteditable="true"]')
                 || document.querySelector('div[role="textbox"][contenteditable="true"]')
-                || document.querySelector('div[role="textbox"]')
-                || document.querySelector('[contenteditable="true"]');
-        }
-
-        /**
-         * Texto REAL digitado no editor, sem o placeholder.
-         * Slate guarda em [data-slate-string]; no ProseMirror usamos textContent
-         * (innerText NAO serve: inclui o placeholder, que e desenhado via ::before).
-         */
-        editorPlainText() {
-            const ed = this.getEditor();
-            if (!ed) return '';
-            const slate = ed.querySelectorAll('[data-slate-string="true"]');
-            const txt = slate.length
-                ? [...slate].map(n => n.textContent).join('')
-                : (ed.textContent || '');
-            return txt.replace(/[\uFEFF\u200B]/g, '').trim();
+                || document.querySelector('div[role="textbox"]');
         }
 
         async clearEditor() {
@@ -2185,18 +2101,6 @@ clearReferencesForUI(source = 'images') {
             e.focus(); await this.dynamicSleep(CONFIG.DELAY_SHORT);
             document.execCommand('selectAll', false, null); await this.dynamicSleep([250, 400]);
             document.execCommand('delete', false, null); await this.dynamicSleep(CONFIG.DELAY_SHORT);
-
-            // ProseMirror as vezes ignora o delete quando a selecao veio de fora:
-            // refaz a selecao pelo DOM e tenta de novo antes de desistir.
-            if (this.editorPlainText()) {
-                const sel = window.getSelection(), r = document.createRange();
-                r.selectNodeContents(e); sel.removeAllRanges(); sel.addRange(r);
-                e.dispatchEvent(new InputEvent('beforeinput', {
-                    bubbles: true, cancelable: true, inputType: 'deleteContentBackward'
-                }));
-                try { document.execCommand('delete', false, null); } catch (_) {}
-                await this.dynamicSleep(CONFIG.DELAY_SHORT);
-            }
         }
 
         async insertText(text) {
@@ -2210,24 +2114,13 @@ clearReferencesForUI(source = 'images') {
             // em sequência rápida, não pela inserção de texto.
             // Proteção: aguardar animationFrame para não conflitar com React render.
             await nextFrame();
+            e.dispatchEvent(new InputEvent('beforeinput', {
+                bubbles: true, cancelable: true,
+                inputType: 'insertText', data: text
+            }));
 
-            const antes = this.editorPlainText();
-
-            // Flow NOVO (ProseMirror): execCommand gera beforeinput/input NATIVOS,
-            // que e a unica forma do ProseMirror aceitar texto programatico.
-            let ok = false;
-            try { ok = document.execCommand('insertText', false, text); } catch (_) { ok = false; }
-            await this.dynamicSleep([250, 400]);
-
-            // Flow ANTIGO (Slate): so aceita o beforeinput sintetico.
-            if (!ok || this.editorPlainText() === antes) {
-                e.dispatchEvent(new InputEvent('beforeinput', {
-                    bubbles: true, cancelable: true,
-                    inputType: 'insertText', data: text
-                }));
-                // Delay extra para o editor reconciliar o DOM após a inserção
-                await this.dynamicSleep([400, 600]);
-            }
+            // Delay extra para React reconciliar o DOM após a inserção
+            await this.dynamicSleep([400, 600]);
 
             if (this.isFlowCrashed()) {
                 throw new Error('Flow crashou após inserção de texto');
@@ -2391,29 +2284,9 @@ clearReferencesForUI(source = 'images') {
        async clickSubmit() {
     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
 
-    // O Flow NOVO (Angular) nao usa mais <i class="google-symbols">: o botao e
-    // um <button type="submit" aria-label="Start generation"> com o texto
-    // "arrow_forward". Procuramos por rotulo, depois pelo icone antigo, depois
-    // pelo type=submit dentro do bloco do prompt.
-    const findSubmitBtn = () => {
-        const porRotulo = document.querySelector(
-            'button[aria-label="Start generation"], button[aria-label*="Start generation"],' +
-            'button[aria-label*="Iniciar geração"], button[aria-label*="Gerar"]');
-        if (porRotulo) return porRotulo;
-
-        const porIcone = [...document.querySelectorAll('button')].find(b =>
-            b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward');
-        if (porIcone) return porIcone;
-
-        const ed = this.getEditor?.();
-        let bloco = ed;
-        for (let i = 0; i < 8 && bloco && bloco.parentElement; i++) bloco = bloco.parentElement;
-        const porTipo = (bloco || document).querySelector('button[type="submit"]');
-        if (porTipo) return porTipo;
-
-        return [...document.querySelectorAll('button')].find(b =>
-            (b.textContent || '').trim() === 'arrow_forward');
-    };
+    const findSubmitBtn = () => [...document.querySelectorAll('button')].find(b =>
+        b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
+    );
 
     // Assinatura do conteúdo REAL do editor Slate.
     // IMPORTANTE: NÃO usar innerText/textContent — quando o editor está vazio
@@ -2423,8 +2296,11 @@ clearReferencesForUI(source = 'images') {
     const editorSignature = () => {
         const ed = this.getEditor?.();
         if (!ed) return null;
-        const chips = ed.querySelectorAll('[data-slate-void="true"], .flow-chip, [data-chip]').length;
-        return this.editorPlainText() + '|' + chips;
+        const txt = [...ed.querySelectorAll('[data-slate-string="true"]')]
+            .map(n => n.textContent).join('')
+            .replace(/[﻿​]/g, '').trim();
+        const chips = ed.querySelectorAll('[data-slate-void="true"]').length;
+        return txt + '|' + chips;
     };
     const EMPTY_SIG = '|0';
 
@@ -2847,7 +2723,7 @@ while (retryCount[key] < maxRetries && !this.shouldStop) {
                     batch.forEach(p => {
                         const gi = this.prompts.findIndex(x => x.promptNum === p.promptNum);
                         const slots = matrix.filter(s => s.promptNum === p.promptNum);
-                        if (slots.some(s => s.state === 'loaded')) this.updatePromptItemStatus(gi, 'done');
+                        if (slots.filter(s => s.state === 'loaded').length >= N) this.updatePromptItemStatus(gi, 'done');
                     });
 
                     allMatrices.push(matrix);
@@ -2958,12 +2834,12 @@ if (this.genMode === 'refs') {
                 }
 
             } catch (err) {
-                this.setStatus('error', '❌ Erro: ' + err.message);
+                this.setStatus('error', '❌ Erro: ' + err.message); if (err.uncertainSubmission) this.saveRunState(this._modernCurrentPrompt || 1);
                 log.error('Pipeline error:', err);
             }
 
             this.isRunning = false;
-            this.clearRunState(); // Limpa estado de crash (processo terminou)
+            if (!this._modernUncertain) this.clearRunState(); // Preserve uncertain submissions for review.
             document.getElementById('flow-start-btn').disabled = false;
             document.getElementById('flow-stop-btn').disabled  = true;
             document.getElementById('flow-prompts-input').disabled = false;
@@ -3802,12 +3678,12 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
         setupDragDrop() {
             // Usa delegação global — tiles são virtualizados
             document.addEventListener('dragover', e => {
-                const tile = e.target.closest('[data-tile-id]');
+                const tile = e.target.closest('flow-grid-tile-container, [data-tile-id]');
                 if (tile) {
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'copy';
                     // Highlight só no tile que tem imagem
-                    const inner = tile.querySelector('[data-tile-id]') || tile;
+                    const inner = tile.querySelector('flow-grid-tile-container, [data-tile-id]') || tile;
                     document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
                     inner.classList.add('drop-hover');
                 }
@@ -3815,13 +3691,13 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
 
             document.addEventListener('dragleave', e => {
                 // Só remove se saiu do tile completamente
-                const related = e.relatedTarget?.closest('[data-tile-id]');
-                const current = e.target.closest('[data-tile-id]');
+                const related = e.relatedTarget?.closest('flow-grid-tile-container, [data-tile-id]');
+                const current = e.target.closest('flow-grid-tile-container, [data-tile-id]');
                 if (current && current !== related) current.classList.remove('drop-hover');
             });
 
             document.addEventListener('drop', async e => {
-                const tile = e.target.closest('[data-tile-id]');
+                const tile = e.target.closest('flow-grid-tile-container, [data-tile-id]');
                 if (tile) tile.classList.remove('drop-hover');
                 if (!tile) return;
                 e.preventDefault();
@@ -3831,7 +3707,7 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
                 if (!data?.type) return;
 
                 // Encontra inner tile (com imagem) e outer tile (para label)
-                const innerTile = tile.querySelector('[data-tile-id]') || tile;
+                const innerTile = tile.querySelector('flow-grid-tile-container, [data-tile-id]') || tile;
                 const workflowId = this.getWorkflowIdFromTile(innerTile);
                 const outerTile = tile;
                 document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
@@ -3855,7 +3731,7 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
                 if (!wfId) return;
 
                 // Remove atribuição
-                await this.apiRename(wfId, 'Imagem gerada');
+                if (!await this.apiRename(wfId, 'Imagem gerada')) return;
                 await this.apiFavorite(wfId, false);
                 label.remove();
 
@@ -4010,6 +3886,7 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
             }
 
             await this.assignScene(sceneNum, sceneName, slot.workflowId, tile);
+            if (!assignments.get(sceneName)?.some(item => item.workflowId === slot.workflowId)) { failed++; continue; }
             assigned++;
 
             statusFn(
@@ -4131,7 +4008,7 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
             this.removeLabelFromTile(workflowId);
 
             // Encontra o outerTile para posicionar
-            const outer = tileEl.closest('[data-tile-id]') || tileEl;
+            const outer = tileEl.closest('flow-grid-tile-container, [data-tile-id]') || tileEl;
             outer.style.position = 'relative';
 
             const label = document.createElement('div');
@@ -4787,7 +4664,7 @@ while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
                     batch.forEach(p => {
                         const gi = this.videoPrompts.findIndex(x => x.promptNum === p.promptNum);
                         const slots = matrix.filter(s => s.promptNum === p.promptNum);
-                        if (slots.some(s => s.state === 'loaded')) this.updateVideoPromptItemStatus(gi, 'done');
+                        if (slots.filter(s => s.state === 'loaded').length >= N) this.updateVideoPromptItemStatus(gi, 'done');
                     });
 
                     allMatrices.push(matrix);
@@ -4901,7 +4778,7 @@ if (this.videoGenMode === 'scenes') {
             }
 
             this.videoIsRunning = false;
-            this.clearRunState(); // Limpa estado de crash (processo terminou)
+            if (!this._modernUncertain) this.clearRunState(); // Preserve uncertain submissions for review.
             document.getElementById('fv-start-btn').disabled = false;
             document.getElementById('fv-stop-btn').disabled  = true;
             document.getElementById('fv-prompts-input').disabled = false;
@@ -6058,6 +5935,10 @@ async scrollToWorkflow(wfId) {
     // ============================================================
     // INICIALIZA
     // ============================================================
+    if (window.__installFlowModern) {
+        window.__installFlowModern(FlowAutomation, { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader });
+        delete window.__installFlowModern;
+    }
     new FlowAutomation();
 
     if (window.__CRIADORES_DARK_USER__) {
