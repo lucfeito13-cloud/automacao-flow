@@ -504,7 +504,7 @@ function triggerTrustedClick(el) {
     // ============================================================
     // HTML
     // ============================================================
-    const FLOW_UI_HTML = `
+    document.body.insertAdjacentHTML('beforeend', `
 <button id="flow-sidebar"><span class="icon">Criadores Dark</span></button>
 <div id="flow-panel">
   <div class="flow-header">
@@ -982,15 +982,7 @@ function triggerTrustedClick(el) {
   <div class="flow-assign-prompt-preview" id="flow-assign-preview" style="display:none;"><span class="preview-label"></span><span class="preview-text"></span></div>
   <div class="flow-assign-reload-bar" id="flow-assign-reload-bar"><button id="flow-assign-reload">🔄 Atualizar Página</button></div>
 </div>
-`;
-
-    /** Coloca o painel na página (só se ainda não estiver lá). */
-    function montarUI() {
-        if (document.getElementById('flow-sidebar')) return false;
-        (document.body || document.documentElement).insertAdjacentHTML('beforeend', FLOW_UI_HTML);
-        return true;
-    }
-    montarUI();
+`);
 
     // ============================================================
     // CLASSE PRINCIPAL
@@ -1033,37 +1025,15 @@ function triggerTrustedClick(el) {
             this.approveBeforeEnum = false;
             this._blockApprovalResolve = null; // para pausar no approve
             this.deferRetry = false; // retentar no final em vez de imediatamente
-            // Cada etapa protegida: se o Flow mudar e uma falhar, as outras seguem
-            // funcionando (antes, qualquer erro aqui fazia o painel sumir inteiro).
-            const etapa = (nome, fn) => {
-                try { fn(); }
-                catch (e) { log.error(`Falha ao iniciar "${nome}" (seguindo mesmo assim):`, e); }
-            };
-            etapa('painel', () => this.initUI());
-            etapa('leitor de prompts', () => this.setupTextWatcher());
-            etapa('leitor de prompts (vídeo)', () => this.setupVideoTextWatcher());
-            etapa('arrastar e soltar', () => this.setupDragDrop());
+            this.initUI();
+            this.setupTextWatcher();
+            this.setupVideoTextWatcher();
+            this.setupDragDrop();
             log.success('Flow Automation v4.0 inicializado!');
             if (!_authToken) log.warn('Token ainda não capturado — faça qualquer ação na página.');
 
             // Verifica se há estado salvo de crash anterior
-            etapa('recuperação', () => this.checkCrashRecovery());
-
-            // VIGIA: se uma atualização do Flow apagar o painel da página, remonta e
-            // religa tudo sozinho, em vez de simplesmente sumir.
-            etapa('vigia do painel', () => {
-                setInterval(() => {
-                    try {
-                        if (document.getElementById('flow-sidebar')) return;
-                        if (montarUI()) {
-                            log.warn('Painel havia sumido da página — remontado.');
-                            etapa('painel', () => this.initUI());
-                            etapa('leitor de prompts', () => this.setupTextWatcher());
-                            etapa('leitor de prompts (vídeo)', () => this.setupVideoTextWatcher());
-                        }
-                    } catch (_) {}
-                }, 3000);
-            });
+            this.checkCrashRecovery();
         }
 
         // ──────────────────────────────────────────────
@@ -1071,23 +1041,7 @@ function triggerTrustedClick(el) {
         // ──────────────────────────────────────────────
 
         initUI() {
-            // BLINDAGEM: se o Flow mudar e algum elemento não existir, devolvemos um
-            // objeto "de mentira" em vez de deixar estourar. Sem isso, UM elemento
-            // faltando derrubava a inicialização inteira e o painel sumia por completo.
-            const $ = id => {
-                const el = document.getElementById(id);
-                if (el) return el;
-                console.warn('[Flow] elemento ausente (ignorado):', id);
-                return {
-                    addEventListener() {}, removeEventListener() {}, click() {}, focus() {}, remove() {},
-                    appendChild() {}, insertAdjacentHTML() {}, scrollIntoView() {},
-                    querySelector() { return null; }, querySelectorAll() { return []; },
-                    getAttribute() { return null; }, setAttribute() {},
-                    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-                    style: {}, dataset: {}, textContent: '', innerHTML: '', value: '',
-                    checked: false, disabled: false, children: [], _ausente: true,
-                };
-            };
+            const $ = id => document.getElementById(id);
             const sidebar = $('flow-sidebar'), panel = $('flow-panel'), close = $('flow-close');
             const mini = $('flow-mini'), miniClose = $('flow-mini-close');
 
