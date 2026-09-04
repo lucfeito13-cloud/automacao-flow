@@ -103,6 +103,27 @@
         say('  precisam abrir o prompt: ' + semNada);
         exemplos.forEach(e => say(e));
 
+        // ─── 5b. Prompt pelo componente Angular (sem clicar) ───
+        say('');
+        say('--- 5b. PROMPT PELO COMPONENTE (sem clicar em nada) ---');
+        let comCtx = 0, semCtx = 0;
+        const amostraCtx = [];
+        for (const tile of tiles.slice(0, 15)) {
+          const p = A.promptDoContexto ? A.promptDoContexto(tile) : null;
+          if (p) { comCtx++; if (amostraCtx.length < 4) amostraCtx.push('    ' + JSON.stringify(String(p).slice(0, 70))); }
+          else semCtx++;
+        }
+        ok('consegue ler o prompt do componente Angular', comCtx > 0, comCtx + ' de ' + (comCtx + semCtx));
+        amostraCtx.forEach(a => say(a));
+        if (comCtx) {
+          let comNum = 0;
+          for (const tile of tiles.slice(0, 15)) {
+            const p = A.promptDoContexto(tile);
+            if (p && A.numeroDaCenaNoTexto(p) != null) comNum++;
+          }
+          ok('e o número da cena está nesse prompt', comNum > 0, comNum + ' de ' + comCtx);
+        }
+
         // ─── 6. Leitura do prompt em UMA mídia ───
         say('');
         say('--- 6. LER O PROMPT (teste em 1 mídia) ---');
