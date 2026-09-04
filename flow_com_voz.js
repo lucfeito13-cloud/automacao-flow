@@ -43,6 +43,46 @@
     }
 
     // ============================================================
+    // COMPATIBILIDADE COM O FLOW NOVO (Angular)
+    // ============================================================
+    // O Flow novo nao tem mais [data-tile-id] nem <a href="/edit/ID">.
+    // Cada midia virou:
+    //   <flow-grid-tile-container aria-label="NOME DA MIDIA">
+    //       <img class="image" data-media-id="ID"> (ou <video>)
+    // Em vez de reescrever os ~40 pontos que procuram [data-tile-id],
+    // marcamos os tiles novos com o MESMO atributo. O resto do codigo
+    // continua enxergando a pagina como antes.
+
+    function flowNovoDetectado() {
+        return !!document.querySelector('flow-grid-tile-container');
+    }
+
+    function sincronizarTilesNovos() {
+        let marcados = 0;
+        try {
+            for (const tile of document.querySelectorAll('flow-grid-tile-container')) {
+                const midia = tile.querySelector('[data-media-id]');
+                const id = midia && midia.getAttribute('data-media-id');
+                if (!id) continue;
+                if (tile.getAttribute('data-tile-id') !== id) {
+                    tile.setAttribute('data-tile-id', id);
+                    marcados++;
+                }
+                const nome = tile.getAttribute('aria-label');
+                if (nome && tile.getAttribute('data-flow-nome') !== nome) {
+                    tile.setAttribute('data-flow-nome', nome);
+                }
+            }
+        } catch (_) {}
+        return marcados;
+    }
+
+    // A grade e virtualizada: linhas entram e saem do DOM enquanto rola.
+    // Remarcar de tempos em tempos mantem os tiles novos sempre marcados.
+    setInterval(() => { sincronizarTilesNovos(); }, 1000);
+    sincronizarTilesNovos();
+
+    // ============================================================
     // TOKEN INTERCEPTION (captura Bearer token automaticamente)
     // ============================================================
     const _origFetch = window.fetch;
@@ -1499,7 +1539,10 @@ this.validatedRefs[this.referenceKey(ref)] = true;
         }
 
         getScroller() {
-            return document.querySelector('[data-testid="virtuoso-scroller"]') ||
+            sincronizarTilesNovos();
+            // Flow NOVO: a lista rolavel e .virtual-scroll-container
+            return document.querySelector('.virtual-scroll-container') ||
+                   document.querySelector('[data-testid="virtuoso-scroller"]') ||
                    document.querySelector('[data-virtuoso-scroller="true"]') ||
                    document.querySelector('div[scrollable="true"]') ||
                    document.querySelector('[class*="virtuoso"]') ||
@@ -1601,7 +1644,8 @@ clearReferencesForUI(source = 'images') {
             
             // Fallback: count tiles in first visual row by Y position
             if (!detected) {
-                const allTiles = document.querySelectorAll('[data-tile-id]');
+                sincronizarTilesNovos();
+            const allTiles = document.querySelectorAll('[data-tile-id]');
                 if (allTiles.length > 0) {
                     const firstTop = allTiles[0].getBoundingClientRect().top;
                     let cols = 0;
@@ -1667,6 +1711,13 @@ clearReferencesForUI(source = 'images') {
 
         getWorkflowIdFromTile(tile) {
             if (!tile) return null;
+
+            // Flow NOVO: nao existe mais link /edit/. O identificador da midia
+            // fica em data-media-id, na <img>/<video> de dentro do tile.
+            const midia = tile.querySelector('[data-media-id]')
+                || (tile.matches && tile.matches('[data-media-id]') ? tile : null);
+            if (midia) return midia.getAttribute('data-media-id');
+
             // O workflow ID está no href do link /edit/UUID, NÃO no data-tile-id
             const link = tile.querySelector('a[href*="/edit/"]');
             if (link) {
