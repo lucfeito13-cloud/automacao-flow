@@ -1703,9 +1703,12 @@ clearReferencesForUI(source = 'images') {
 
         getUuidFromTile(tile) {
             if (!tile) return null;
-            const media = tile.querySelector('img[src*="getMediaUrlRedirect"]') ||
-                          tile.querySelector('video[src*="getMediaUrlRedirect"]');
+            const media = tile.querySelector('img[data-media-id], img[src*="getMediaUrlRedirect"]') ||
+                          tile.querySelector('video[data-media-id], video[src*="getMediaUrlRedirect"]');
             if (!media) return null;
+            // Flow NOVO: o id vem do atributo; o src virou /asb/... sem ?name=
+            const novo = media.getAttribute('data-media-id');
+            if (novo) return novo;
             try { return new URL(media.src).searchParams.get('name'); } catch(e) { return null; }
         }
 
@@ -1749,7 +1752,7 @@ clearReferencesForUI(source = 'images') {
 
         isVideoTile(tile) {
             if (!tile) return false;
-            return !!tile.querySelector('video[src*="getMediaUrlRedirect"]');
+            return !!tile.querySelector('video[data-media-id], video[src*="getMediaUrlRedirect"]');
         }
 
         /**
@@ -1760,10 +1763,10 @@ clearReferencesForUI(source = 'images') {
         getMediaSrcFromTile(tile) {
             if (!tile) return '';
             // Vídeos: prioriza <video src>
-            const video = tile.querySelector('video[src*="getMediaUrlRedirect"]');
+            const video = tile.querySelector('video[data-media-id], video[src*="getMediaUrlRedirect"]');
             if (video?.src) return video.src;
             // Imagens: <img src>
-            const img = tile.querySelector('img[src*="getMediaUrlRedirect"]');
+            const img = tile.querySelector('img[data-media-id], img[src*="getMediaUrlRedirect"]');
             return img?.src || '';
         }
 
@@ -1773,11 +1776,11 @@ clearReferencesForUI(source = 'images') {
         isTileLoaded(tile) {
             if (!tile) return false;
             // Verifica thumbnail (existe em imagens e vídeos carregados)
-            const img = tile.querySelector('img[src*="getMediaUrlRedirect"]');
+            const img = tile.querySelector('img[data-media-id], img[src*="getMediaUrlRedirect"]');
             if (img && img.complete && parseFloat(getComputedStyle(img).opacity) >= 0.9) return true;
             // Vídeo sem thumbnail mas com src pode estar carregado
             // (verifica se o video tem src e NÃO tem indicador de progresso)
-            const video = tile.querySelector('video[src*="getMediaUrlRedirect"]');
+            const video = tile.querySelector('video[data-media-id], video[src*="getMediaUrlRedirect"]');
             if (video?.src && !this.tileHasProgress(tile)) {
                 // Checa se não é um tile "vazio" — deve ter pelo menos o play_circle icon
                 const playIcon = [...tile.querySelectorAll('i')].some(i => i.textContent?.trim() === 'play_circle');
@@ -1810,11 +1813,11 @@ clearReferencesForUI(source = 'images') {
 
         snapshotImageUuids() {
             const uuids = new Set();
-            document.querySelectorAll('[data-tile-id] img[src*="getMediaUrlRedirect"]').forEach(el => {
-                try { const u = new URL(el.src).searchParams.get('name'); if (u) uuids.add(u); } catch(e) {}
+            document.querySelectorAll('[data-tile-id] img[data-media-id], [data-tile-id] img[data-media-id], img[src*="getMediaUrlRedirect"]').forEach(el => {
+                try { const u = el.getAttribute('data-media-id') || new URL(el.src).searchParams.get('name'); if (u) uuids.add(u); } catch(e) {}
             });
-            document.querySelectorAll('[data-tile-id] video[src*="getMediaUrlRedirect"]').forEach(el => {
-                try { const u = new URL(el.src).searchParams.get('name'); if (u) uuids.add(u); } catch(e) {}
+            document.querySelectorAll('[data-tile-id] video[data-media-id], [data-tile-id] video[data-media-id], video[src*="getMediaUrlRedirect"]').forEach(el => {
+                try { const u = el.getAttribute('data-media-id') || new URL(el.src).searchParams.get('name'); if (u) uuids.add(u); } catch(e) {}
             });
             return uuids;
         }
