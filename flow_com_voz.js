@@ -2607,16 +2607,8 @@
       setTimeout(aplicarAoAbrir, 2500);
 
       // ── O X da etiqueta desfaz a atribuicao NA HORA ──────────────────────
-      // O tratador antigo so mexia na tela DEPOIS de renomear no servidor, e
-      // fazia `return` quando isso falhava — entao em video, cujo id nao serve
-      // para a API, o X simplesmente nao fazia nada. Agora a tela responde
-      // primeiro, o item sai do painel, e o servidor e atualizado em seguida.
-      const tirarDoPainel = (nome) => {
-        for (const item of document.querySelectorAll('.flow-assign-item')) {
-          const dele = item.dataset.name || item.dataset.scene;
-          if (dele === nome) item.remove();
-        }
-      };
+      // Ao clicar no X da etiqueta, a imagem é desvinculada e o seletor na barrinha
+      // volta ao estado original (cinza/disponível), sem ser excluído.
       document.addEventListener('click', (e) => {
         const xis = e.target && e.target.closest && e.target.closest('.label-x');
         if (!xis) return;
@@ -2643,14 +2635,22 @@
         this.pintarNomeNoTile(wf, original || 'Imagem gerada');
 
         if (tipo === 'ref') {
-          if (nome) { this.refAssignments.delete(nome); tirarDoPainel(nome); }
+          if (nome) {
+            this.refAssignments.delete(nome);
+            this.updateAssignItemUI(nome, false);
+          }
         } else if (tipo === 'scene' && cena) {
           const mapa = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
           const lista = mapa.get(cena) || [];
           const i = lista.findIndex(a => a && a.workflowId === wf);
           if (i >= 0) lista.splice(i, 1);
-          if (!lista.length) { mapa.delete(cena); tirarDoPainel(cena); }
-          else { mapa.set(cena, lista); this.updateAssignItemUI(cena, true); }
+          if (!lista.length) {
+            mapa.delete(cena);
+            this.updateAssignItemUI(cena, false);
+          } else {
+            mapa.set(cena, lista);
+            this.updateAssignItemUI(cena, true);
+          }
         }
         try { this.updateAssignCount(); } catch (_) {}
         this.logDebug(jaAplicada
