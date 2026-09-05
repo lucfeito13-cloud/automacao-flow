@@ -58,7 +58,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] VERSAO: ENUMERAR-PELO-PROMPT 2026-09-04 22:28', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] VERSAO: ABA-RENOMEAR 21:27:59', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -296,12 +296,27 @@
         } catch (error) {
           // Do not retry an ambiguous submission: it may already have used credits.
           this._modernUncertain = true;
-          throw Object.assign(new Error('Envio sem confirmação. A fila foi pausada para evitar geração duplicada; confira o Flow antes de retomar.'), { uncertainSubmission: true });
+          throw new Error('Envio sem confirmação do Flow.');
         }
         return true;
       },
       async prepareAndSubmit(prompt) {
         if (this.modernStopped()) throw stopError();
+        try { return await this.montarEEnviar(prompt); }
+        catch (erro) {
+          // Só o botão Parar interrompe. Qualquer outro problema (referência
+          // inexistente, diálogo travado, editor teimoso) vira falha DESTE
+          // prompt e a fila segue para o próximo.
+          if (erro && erro.stopped) throw erro;
+          const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
+          try { reg.call(this, `⏭️ Prompt ${prompt.promptNum} pulado: ${erro && erro.message ? erro.message : erro}`, 'error'); } catch (_) {}
+          try { await this.closeAssetPicker(); } catch (_) {}
+          try { await this.closeMenus(); } catch (_) {}
+          try { await this.clearEditor(); } catch (_) {}
+          return false;
+        }
+      },
+      async montarEEnviar(prompt) {
         this.logDebug(`Preparando prompt ${prompt.promptNum}...`, 'info');
         await this.clearEditor();
         for (const segment of parsePrompt(prompt.text)) {
@@ -312,7 +327,47 @@
         }
         return this.clickSubmit();
       },
-      getScroller() { return $('cdk-virtual-scroll-viewport.tiles-container'); },
+      getScroller() {
+        // Procura quem REALMENTE rola: o nome do container muda entre versoes do
+        // Flow, e pegar o errado fazia a rolagem automatica nao andar (a pagina so
+        // descia quando o usuario rolava na mao).
+        const rola = el => el && el.scrollHeight > el.clientHeight + 4;
+        for (const sel of ['cdk-virtual-scroll-viewport.tiles-container',
+                           'cdk-virtual-scroll-viewport',
+                           '.virtual-scroll-container',
+                           '[data-virtuoso-scroller="true"]']) {
+          const el = $(sel);
+          if (rola(el)) return el;
+        }
+        let el = this.getTiles()[0];
+        for (let i = 0; el && i < 14; i++) {
+          const s = getComputedStyle(el);
+          if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && rola(el)) return el;
+          el = el.parentElement;
+        }
+        const pagina = document.scrollingElement || document.documentElement;
+        if (rola(pagina)) return pagina;
+        return $('cdk-virtual-scroll-viewport.tiles-container') || $('.virtual-scroll-container') || null;
+      },
+
+      /** Rola um pedaco e confere se andou; nao insiste quando ja chegou na ponta. */
+      rolarUmPedaco(scroller, fracao, paraCima) {
+        const passo = Math.max(100, scroller.clientHeight * fracao);
+        const antes = Math.round(scroller.scrollTop);
+        const limite = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        if (!paraCima && antes >= limite - 2) return false;
+        if (paraCima && antes <= 2) return false;
+        scroller.scrollTop = paraCima ? Math.max(0, antes - passo) : Math.min(limite, antes + passo);
+        if (Math.round(scroller.scrollTop) !== antes) return true;
+        const tiles = this.getTiles();
+        const alvo = paraCima ? tiles[0] : tiles[tiles.length - 1];
+        if (!alvo || !alvo.scrollIntoView) return false;
+        alvo.scrollIntoView({ block: paraCima ? 'start' : 'end', inline: 'nearest' });
+        const agora = Math.round(scroller.scrollTop);
+        const foiPraFrente = paraCima ? agora < antes : agora > antes;
+        if (!foiPraFrente) { scroller.scrollTop = antes; return false; }
+        return true;
+      },
       getTiles() { return $$('flow-grid-tile-container').filter(tile => $('flow-image-tile,flow-video-tile', tile)); },
       getUuidFromTile(tile) {
         // Video tiles expose their persistent thumbnail id instead of data-media-id.
@@ -346,31 +401,73 @@
         const uuid = this.getUuidFromTile(tile);
         return { uuid, workflowId: uuid, name: this.getTileName(tile), src: this.getMediaSrcFromTile(tile), isVideo: this.isVideoTile(tile), loaded: this.isTileLoaded(tile), error: this.isTileError(tile) };
       },
-      async scanGallery(visit, { restore = true } = {}) {
+      async scanGallery(visit, { restore = true, completo = false, aoAndar = null, maxMs = 0 } = {}) {
         const scroller = this.getScroller();
         if (!scroller) throw new Error('Galeria do projeto não encontrada. Volte à tela de mídias.');
         const originalTop = scroller.scrollTop;
         const entries = new Map();
+        const inicio = Date.now();
+        const TETO = maxMs || (completo ? 180000 : 60000);
         let settledBottom = 0;
         scroller.scrollTop = 0;
+
+        // Espera a grade desenhar. No modo COMPLETO espera ela PARAR de mudar,
+        // senao lemos uma linha pela metade e a rolagem seguinte pula midias.
+        let assinaturaAnterior = '';
+        const esperarGrade = async () => {
+          if (!completo) {
+            for (let e = 0; e < 250; e += 50) {
+              await this.sleep(50);
+              const a = this.getTiles().map(x => this.getUuidFromTile(x)).join(',');
+              if (a && a !== assinaturaAnterior) { assinaturaAnterior = a; return; }
+            }
+            return;
+          }
+          let anterior = null;
+          for (let e = 0; e < 900; e += 80) {
+            await this.sleep(80);
+            const a = this.getTiles().map(x => this.getUuidFromTile(x)).join(',');
+            if (a && a === anterior) { assinaturaAnterior = a; return; }
+            anterior = a;
+          }
+        };
+
+        const colher = async () => {
+          for (const tile of this.getTiles()) {
+            const entry = this.tileEntry(tile);
+            if (!entry.uuid || entries.has(entry.uuid)) continue;
+            entries.set(entry.uuid, entry);
+            if (visit && await visit(entry, tile) === false) return false;
+          }
+          if (aoAndar) aoAndar(entries.size, Math.round(scroller.scrollTop));
+          return true;
+        };
+
         try {
+          // ── Descida ──
           for (let step = 0; step < 2000; step++) {
             if (this.modernStopped()) throw stopError();
-            await this.sleep(250);
-            for (const tile of this.getTiles()) {
-              const entry = this.tileEntry(tile);
-              if (!entry.uuid || entries.has(entry.uuid)) continue;
-              entries.set(entry.uuid, entry);
-              if (visit && await visit(entry, tile) === false) return [...entries.values()];
-            }
-            const bottom = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-            if (scroller.scrollTop >= bottom - 2) {
-              if (++settledBottom >= 3) return [...entries.values()];
-              await this.sleep(300);
+            if (Date.now() - inicio >= TETO) return [...entries.values()];
+            await esperarGrade();
+            if (!(await colher())) return [...entries.values()];
+            if (!this.rolarUmPedaco(scroller, completo ? 0.45 : 0.65, false)) {
+              if (++settledBottom >= 2) break;
             } else settledBottom = 0;
-            scroller.scrollTop = Math.min(bottom, scroller.scrollTop + Math.max(100, scroller.clientHeight * 0.65));
           }
-          throw new Error('A galeria não terminou de carregar; análise incompleta.');
+
+          // ── Subida (so no modo completo): pega o que a lista virtualizada
+          //    nao chegou a desenhar na descida. ──
+          if (completo) {
+            let parado = 0;
+            for (let volta = 0; volta < 600; volta++) {
+              if (this.modernStopped()) throw stopError();
+              if (Date.now() - inicio >= TETO) break;
+              await esperarGrade();
+              if (!(await colher())) break;
+              if (!this.rolarUmPedaco(scroller, 0.45, true)) { if (++parado >= 2) break; } else parado = 0;
+            }
+          }
+          return [...entries.values()];
         } finally { if (restore && scroller.isConnected) scroller.scrollTop = originalTop; }
       },
       async scrollToWorkflow(id) {
@@ -402,7 +499,32 @@
         $$('.cdk-overlay-backdrop').filter(visible).forEach(el => el.click());
         await this.sleep(150);
       },
+      /**
+       * Renomeia. Tenta primeiro a API do Flow (um PATCH — era assim antes da
+       * atualização e é MUITO mais rápido que abrir menu). Se a API não
+       * responder, cai no menu da mídia. A decisão é tomada UMA vez.
+       */
       async apiRename(id, name) {
+        if (this._apiRenomearVale !== false && old.apiRename) {
+          try {
+            const deu = await old.apiRename.call(this, id, name);
+            if (deu) {
+              if (this._apiRenomearVale === undefined) {
+                this._apiRenomearVale = true;
+                this.logDebug('⚡ Renomeando pela API do Flow (rápido).', 'success');
+              }
+              return true;
+            }
+          } catch (_) {}
+          if (this._apiRenomearVale === undefined) {
+            this._apiRenomearVale = false;
+            this.logDebug('A API de renomear não respondeu; usando o menu da mídia (mais lento).', 'warning');
+          }
+        }
+        return this.renomearPeloMenu(id, name);
+      },
+
+      async renomearPeloMenu(id, name) {
         try {
           const tile = await this.scrollToWorkflow(id);
           if (!tile) throw new Error('Mídia não encontrada para renomear.');
@@ -421,6 +543,17 @@
         } catch (error) { this.logDebug(`Renomear: ${error.message}`, 'error'); await this.closeMenus(); return false; }
       },
       async apiFavorite(id, value) {
+        if (this._apiFavoritarVale !== false && old.apiFavorite) {
+          try {
+            const deu = await old.apiFavorite.call(this, id, value);
+            if (deu) { this._apiFavoritarVale = true; return true; }
+          } catch (_) {}
+          if (this._apiFavoritarVale === undefined) this._apiFavoritarVale = false;
+        }
+        return this.favoritarPeloBotao(id, value);
+      },
+
+      async favoritarPeloBotao(id, value) {
         try {
           const tile = await this.scrollToWorkflow(id);
           if (!tile) throw new Error('Mídia não encontrada para favoritar.');
@@ -600,7 +733,9 @@
         this._modernCurrentPrompt = prompt.promptNum;
         const beforeIds = this.snapshotImageUuids();
         const expected = this.videoIsRunning ? this.videoResultsPerPrompt : this.imagesPerPrompt;
-        await prepare.call(this, prompt);
+        const enviou = await prepare.call(this, prompt);
+        // Pulado lá dentro: não adianta esperar resultados que não virão.
+        if (enviou === false) return false;
         const record = { promptNum: prompt.promptNum, nodes: [], results: new Map(), beforeIds, expected, signature: this._modernPreparedText };
         this._modernActiveRecords ||= [];
         this._modernActiveRecords.push(record);
@@ -610,8 +745,11 @@
             return record.nodes.length === expected;
           }, 12000);
         } catch (error) {
+          if (error && error.stopped) throw error;
           this._modernUncertain = true;
-          throw Object.assign(new Error('O envio foi aceito, mas não foi possível identificar seus resultados. A fila foi pausada; não reenvie sem conferir a galeria.'), { uncertainSubmission: true });
+          const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
+          try { reg.call(this, `⏭️ Prompt ${prompt.promptNum}: envio feito, mas não identifiquei os resultados — conta como falha e sigo.`, 'error'); } catch (_) {}
+          return false;
         }
         if (!this._modernGalleryObserver) {
           this._modernGalleryObserver = new MutationObserver(() => this.captureModernResults());
@@ -661,14 +799,12 @@
       async waitForMatrix(matrix) {
         const noProgressLimit = Math.max(60000, Number(document.getElementById('flow-t-semprog')?.value || 2) * 60000);
         let lastProgress = Date.now(), signature = '';
+        let motivoParada = null;   // encerra o lote sem derrubar a fila
         const hardDeadline = Date.now() + Math.max(noProgressLimit * 5, 20 * 60000);
         while (true) {
           if (this.modernStopped()) throw stopError();
           this.captureModernResults();
-          if (this._modernCaptureError) {
-            this._modernUncertain = true;
-            throw Object.assign(new Error(this._modernCaptureError + ' Fila pausada; confira a galeria.'), { uncertainSubmission: true });
-          }
+          if (this._modernCaptureError) { motivoParada = this._modernCaptureError; break; }
           let pending = 0;
           for (const slot of matrix) {
             if (slot.state !== 'pending') continue;
@@ -682,14 +818,19 @@
           const nextSignature = matrix.map(slot => `${slot.state}:${norm(slot.record?.nodes[slot.index]?.querySelector('.loading-percentage')?.textContent)}`).join('|');
           if (signature !== nextSignature) { signature = nextSignature; lastProgress = Date.now(); }
           if (Date.now() - lastProgress > noProgressLimit || Date.now() > hardDeadline) {
-            this._modernUncertain = true;
-            throw Object.assign(new Error('A geração ainda não terminou ou deixou de responder. Fila pausada; confira os resultados antes de retomar para evitar duplicatas.'), { uncertainSubmission: true });
+            motivoParada = 'A geração não terminou no tempo esperado.'; break;
           }
           if (matrix.some(slot => slot.state === 'pending' && !slot.record?.nodes[slot.index]?.isConnected)) {
-            this._modernUncertain = true;
-            throw Object.assign(new Error('A galeria mudou durante o lote. Fila pausada para preservar a correspondência entre prompts e resultados.'), { uncertainSubmission: true });
+            motivoParada = 'A galeria mudou durante o lote.'; break;
           }
           await this.sleep(Math.max(300, Number(document.getElementById('flow-t-poll')?.value || 0.5) * 1000));
+        }
+        if (motivoParada) {
+          this._modernUncertain = true;
+          const faltaram = matrix.filter(s => s.state === 'pending');
+          for (const s of faltaram) s.state = 'error';
+          const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
+          try { reg.call(this, '⚠️ ' + motivoParada + ' ' + faltaram.length + ' contam como falha — a fila SEGUE.', 'warning'); } catch (_) {}
         }
         for (const record of new Set(matrix.map(slot => slot.record).filter(Boolean))) record.observer.disconnect();
         for (const slot of matrix) if (slot.uuid) this._modernBaseline?.add(slot.uuid);
@@ -821,7 +962,13 @@
         await this.autoAssignScenesFromMatrices([results], { isVideo: !!this._videoAssignActive });
       },
       async renameUploadReferencesFromFilenames() {
-        const entries = await this.scanGallery();
+        const aviso = (m) => { try { (this._videoAssignActive ? this.setVideoStatus : this.setStatus).call(this, 'info', m); } catch (_) {} };
+        aviso('🔎 Varrendo a galeria inteira...');
+        const entries = await this.scanGallery(null, {
+          completo: true,
+          aoAndar: (qtd) => aviso('🔎 Varrendo a galeria... ' + qtd + ' mídias encontradas')
+        });
+        aviso('🔎 Varredura concluída: ' + entries.length + ' mídias.');
         let count = 0;
         for (const entry of entries) {
           if (!/\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif)$/i.test(entry.name)) continue;
@@ -888,8 +1035,486 @@
         } finally { this._modernUpscaling = false; }
       }
     });
+    // =====================================================================
+    // ABA RENOMEAR — analisa o prompt de cada geração e renomeia
+    // =====================================================================
+    // Mesmo estilo de antes do Flow atualizar: varre a página de cima a baixo,
+    // lê o número da cena no prompt de cada mídia, agrupa por cena e numera as
+    // variações na ordem em que aparecem. A diferença é que agora o formato do
+    // nome é escolhido por você, e imagens e vídeos são tratados na mesma passada.
+
+    const MODELO_PADRAO = 'Cena {n} - {tipo} {g}';
+    const CHAVE_MODELO = 'flow_modelo_nome';
+    const CHAVE_ESCOPO = 'flow_renomear_escopo';
+
+    const lerModelo = () => {
+      try { return localStorage.getItem(CHAVE_MODELO) || MODELO_PADRAO; }
+      catch (_) { return MODELO_PADRAO; }
+    };
+
+    const montarNome = (n, g, isVideo, modelo) => {
+      const pad = v => String(v).padStart(2, '0');
+      return String(modelo || lerModelo())
+        .replace(/\{nn\}/gi, pad(n))
+        .replace(/\{gg\}/gi, pad(g))
+        .replace(/\{n\}/gi, String(n))
+        .replace(/\{g\}/gi, String(g))
+        .replace(/\{tipo\}/gi, isVideo ? 'Vídeo' : 'Imagem')
+        .trim();
+    };
+
+    // Transforma o modelo numa expressão que RECONHECE nomes já aplicados,
+    // para o Analisar, o Upscale e os Downloads continuarem achando as mídias.
+    const regexDoModelo = (modelo) => {
+      const marcas = [];
+      const SEP = '\u0001';
+      let padrao = String(modelo).replace(/\{(nn|gg|n|g|tipo)\}/gi, (_, m) => {
+        marcas.push(m.toLowerCase());
+        return SEP + marcas.length + SEP;
+      });
+      padrao = padrao.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[ \t]+/g, '\\s+');
+      padrao = padrao.replace(new RegExp(SEP + '(\\d+)' + SEP, 'g'), (_, i) => {
+        const m = marcas[Number(i) - 1];
+        if (m === 'tipo') return '(Imagem|V[ií]deo|Video)';
+        if (m === 'n' || m === 'nn') return '(\\d+(?:\\.\\d+)?)';
+        return '(\\d+)';
+      });
+      return { re: new RegExp('^' + padrao + '$', 'i'), marcas };
+    };
+
+    const lerNomeModelo = (nome) => {
+      const texto = norm(nome);
+      if (!texto) return null;
+      for (const modelo of [lerModelo(), MODELO_PADRAO]) {
+        let info;
+        try { info = regexDoModelo(modelo); } catch (_) { continue; }
+        const m = texto.match(info.re);
+        if (!m) continue;
+        const d = { sceneNum: null, imgNum: 1, isVideo: false };
+        info.marcas.forEach((marca, i) => {
+          const v = m[i + 1];
+          if (marca === 'n' || marca === 'nn') d.sceneNum = Number(v);
+          else if (marca === 'g' || marca === 'gg') d.imgNum = Number(v);
+          else if (marca === 'tipo') d.isVideo = /^v/i.test(v);
+        });
+        if (d.sceneNum != null && !isNaN(d.sceneNum)) return d;
+      }
+      return null;
+    };
+
+    Object.assign(proto, {
+      modeloNome: lerModelo,
+      montarNome(n, g, isVideo) { return montarNome(n, g, isVideo); },
+      lerNome(nome) { return lerNomeModelo(nome); },
+
+      /**
+       * Descobre o número da cena de uma mídia, do mais barato ao mais caro:
+       *   1. o nome atual já está no formato de cena
+       *   2. o rótulo da mídia começa com o número ("97.2 - ...")
+       *   3. pede o prompt ao Flow (botão Reutilizar) — só quando precisa
+       */
+      async cenaDaMidia(entry, tile, permitirReutilizar) {
+        const jaNomeada = lerNomeModelo(entry.name) || sceneInfo(entry.name);
+        if (jaNomeada) return { num: jaNomeada.sceneNum, origem: 'nome' };
+
+        const doRotulo = this.numeroDaCenaNoTexto(entry.name);
+        if (doRotulo != null) return { num: doRotulo, origem: 'rótulo' };
+
+        // 3. Prompt inteiro pelo painel que abre ao passar o mouse. É onde o
+        //    Flow novo guarda o prompt (flow-expandable-prompt > .prompt-text).
+        //    Faz o papel do __reactFiber$ da versão antiga: o __ngContext__ do
+        //    Angular em produção é só um número, não dá para ler por lá.
+        if (tile) {
+          const doPainel = this.numeroDaCenaNoTexto(await this.promptPorHover(tile));
+          if (doPainel != null) return { num: doPainel, origem: 'painel' };
+        }
+
+        // 4. Último recurso: pedir o prompt ao Flow pelo botão Reutilizar.
+        if (!permitirReutilizar || !tile) return null;
+        const texto = await this.promptViaReutilizar(tile);
+        const doPrompt = this.numeroDaCenaNoTexto(texto);
+        if (doPrompt != null) return { num: doPrompt, origem: 'reutilizar' };
+        return null;
+      },
+
+      /**
+       * Lê o PROMPT da mídia direto do componente Angular, sem clicar em nada.
+       * É o mesmo truque que a versão antiga usava com o React (__reactFiber$):
+       * o Angular guarda o estado do componente em __ngContext__, e o prompt
+       * está lá dentro — inteiro, não cortado como no rótulo.
+       */
+      promptDoContexto(tile) {
+        if (!tile) return null;
+        const pareceprompt = (chave, valor) =>
+          typeof valor === 'string' && valor.length > 20 && valor.length < 4000 &&
+          (/^\s*\d{1,4}(?:[.,]\d+)?\s*[-–—.):]\s+/.test(valor) ||
+           /^\s*[{[(]\s*(?:cena|prompt|scene)\s*\d/i.test(valor) ||
+           /prompt|subtitle|caption|descri|titulo|title|text/i.test(String(chave)));
+
+        const vistos = new Set();
+        let passos = 0;
+        const procurar = (obj, prof) => {
+          if (!obj || prof > 5 || passos > 4000) return null;
+          if (typeof obj !== 'object') return null;
+          if (vistos.has(obj)) return null;
+          vistos.add(obj);
+          let chaves;
+          try { chaves = Object.keys(obj); } catch (_) { return null; }
+          for (const k of chaves) {
+            passos++;
+            if (passos > 4000) return null;
+            let v;
+            try { v = obj[k]; } catch (_) { continue; }
+            if (pareceprompt(k, v)) return v;
+            if (v && typeof v === 'object' && !(v instanceof Node) && !(v instanceof Window)) {
+              const achou = procurar(v, prof + 1);
+              if (achou) return achou;
+            }
+          }
+          return null;
+        };
+
+        let el = tile;
+        for (let i = 0; i < 6 && el; i++) {
+          const ctx = el.__ngContext__;
+          if (ctx) {
+            const achou = procurar(ctx, 0);
+            if (achou) return norm(achou);
+          }
+          el = el.parentElement;
+        }
+        return null;
+      },
+
+      /**
+       * Lê o PROMPT da mídia passando o mouse por cima. O Flow abre um painel
+       * (flow-info-panel > flow-expandable-prompt) com o prompt INTEIRO, que é
+       * onde está o número da cena. Substitui o truque do React da versão antiga.
+       */
+      lerPainelDePrompt() {
+        const alvos = document.querySelectorAll(
+          '.cdk-overlay-container flow-expandable-prompt .prompt-text,' +
+          'flow-info-panel flow-expandable-prompt .prompt-text,' +
+          '.cdk-overlay-container .prompt-text');
+        for (const el of alvos) {
+          const t = norm(el.textContent);
+          if (t.length > 12) return t;
+        }
+        return null;
+      },
+
+      async promptPorHover(tile, tetoMs = 1400) {
+        if (!tile) return null;
+        const antes = this.lerPainelDePrompt();
+        const disparar = tipos => tipos.forEach(tipo => {
+          try { tile.dispatchEvent(new MouseEvent(tipo, { bubbles: true, cancelable: true, view: window })); } catch (_) {}
+        });
+
+        disparar(['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'mousemove']);
+
+        let texto = null;
+        for (let esperou = 0; esperou < tetoMs; esperou += 60) {
+          await this.sleep(60);
+          const agora = this.lerPainelDePrompt();
+          // Só aceita quando o painel MUDOU: senão leríamos o prompt da mídia anterior.
+          if (agora && agora !== antes) { texto = agora; break; }
+        }
+
+        disparar(['mouseout', 'mouseleave', 'pointerleave']);
+        return texto;
+      },
+
+      /** Varre tudo, monta o plano e renomeia. escopo: 'ambos' | 'imagens' | 'videos' */
+      async renomearGaleria({ escopo = 'ambos', apenasAnalisar = false } = {}) {
+        if (this._renomeando) return;
+        this._renomeando = true;
+        this.renomearParar = false;
+
+        const painel = document.getElementById('rn-resultado');
+        const barra = document.getElementById('rn-barra');
+        const aviso = (m, tipo) => {
+          const el = document.getElementById('rn-status');
+          if (el) { el.className = 'flow-status ' + (tipo || 'info'); el.innerHTML = m; }
+        };
+        const linha = (texto, cor) => {
+          if (!painel) return;
+          const d = document.createElement('div');
+          d.style.cssText = 'font-size:12px;padding:3px 8px;border-radius:6px;margin-bottom:3px;' +
+            'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' +
+            (cor === 'erro' ? 'background:#fef2f2;color:#991b1b;' : 'background:#dcfce7;color:#166534;');
+          d.textContent = texto;
+          painel.appendChild(d);
+          painel.scrollTop = painel.scrollHeight;
+        };
+        const progresso = (f) => { if (barra) barra.style.width = Math.round(f * 100) + '%'; };
+
+        if (painel) painel.innerHTML = '';
+        progresso(0);
+
+        try {
+          // ── 1. VARREDURA: coleta na ORDEM em que aparecem, de cima para baixo
+          aviso('🔎 Varrendo a galeria...');
+          const coletadas = [];
+          const vistos = new Set();
+          await this.scanGallery(async (entry, tile) => {
+            if (this.renomearParar) return false;
+            if (!entry.uuid || !entry.loaded || vistos.has(entry.uuid)) return;
+            if (escopo === 'imagens' && entry.isVideo) return;
+            if (escopo === 'videos' && !entry.isVideo) return;
+            vistos.add(entry.uuid);
+            // Número da cena: primeiro o barato (nome/rótulo). Só quem não tem
+            // é que ganha o hover — e AGORA, enquanto o tile está na tela.
+            let cena = null, origem = null;
+            const jaTem = this.lerNome(entry.name) || sceneInfo(entry.name);
+            if (jaTem) { cena = jaTem.sceneNum; origem = 'nome'; }
+            else {
+              const doRotulo = this.numeroDaCenaNoTexto(entry.name);
+              if (doRotulo != null) { cena = doRotulo; origem = 'rótulo'; }
+              else {
+                const p = await this.promptPorHover(tile);
+                const doPainel = this.numeroDaCenaNoTexto(p);
+                if (doPainel != null) { cena = doPainel; origem = 'painel'; }
+              }
+            }
+            coletadas.push({ uuid: entry.uuid, name: entry.name, isVideo: entry.isVideo, cena, origem });
+            aviso('🔎 Varrendo a galeria... <b>' + coletadas.length + '</b> mídia(s)');
+          }, { completo: true });
+
+          if (this.renomearParar) { aviso('⏹ Parado por você.', 'warning'); return; }
+          if (!coletadas.length) { aviso('Nenhuma mídia encontrada nesta tela.', 'warning'); return; }
+
+          // ── 2. NÚMERO DA CENA: barato primeiro; só usa o Reutilizar quem precisa
+          aviso('🔎 Lendo o número da cena de ' + coletadas.length + ' mídia(s)...');
+          const semNumero = coletadas.filter(x => x.cena == null);
+          const porOrigem = {};
+          coletadas.forEach(x => { if (x.origem) porOrigem[x.origem] = (porOrigem[x.origem] || 0) + 1; });
+          this.logDebug('🔎 Números encontrados por: ' +
+            (Object.entries(porOrigem).map(([k, v]) => k + '=' + v).join(' · ') || 'nenhum'), 'info');
+
+          // Sem número = sem renomear. Não abrimos o prompt de cada mídia
+          // (era lento e escrevia na sua caixa de texto). O prompt já foi lido
+          // do componente durante a varredura, como a versão antiga fazia.
+          if (semNumero.length) {
+            this.logDebug('🔎 ' + semNumero.length + ' mídia(s) sem número de cena — ficam de fora.', 'warning');
+          }
+          progresso(0.4);
+
+          // ── 3. PLANO: agrupa por cena e numera as variações na ordem de aparição
+          const contador = new Map();
+          const plano = [];
+          let semCena = 0;
+          for (const item of coletadas) {
+            if (item.cena == null) { semCena++; continue; }
+            const chave = item.cena + '|' + (item.isVideo ? 'v' : 'i');
+            const g = (contador.get(chave) || 0) + 1;
+            contador.set(chave, g);
+            plano.push({ ...item, g, novo: montarNome(item.cena, g, item.isVideo) });
+          }
+
+          const cenas = new Set(plano.map(p => p.cena)).size;
+          if (!plano.length) {
+            aviso('Não consegui ler o número da cena de nenhuma mídia. ' +
+                  'Confira se os prompts começam com o número (ex: <b>12 - ...</b> ou <b>{cena 12}</b>).', 'warning');
+            return;
+          }
+
+          if (apenasAnalisar) {
+            aviso('🔎 <b>' + plano.length + '</b> mídia(s) em <b>' + cenas + '</b> cena(s) prontas para renomear' +
+                  (semCena ? ' · ' + semCena + ' sem número (ficam de fora)' : '') + '.', 'success');
+            plano.slice(0, 200).forEach(p => linha(p.name.slice(0, 40) + '  →  ' + p.novo));
+            if (plano.length > 200) linha('… e mais ' + (plano.length - 200) + '.');
+            progresso(1);
+            return;
+          }
+
+          // ── 4. RENOMEIA
+          let ok = 0, falhou = 0;
+          for (let i = 0; i < plano.length; i++) {
+            if (this.renomearParar) { aviso('⏹ Parado por você. ' + ok + ' renomeada(s).', 'warning'); return; }
+            const p = plano[i];
+            aviso('🏷️ Renomeando <b>' + (i + 1) + '/' + plano.length + '</b> — ' + p.novo);
+            progresso(0.4 + (i / plano.length) * 0.6);
+            if (norm(p.name) === norm(p.novo)) { ok++; linha('já estava: ' + p.novo); continue; }
+            const deu = await this.apiRename(p.uuid, p.novo);
+            if (deu) {
+              ok++;
+              linha(p.novo);
+              this.tileAssignments.set(p.uuid, { label: p.novo, type: 'scene', scene: 'Cena ' + p.cena, imgNum: p.g });
+              try { await this.apiFavorite(p.uuid, true); } catch (_) {}
+            } else {
+              falhou++;
+              linha('falhou: ' + p.name.slice(0, 40), 'erro');
+            }
+          }
+
+          progresso(1);
+          aviso('✅ <b>' + ok + '</b> mídia(s) renomeada(s) em <b>' + cenas + '</b> cena(s)' +
+                (falhou ? ' · ' + falhou + ' falha(s)' : '') +
+                (semCena ? ' · ' + semCena + ' sem número' : '') + '.', 'success');
+        } catch (erro) {
+          if (erro && erro.stopped) aviso('⏹ Parado por você.', 'warning');
+          else aviso('❌ ' + erro.message, 'error');
+        } finally {
+          this._renomeando = false;
+          const b1 = document.getElementById('rn-start'), b2 = document.getElementById('rn-stop');
+          if (b1) b1.disabled = false;
+          if (b2) b2.disabled = true;
+        }
+      },
+    });
+
+    // ── A ABA em si ──
+    function montarAbaRenomear() {
+      const abas = document.querySelector('.flow-tabs');
+      const scroll = document.querySelector('.flow-scroll');
+      if (!abas || !scroll || document.querySelector('.flow-tab[data-tab="renomear"]')) return;
+
+      const botao = document.createElement('button');
+      botao.className = 'flow-tab';
+      botao.setAttribute('data-tab', 'renomear');
+      botao.textContent = '🏷️ Renomear';
+      abas.appendChild(botao);
+
+      const conteudo = document.createElement('div');
+      conteudo.className = 'flow-tab-content';
+      conteudo.setAttribute('data-tab', 'renomear');
+      conteudo.innerHTML =
+        '<div class="flow-tab-body">' +
+          '<div class="flow-card">' +
+            '<div class="flow-card-header">' +
+              '<h3 class="flow-card-title">Formato do nome</h3>' +
+              '<p class="flow-card-description">Ele lê o número da cena no prompt de cada geração e renomeia na ordem.</p>' +
+            '</div>' +
+            '<div class="flow-card-content">' +
+              '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                '<button class="flow-validate-btn" data-rnmodelo="Cena {n} - {tipo} {g}" style="margin:0;flex:1;min-width:140px;">Cena 7 - Imagem 2</button>' +
+                '<button class="flow-validate-btn" data-rnmodelo="cena_{n}_{g}_" style="margin:0;flex:1;min-width:140px;">cena_7_2_</button>' +
+                '<button class="flow-validate-btn" data-rnmodelo="cena_M_{n}_{g}_" style="margin:0;flex:1;min-width:140px;">cena_M_7_2_</button>' +
+                '<button class="flow-validate-btn" data-rnmodelo="cena_{nn}_{gg}_" style="margin:0;flex:1;min-width:140px;">cena_07_02_</button>' +
+              '</div>' +
+              '<input type="text" id="rn-modelo" class="flow-textarea" style="min-height:auto;padding:8px 10px;margin-top:8px;font-family:monospace;">' +
+              '<div style="font-size:11px;color:var(--cd-text-muted);margin-top:6px;line-height:1.6;">' +
+                '<b>{n}</b> nº da cena · <b>{g}</b> nº da variação · <b>{tipo}</b> Imagem/Vídeo · <b>{nn}</b>/<b>{gg}</b> com dois dígitos' +
+              '</div>' +
+              '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;cursor:pointer;font-size:12px;">' +
+                '<input type="checkbox" id="rn-variacao" style="margin-top:2px;">' +
+                '<span><b>Numerar as variações</b><br><span style="color:var(--cd-text-light);font-size:11px;">' +
+                'Ligado: cena_7_1_, cena_7_2_. Desligado: todas ficam como cena_7_.</span></span></label>' +
+              '<div id="rn-preview" style="font-size:12px;margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--cd-bg-secondary);border:1px solid var(--cd-border-light);"></div>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="flow-card">' +
+            '<div class="flow-card-header"><h3 class="flow-card-title">O que renomear</h3></div>' +
+            '<div class="flow-card-content">' +
+              '<div class="flow-mode-btns">' +
+                '<button class="flow-mode-btn active" data-rnescopo="ambos">🖼️🎬 Tudo</button>' +
+                '<button class="flow-mode-btn" data-rnescopo="imagens">🖼️ Só imagens</button>' +
+                '<button class="flow-mode-btn" data-rnescopo="videos">🎬 Só vídeos</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="flow-actions">' +
+            '<button id="rn-start" class="flow-btn flow-btn-primary">🏷️ Analisar e renomear</button>' +
+            '<button id="rn-stop" class="flow-btn flow-btn-secondary" disabled>⏹ Parar</button>' +
+          '</div>' +
+          '<button class="flow-validate-btn" id="rn-testar" style="margin-top:0;">🔎 Só analisar (não renomeia)</button>' +
+          '<div id="rn-status" class="flow-status"></div>' +
+          '<div class="flow-progress"><div id="rn-barra" class="flow-progress-bar"></div></div>' +
+          '<div id="rn-resultado" style="max-height:260px;overflow-y:auto;margin-top:8px;"></div>' +
+        '</div>';
+      scroll.appendChild(conteudo);
+      console.info('%c[Flow] aba 🏷️ Renomear montada', 'color:#10b981;font-weight:bold');
+
+      // troca de aba
+      abas.querySelectorAll('.flow-tab').forEach(t => {
+        t.addEventListener('click', () => {
+          abas.querySelectorAll('.flow-tab').forEach(x => x.classList.remove('active'));
+          scroll.querySelectorAll('.flow-tab-content').forEach(x => x.classList.remove('active'));
+          t.classList.add('active');
+          const alvo = scroll.querySelector('.flow-tab-content[data-tab="' + t.getAttribute('data-tab') + '"]');
+          if (alvo) alvo.classList.add('active');
+        });
+      });
+
+      const campo = document.getElementById('rn-modelo');
+      const caixaVar = document.getElementById('rn-variacao');
+      const temVar = m => { const s = String(m).toLowerCase(); return s.includes('{g}') || s.includes('{gg}'); };
+      campo.value = lerModelo();
+
+      const atualizar = (salvar) => {
+        const modelo = campo.value.trim() || MODELO_PADRAO;
+        if (salvar) { try { localStorage.setItem(CHAVE_MODELO, modelo); } catch (_) {} }
+        caixaVar.checked = temVar(modelo);
+        const alvo = document.getElementById('rn-preview');
+        if (alvo) {
+          alvo.innerHTML = 'Vai ficar assim:<br><b>' + montarNome(7, 1, false, modelo) + '</b> · <b>' +
+            montarNome(7, 2, false, modelo) + '</b> · <b>' + montarNome(12, 1, true, modelo) + '</b>' +
+            (temVar(modelo) ? '' :
+              '<br><span style="color:#92400e;">⚠️ Sem <b>{g}</b>, todas as variações da cena ficam com o mesmo nome.</span>');
+        }
+      };
+
+      campo.addEventListener('input', () => atualizar(false));
+      campo.addEventListener('change', () => atualizar(true));
+      campo.addEventListener('blur', () => atualizar(true));
+      conteudo.querySelectorAll('[data-rnmodelo]').forEach(b => {
+        b.addEventListener('click', () => { campo.value = b.getAttribute('data-rnmodelo'); atualizar(true); });
+      });
+      caixaVar.addEventListener('change', () => {
+        let m = campo.value.trim() || MODELO_PADRAO;
+        if (caixaVar.checked) {
+          if (!temVar(m)) {
+            const base = m.trimEnd();
+            m = base.endsWith('_') ? base.slice(0, -1) + '_{g}_' : base + (base.includes('_') ? '_' : ' ') + '{g}';
+          }
+        } else {
+          m = m.split('{gg}').join('').split('{GG}').join('').split('{g}').join('').split('{G}').join('');
+          while (m.includes('__')) m = m.split('__').join('_');
+        }
+        campo.value = m;
+        atualizar(true);
+      });
+
+      let escopo = 'ambos';
+      try { escopo = localStorage.getItem(CHAVE_ESCOPO) || 'ambos'; } catch (_) {}
+      conteudo.querySelectorAll('[data-rnescopo]').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('data-rnescopo') === escopo);
+        b.addEventListener('click', () => {
+          conteudo.querySelectorAll('[data-rnescopo]').forEach(x => x.classList.remove('active'));
+          b.classList.add('active');
+          escopo = b.getAttribute('data-rnescopo');
+          try { localStorage.setItem(CHAVE_ESCOPO, escopo); } catch (_) {}
+        });
+      });
+
+      const inst = root.__flowInstance;
+      const rodar = (apenasAnalisar) => {
+        const alvo = root.__flowInstance;
+        if (!alvo) return;
+        document.getElementById('rn-start').disabled = true;
+        document.getElementById('rn-stop').disabled = false;
+        alvo.renomearGaleria({ escopo, apenasAnalisar });
+      };
+      document.getElementById('rn-start').addEventListener('click', () => rodar(false));
+      document.getElementById('rn-testar').addEventListener('click', () => rodar(true));
+      document.getElementById('rn-stop').addEventListener('click', () => {
+        const alvo = root.__flowInstance;
+        if (alvo) alvo.renomearParar = true;
+        document.getElementById('rn-stop').disabled = true;
+      });
+
+      atualizar(false);
+    }
+
+    // Tenta cedo e insiste: o painel do Flow demora a montar em máquina lenta.
+    [300, 800, 1500, 2500, 4000].forEach(ms => setTimeout(montarAbaRenomear, ms));
+    setInterval(montarAbaRenomear, 4000);
+
     proto.initUI = function () {
       old.initUI.call(this);
+      root.__flowInstance = this;   // a aba Renomear precisa da instância
       // Hover replaces a video's thumbnail with a signed playback URL. Preserve
       // its observed identity before that change, including virtualized rows.
       const rememberVideos = () => this.getTiles().filter(tile => $('flow-video-tile', tile)).forEach(tile => this.getUuidFromTile(tile));
