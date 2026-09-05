@@ -1,3 +1,2725 @@
+// ============================================================================
+//  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
+//  Flow NOVO v7.1   -   2026-09-05
+// ============================================================================
+//
+//  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
+//
+//  Ele tem duas partes, nesta ordem:
+//    PARTE 1 - Compatibilidade com o Flow novo (flow.google.com, Angular)
+//    PARTE 2 - O programa principal (painel, filas, tempos, downloads)
+//
+//  Para trocar de versao: pegue um arquivo antigo e substitua este.
+//  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
+//
+// ============================================================================
+
+
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │  PARTE 1 de 2 — COMPATIBILIDADE COM O FLOW NOVO                          │
+// └──────────────────────────────────────────────────────────────────────────┘
+/* Compatibility layer for the Google Flow interface observed on 2026-09-04. */
+(function (root) {
+  'use strict';
+  const norm = value => String(value || '').replace(/\s+/g, ' ').trim();
+  const refKey = value => norm(value).replace(/ _$/, '').replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '').toLocaleLowerCase();
+  const sceneInfo = name => {
+    const m = norm(name).match(/^Cena\s+(\d+(?:\.\d+)?)\s*-\s*(Imagem|V[ií]deo)\s+(\d+)$/i);
+    return m ? { scene: `Cena ${m[1]}`, sceneNum: Number(m[1]), imgNum: Number(m[3]), isVideo: /^v/i.test(m[2]) } : null;
+  };
+  const unique = entries => [...new Map(entries.filter(e => e && e.uuid).map(e => [e.uuid, e])).values()];
+  const cleanEditorText = editor => {
+    const copy = editor.cloneNode(true);
+    copy.querySelectorAll('.prosemirror-placeholder,.ProseMirror-separator,.ProseMirror-trailingBreak').forEach(e => e.remove());
+    return norm(copy.textContent.replace(/[\u200b\ufeff]/g, ''));
+  };
+  const safeName = value => norm(value).replace(/\.(png|jpe?g|webp|gif|mp4|webm)$/i, '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'media';
+  const videoIdentity = source => {
+    const direct = String(source).match(/\/image\/([a-f0-9-]{36})(?:[?/#]|$)/i)?.[1];
+    if (direct) return direct;
+    // Flow uses the same opaque ASB resource for a thumbnail and playback;
+    // playback appends a rendition suffix such as =mm,22,15.
+    const resource = String(source).match(/\/asb\/([^?=#]+)/)?.[1];
+    if (!resource) return null;
+    let hash = 0xcbf29ce484222325n;
+    for (const char of resource) hash = BigInt.asUintN(64, (hash ^ BigInt(char.charCodeAt(0))) * 0x100000001b3n);
+    return 'video-' + hash.toString(16).padStart(16, '0');
+  };
+  const zipFiles = async files => {
+    if (files.length > 65535) throw new Error('Divida o download em lotes menores.');
+    const encode = new TextEncoder(), local = [], central = [];
+    let offset = 0, centralSize = 0;
+    for (const file of files) {
+      const data = new Uint8Array(await file.blob.arrayBuffer()), name = encode.encode(file.name);
+      let crc = 0xffffffff;
+      for (const byte of data) {
+        crc ^= byte;
+        for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+      }
+      crc = (crc ^ 0xffffffff) >>> 0;
+      if (offset + data.length + name.length + 30 > 0xffffffff) throw new Error('Divida o download em lotes menores que 4 GB.');
+      const header = new Uint8Array(30 + name.length), h = new DataView(header.buffer);
+      h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x800, true);
+      h.setUint32(14, crc, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true);
+      h.setUint16(26, name.length, true); header.set(name, 30);
+      const directory = new Uint8Array(46 + name.length), d = new DataView(directory.buffer);
+      d.setUint32(0, 0x02014b50, true); d.setUint16(4, 20, true); d.setUint16(6, 20, true); d.setUint16(8, 0x800, true);
+      d.setUint32(16, crc, true); d.setUint32(20, data.length, true); d.setUint32(24, data.length, true);
+      d.setUint16(28, name.length, true); d.setUint32(42, offset, true); directory.set(name, 46);
+      local.push(header, data); central.push(directory); offset += header.length + data.length; centralSize += directory.length;
+    }
+    const end = new Uint8Array(22), e = new DataView(end.buffer);
+    e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+    e.setUint32(12, centralSize, true); e.setUint32(16, offset, true);
+    return new Blob([...local, ...central, end], { type: 'application/zip' });
+  };
+  const blobToJpeg = async (blob) => {
+    if (!blob || !blob.type || blob.type === 'image/jpeg' || blob.type === 'image/jpg') return blob;
+    if (!blob.type.startsWith('image/')) return blob;
+    try {
+      const bitmap = await createImageBitmap(blob);
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0);
+      return await new Promise((resolve) => {
+        canvas.toBlob(jBlob => resolve(jBlob || blob), 'image/jpeg', 0.95);
+      });
+    } catch (_) {
+      return blob;
+    }
+  };
+  const pure = { norm, refKey, sceneInfo, unique, cleanEditorText, safeName, zipFiles, blobToJpeg, videoIdentity };
+  if (typeof module === 'object' && module.exports) module.exports = pure;
+
+  root.__installFlowModern = function (FlowAutomation, ctx) {
+    if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.1 (lote silencioso em ZIP)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
+    const proto = FlowAutomation.prototype;
+    const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
+    const labels = {
+      'Search assets': 'Pesquisar recursos', 'Add ingredients to the prompt box': 'Adicionar elementos à caixa de comando',
+      'Settings trigger': 'Gatilho de configurações', 'Start generation': 'Iniciar geração', 'Clear prompt': 'Apagar comando',
+      'Category navigation': 'Navegação por categoria', 'Asset list': 'Lista de recursos', 'Mode': 'Modo',
+      'Output count': 'Quantidade de resultados', 'More options': 'Mais opções', 'Done': 'Concluído',
+      'Cancel': 'Cancelar', 'Project navigation': 'Navegar pelos projetos', 'Search': 'Pesquisar',
+      'Filtering and sorting options': 'Opções de filtragem e ordenação', 'Clear all filters': 'Limpar todos os filtros'
+    };
+    const selectorFor = selector => selector.replace(/\[aria-label="([^"]+)"\]/g, (match, label) => labels[label] ? `:is(${match},[aria-label="${labels[label]}"])` : match);
+    const $ = (selector, parent = document) => parent.querySelector(selectorFor(selector));
+    const $$ = (selector, parent = document) => [...parent.querySelectorAll(selectorFor(selector))];
+    const visible = el => !!el && !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
+    const own = el => !!el.closest('#flow-panel,#flow-assign-panel,#flow-popup,#flow-mini');
+    const controlText = el => {
+      if (el.getAttribute('aria-label')) return norm(el.getAttribute('aria-label'));
+      const copy = el.cloneNode(true);
+      copy.querySelectorAll('mat-icon,i.google-symbols,svg,[aria-hidden="true"]').forEach(icon => icon.remove());
+      return norm(copy.textContent);
+    };
+    const textButton = (labels, selector = 'button', parent = document) => $$(selector, parent).find(el => visible(el) && !own(el) && labels.some(label => controlText(el).toLowerCase() === label.toLowerCase()));
+    const menuItem = labels => textButton(labels, '[role="menuitem"]');
+    const stopError = () => Object.assign(new Error('Operação interrompida.'), { stopped: true });
+    const setInput = (el, value) => {
+      if (!el) throw new Error('Campo de texto não encontrado.');
+      const type = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement : HTMLInputElement;
+      Object.getOwnPropertyDescriptor(type.prototype, 'value').set.call(el, value);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    Object.assign(proto, {
+      modernStopped() { return this._modernTaskRunning && (this.shouldStop || this.videoShouldStop); },
+      /** Fator do seletor Lento/Normal/Rápido. O adapter ignorava isso. */
+      /**
+       * Texto digitado, SEM os chips de referencia. O chip continua no editor
+       * depois do envio, entao exigir o editor "vazio" fazia todo prompt COM
+       * referencia ser dado como falho mesmo tendo sido enviado.
+       */
+      textoSemChips(editor) {
+        try {
+          const ed = editor || this.getEditor();
+          if (!ed) return '';
+          const copia = ed.cloneNode(true);
+          copia.querySelectorAll('.mention-chip, [data-mention], [contenteditable="false"], .prosemirror-placeholder, .ProseMirror-separator, .ProseMirror-trailingBreak')
+            .forEach(e => e.remove());
+          return norm(copia.textContent.replace(/[​﻿]/g, ''));
+        } catch (_) { return cleanEditorText(editor || this.getEditor()); }
+      },
+      fatorVelocidade() {
+        const f = Number(this.speedMultiplier);
+        return (isFinite(f) && f > 0) ? Math.min(3, Math.max(0.4, f)) : 1;
+      },
+      /** Pausa interna do adapter, sujeita ao seletor de velocidade. */
+      pausa(ms) { return this.sleep(Math.max(20, Math.round(ms * this.fatorVelocidade()))); },
+      async modernWait(check, timeout = 10000) {
+        // O Flow costuma responder em menos de meio segundo. Conferir de 150 em
+        // 150ms fazia a gente PERDER ate 150ms em CADA espera, e sao varias por
+        // referencia. Agora olhamos rapido no comeco e vamos afrouxando.
+        const inicio = Date.now(), end = inicio + timeout;
+        while (Date.now() < end) {
+          if (this.modernStopped()) throw stopError();
+          const result = check();
+          if (result) return result;
+          const decorrido = Date.now() - inicio;
+          await this.sleep(decorrido < 1000 ? 40 : decorrido < 3000 ? 100 : 200);
+        }
+        throw new Error('O Flow não respondeu no tempo esperado.');
+      },
+      getEditor() { return $('.ProseMirror[contenteditable="true"]'); },
+      async clearEditor() {
+        await this.closeAssetPicker();
+        const clear = $('button[aria-label="Clear prompt"]');
+        if (clear) { clear.click(); await this.pausa(150); }
+        const editor = this.getEditor();
+        if (!editor) throw new Error('Campo de prompt do Flow não encontrado.');
+        editor.focus();
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        const selection = window.getSelection();
+        selection.removeAllRanges(); selection.addRange(range);
+        document.execCommand('delete', false);
+        await this.modernWait(() => cleanEditorText(editor) === '' || this.textoSemChips(editor) === '');
+      },
+      async insertText(text) {
+        if (!text) return;
+        // Com o painel de ingredientes aberto o cursor NAO esta na caixa de
+        // prompt e a escrita se perde. Volta para a caixa antes de escrever.
+        if (visible($('input[aria-label="Search assets"]'))) await this.voltarAoEditor();
+        const editor = this.getEditor();
+        if (!editor) throw new Error('Campo de prompt do Flow não encontrado.');
+        const antes = cleanEditorText(editor);
+        const mudou = () => cleanEditorText(editor) !== antes;
+
+        // Logo depois de fechar o painel de ingredientes o editor pode ainda nao
+        // estar com o foco, e a escrita falhava de primeira — derrubando o prompt
+        // inteiro por causa do texto que vem DEPOIS da referencia. Agora insiste:
+        // foco, execCommand, e por fim o beforeinput, que e o jeito antigo.
+        const posicionar = () => {
+          editor.focus();
+          const range = document.createRange(); range.selectNodeContents(editor); range.collapse(false);
+          const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        };
+
+        for (let tentativa = 1; tentativa <= 3; tentativa++) {
+          if (this.modernStopped()) throw stopError();
+          posicionar();
+          let aceitou = false;
+          try { aceitou = document.execCommand('insertText', false, text); } catch (_) { aceitou = false; }
+          if (!aceitou) {
+            try {
+              editor.dispatchEvent(new InputEvent('beforeinput', {
+                bubbles: true, cancelable: true, inputType: 'insertText', data: text
+              }));
+            } catch (_) {}
+          }
+          try {
+            await this.modernWait(() => mudou() || !norm(text), 2500);
+            await this.pausa(60);
+            return;
+          } catch (_) {
+            if (tentativa === 3) break;
+            this.logDebug('O editor não aceitou o texto; tentando de novo.', 'warning');
+            await this.pausa(250);
+          }
+        }
+        throw new Error('O Flow não aceitou a inserção de texto.');
+      },      async closeAssetPicker() {
+        const trigger = $('button[aria-label="Add ingredients to the prompt box"]');
+        if (trigger?.getAttribute('aria-expanded') === 'true') {
+          trigger.click();
+          await this.modernWait(() => !visible($('input[aria-label="Search assets"]')));
+        }
+      },
+      async openAtSelector() {
+        if (visible($('input[aria-label="Search assets"]'))) return;
+        const trigger = $('button[aria-label="Add ingredients to the prompt box"]');
+        if (!trigger) throw new Error('Botão de referências não encontrado.');
+        trigger.click();
+        await this.modernWait(() => visible($('input[aria-label="Search assets"]')));
+      },
+      async clickDialogTab(type, broad = false) {
+        // O Flow passou a separar referências visuais entre Images, Characters,
+        // Avatars e Uploads. Mantemos Images como primeira tentativa e usamos
+        // All como fallback, para que referências antigas continuem funcionando.
+        const labels = type === 'voice'
+          ? ['Voices', 'Vozes']
+          : (broad ? ['All', 'Tudo', 'Todos'] : ['Images', 'Imagens']);
+        const tab = $$('[role="tablist"][aria-label="Category navigation"] [role="tab"]').find(el => labels.includes(norm($('.toggle-text', el)?.textContent || el.textContent).replace(/^(image|voice_selection)\s*/, '')));
+        // Match the visible category label without depending on the icon font.
+        const match = tab || $$('[role="tablist"][aria-label="Category navigation"] [role="tab"]').find(el => labels.some(label => norm(el.textContent).endsWith(label)));
+        if (!match) throw new Error(`Categoria ${labels[0]} não encontrada no seletor.`);
+        if (match.getAttribute('aria-selected') !== 'true') {
+          match.click();
+          await this.modernWait(() => match.getAttribute('aria-selected') === 'true');
+        }
+      },
+      /**
+       * Número da cena lido do TEXTO (prompt). Aceita "{cena 12} ...", "12 - ...",
+       * "12. ...", "12) ...", "97,2 - ...".
+       */
+      numeroDaCenaNoTexto(texto) {
+        const s = norm(texto);
+        if (!s) return null;
+        const marcado = s.match(/^\s*[{[(]\s*(?:cena|prompt|scene)\s*([0-9]+(?:[.,][0-9]+)?)\s*[}\])]/i);
+        if (marcado) return Number(String(marcado[1]).replace(',', '.'));
+        const prefixo = s.match(/^\s*([0-9]{1,4}(?:[.,][0-9]+)?)\s*[-–—.):]\s+/);
+        if (prefixo) return Number(String(prefixo[1]).replace(',', '.'));
+        return null;
+      },
+
+      /**
+       * Pega o PROMPT de uma mídia pedindo ao próprio Flow: clica em
+       * "Reutilizar comando" (ícone redo), que joga o prompt inteiro na caixa de
+       * texto, lê de lá e limpa. É o único caminho que funciona — o painel de
+       * informações só abre com mouse físico, e a API não expõe o texto.
+       */
+      async promptViaReutilizar(tile) {
+        if (!tile) return '';
+        const botao = [...tile.querySelectorAll('button')].find(b => {
+          const icone = norm(b.querySelector('mat-icon,i')?.textContent);
+          const rotulo = norm(b.getAttribute('aria-label') || b.getAttribute('title'));
+          return icone === 'redo' || /reutilizar|reuse|usar novamente/i.test(rotulo);
+        });
+        if (!botao) return '';
+
+        try {
+          botao.click();
+          const editor = await this.modernWait(() => this.getEditor(), 3000);
+          // MEDIDO AO VIVO: o prompt cai na caixa em ~210ms. Conferimos a cada
+          // 40ms para nao perder tempo, com 2s de teto por seguranca.
+          let texto = '';
+          for (let i = 0; i < 50; i++) {
+            await this.sleep(40);
+            texto = norm(cleanEditorText(editor));
+            if (texto.length > 15) break;
+          }
+          await this.clearEditor();
+          return texto;
+        } catch (_) {
+          try { await this.clearEditor(); } catch (__) {}
+          return '';
+        }
+      },
+      async findAsset(name, type = 'image') {
+        await this.openAtSelector();
+        await this.clickDialogTab(type);
+        let input = $('input[aria-label="Search assets"]');
+        const opcoes = () => $$('[role="listbox"][aria-label="Asset list"] [role="option"]');
+        const exatas = () => opcoes().filter(o => refKey($('.asset-title', o)?.textContent) === refKey(name));
+        // Espera a lista responder. Assim que aparece um resultado exato usamos
+        // ele; se so vierem parecidos, ficamos com o PRIMEIRO, como a versao
+        // rapida fazia. Antes exigiamos nome exato E unico, e qualquer duvida
+        // custava uma troca de aba mais 12 segundos de espera por prompt.
+        const esperar = async timeout => {
+          const fimT = Date.now() + timeout;
+          let algum = [];
+          while (Date.now() < fimT) {
+            if (this.modernStopped()) throw stopError();
+            const e = exatas();
+            if (e.length) return e[0];
+            algum = opcoes();
+            if (algum.length) { await this.pausa(200); const e2 = exatas(); return e2.length ? e2[0] : (opcoes()[0] || algum[0]); }
+            await this.pausa(120);
+          }
+          return null;
+        };
+
+        setInput(input, name);
+        let alvo = await esperar(type === 'voice' ? 12000 : 3000);
+        if (!alvo && type !== 'voice') {
+          await this.clickDialogTab(type, true);
+          input = $('input[aria-label="Search assets"]');
+          if (!input) throw new Error('Campo de busca de referencias nao encontrado.');
+          setInput(input, name);
+          alvo = await esperar(8000);
+        }
+        if (!alvo) throw new Error(`Referência ${type === 'voice' ? 'de voz ' : ''}"${name}" não encontrada.`);
+        return alvo;
+      },
+      /**
+       * Anexa uma referencia. Em prompt com VARIAS referencias, o painel de
+       * ingredientes fica ABERTO entre uma e outra: fechar e reabrir custava um
+       * ciclo inteiro (fechar + digitar @ + esperar abrir) por referencia. Se o
+       * atalho nao funcionar, refazemos do jeito completo — nunca sai sem a
+       * referencia.
+       */
+      /**
+       * A referencia ja esta anexada neste prompt? O Flow anexa o ingrediente
+       * UMA vez; quando o mesmo [nome] aparece varias vezes no texto, procurar de
+       * novo so gastava tempo e, quando a busca nao achava, derrubava o prompt
+       * inteiro por causa de algo que ja estava la.
+       */
+      referenciaNoEditor(name) {
+        try {
+          const editor = this.getEditor();
+          if (!editor || !name) return false;
+          const limpar = v => refKey(v).replace(/[ _]+$/, '');
+          const alvo = limpar(name);
+          if (!alvo) return false;
+          const pedacos = $$('.mention-chip, [data-mention], [contenteditable="false"]', editor);
+          const folhas = pedacos.length ? pedacos
+            : $$('span, div, a', editor).filter(el => !el.children.length);
+          for (const el of folhas) {
+            // Comparacao ESTRITA. Aceitar prefixo fazia qualquer pedaco do editor
+            // passar por referencia e a extensao pulava o anexo de verdade.
+            if (limpar(el.textContent) === alvo) return true;
+          }
+          return false;
+        } catch (_) { return false; }   // nunca derrubar um prompt por causa desta checagem
+      },
+      /**
+       * Volta para a caixa de prompt depois de anexar uma referencia. Nao basta
+       * .focus(): o Flow so devolve o cursor quando ha um CLIQUE de verdade na
+       * caixa. Sem isso o painel de ingredientes ficava aberto e o texto que vem
+       * depois da referencia nao entrava.
+       */
+      async voltarAoEditor() {
+        for (let i = 0; i < 3; i++) {
+          if (!visible($('input[aria-label="Search assets"]'))) break;
+          try { await this.closeAssetPicker(); } catch (_) {}
+          await this.pausa(120);
+        }
+        const ed = this.getEditor();
+        if (!ed) return;
+        const r = ed.getBoundingClientRect();
+        const x = Math.round(r.left + Math.min(Math.max(r.width - 8, 4), 40));
+        const y = Math.round(r.top + r.height / 2);
+        for (const tipo of ['pointerdown', 'mousedown', 'mouseup', 'click', 'pointerup']) {
+          try {
+            ed.dispatchEvent(/^pointer/.test(tipo)
+              ? new PointerEvent(tipo, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', isPrimary: true })
+              : new MouseEvent(tipo, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, buttons: tipo === 'mousedown' ? 1 : 0 }));
+          } catch (_) {}
+        }
+        ed.focus();
+        try {
+          const range = document.createRange(); range.selectNodeContents(ed); range.collapse(false);
+          const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+        } catch (_) {}
+        await this.pausa(80);
+      },
+      async selectAsset(name, type, opcoes) {
+        const { reaproveitar = false, manterAberto = false } = opcoes || {};
+        const useBackspace = document.getElementById(this.videoIsRunning || this._modernTestVideo ? 'fv-use-backspace' : 'flow-use-backspace')?.checked;
+        const segurar = manterAberto && !useBackspace;
+        // Cada [nome] escrito no prompt vira uma mencao NAQUELE ponto do texto.
+        // Pular as repeticoes deixava o prompt sem a mencao no lugar certo — por
+        // isso buscamos quantas vezes o prompt mandar.
+        const jaAberto = reaproveitar && visible($('input[aria-label="Search assets"]'));
+        if (!jaAberto) await this.openMentionPicker();
+
+        const antes = this.getEditor().innerHTML;
+        const jaEntrou = () => this.getEditor()?.innerHTML !== antes || this.referenciaNoEditor(name);
+        let entrou = false;
+        try {
+          const alvo = await this.findAsset(name, type);
+
+          // SAO DOIS CLIQUES na referencia. O primeiro seleciona, o segundo e o
+          // que realmente a insere no prompt. Dar so um deixava a extensao
+          // esperando por uma insercao que nunca vinha, com o painel aberto.
+          const clicar = el => {
+            const r = el.getBoundingClientRect();
+            const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+            for (const tipo of ['pointerdown', 'mousedown', 'mouseup', 'click', 'pointerup']) {
+              try {
+                el.dispatchEvent(/^pointer/.test(tipo)
+                  ? new PointerEvent(tipo, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', isPrimary: true })
+                  : new MouseEvent(tipo, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, buttons: tipo === 'mousedown' ? 1 : 0 }));
+              } catch (_) {}
+            }
+            try { el.click(); } catch (_) {}
+          };
+
+          clicar(alvo);
+          await this.pausa(160);
+
+          if (!jaEntrou()) {
+            // O segundo clique. A lista pode ter se redesenhado depois do
+            // primeiro, entao reencontramos o item antes de clicar de novo.
+            let segundo = alvo;
+            if (!segundo || !segundo.isConnected) {
+              try { segundo = await this.findAsset(name, type); } catch (_) { segundo = null; }
+            }
+            if (segundo) clicar(segundo.closest('[role="option"]') || segundo);
+            await this.pausa(160);
+          }
+          if (!jaEntrou()) {
+            // Algumas telas trocam o segundo clique por um botao de confirmar.
+            const add = textButton(['Add to prompt', 'Adicionar ao prompt', 'Incluir no comando']);
+            if (add) {
+              if (add.disabled) throw new Error(`O Flow não permite adicionar "${name}" neste modo.`);
+              clicar(add);
+            }
+          }
+
+          await this.modernWait(jaEntrou, jaAberto ? 5000 : 10000);
+          entrou = true;
+        } catch (erro) {
+          if (this.referenciaNoEditor(name)) {
+            // Ja entrou (o Flow renomeia o chip, ex: 'REF_ODI_' vira 'REF_ODI__').
+            this.logDebug(`⚠️ a busca por "${name}" falhou (${erro && erro.message ? erro.message : erro}), mas ela já aparece no prompt; sigo em frente.`, 'warning');
+            entrou = true;
+          } else if (!jaAberto) {
+            try { await this.closeAssetPicker(); } catch (_) {}
+            throw erro;
+          } else {
+            this.logDebug('O painel reaproveitado não aceitou a referência; refazendo do jeito completo.', 'warning');
+          }
+        }
+        if (!entrou) return this.selectAsset(name, type, { reaproveitar: false, manterAberto });
+
+        this.logDebug(`✅ referência "${name}" anexada.`, 'success');
+        if (segurar) return;   // proxima referencia usa este mesmo painel
+        await this.voltarAoEditor();
+        if (useBackspace) {
+          // Preserve the attached ingredient while removing its inline mention.
+          const chips = $$('.mention-chip', this.getEditor());
+          const chip = chips[chips.length - 1];
+          if (chip) {
+            const range = document.createRange(); range.selectNode(chip);
+            const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+            document.execCommand('delete', false); await this.pausa(200);
+          }
+        }
+      },
+      async searchAndSelect(name, opcoes) { return this.selectAsset(name, 'image', opcoes); },
+      async searchAndSelectVoice(name) { return this.selectAsset(name, 'voice'); },
+      async openMentionPicker() {
+        await this.closeAssetPicker();
+        const editor = this.getEditor();
+        editor.focus();
+        const range = document.createRange(); range.selectNodeContents(editor); range.collapse(false);
+        const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        const keydown = new KeyboardEvent('keydown', { key: '@', code: 'Digit2', shiftKey: true, bubbles: true, cancelable: true });
+        const notHandled = editor.dispatchEvent(keydown);
+        // ProseMirror routes printable characters through keypress/handleTextInput.
+        const keypress = new KeyboardEvent('keypress', { key: '@', code: 'Digit2', keyCode: 64, charCode: 64, which: 64, shiftKey: true, bubbles: true, cancelable: true });
+        const textNotHandled = notHandled && editor.dispatchEvent(keypress);
+        if (textNotHandled && document.activeElement === editor) document.execCommand('insertText', false, '@');
+        editor.dispatchEvent(new KeyboardEvent('keyup', { key: '@', code: 'Digit2', shiftKey: true, bubbles: true }));
+        await this.modernWait(() => visible($('input[aria-label="Search assets"]')));
+      },
+      async resetEditor() { await this.closeAssetPicker(); await this.clearEditor(); },
+      async configureGeneration(isVideo, count) {
+        await this.closeAssetPicker();
+        const trigger = $('button[aria-label="Settings trigger"]');
+        if (!trigger) throw new Error('Configurações de geração não encontradas.');
+        if (!visible($('[aria-label="Mode"]'))) trigger.click();
+        await this.modernWait(() => visible($('[aria-label="Mode"]')));
+        const radio = $$('[aria-label="Mode"] [role="radio"]').find(el => (isVideo ? ['Video', 'Vídeo'] : ['Image', 'Imagem']).includes(norm($('.toggle-text', el)?.textContent)));
+        if (!radio) throw new Error('Modo de geração indisponível.');
+        if (radio.getAttribute('aria-checked') !== 'true') radio.click();
+        await this.modernWait(() => radio.getAttribute('aria-checked') === 'true');
+        const quantity = await this.modernWait(() => $$('[aria-label="Output count"] [role="radio"]').find(el => norm(el.textContent) === `x${count}`));
+        if (quantity.disabled || quantity.getAttribute('aria-disabled') === 'true') throw new Error(`O modelo atual não permite ${count} resultado(s).`);
+        if (quantity.getAttribute('aria-checked') !== 'true') quantity.click();
+        await this.modernWait(() => quantity.getAttribute('aria-checked') === 'true');
+        trigger.click();
+        await this.pausa(200);
+      },
+      async clickSubmit() {
+        // Com o painel de ingredientes aberto o envio nao acontece.
+        try { await this.closeAssetPicker(); } catch (_) {}
+        const editor = this.getEditor();
+        if (!editor || !cleanEditorText(editor)) throw new Error('O prompt está vazio; nenhum envio foi feito.');
+        this._modernPreparedText = cleanEditorText(editor);
+        const textoAntes = this.textoSemChips(editor);
+        const gerandoAntes = this.getTiles().filter(t => this.tileHasProgress(t)).length;
+
+        const btn = await this.modernWait(() => {
+          const b = $('button[aria-label="Start generation"]');
+          return b && !b.disabled ? b : null;
+        });
+        btn.click();
+
+        // O Flow ACEITOU se qualquer um destes acontecer. Exigir o editor vazio
+        // dava falso negativo em TODO prompt com referencia, porque o chip fica
+        // no editor depois do envio e o texto nunca chegava a ser vazio.
+        const aceitou = () => {
+          const ed = this.getEditor();
+          if (!ed) return true;
+          if (cleanEditorText(ed) === '') return true;
+          const agora = this.textoSemChips(ed);
+          if (textoAntes && agora.length <= Math.max(2, Math.round(textoAntes.length * 0.4))) return true;
+          const b = $('button[aria-label="Start generation"]');
+          if (b && b.disabled) return true;
+          if (this.getTiles().filter(t => this.tileHasProgress(t)).length > gerandoAntes) return true;
+          return false;
+        };
+        try {
+          await this.modernWait(aceitou, 15000);
+        } catch (error) {
+          // Nao repetimos um envio duvidoso: ele pode ja ter gasto credito.
+          this._modernUncertain = true;
+          const restou = String(this.textoSemChips(this.getEditor())).slice(0, 60);
+          const gerandoAgora = this.getTiles().filter(t => this.tileHasProgress(t)).length;
+          this.logDebug('Envio sem confirmação. Sobrou no editor: ' + JSON.stringify(restou) +
+            ' | texto antes: ' + textoAntes.length + ' caracteres' +
+            ' | gerando: ' + gerandoAgora + ' (antes ' + gerandoAntes + ')', 'error');
+          throw new Error('Envio sem confirmação do Flow.');
+        }
+        return true;
+      },
+      async prepareAndSubmit(prompt) {
+        if (this.modernStopped()) throw stopError();
+        try { return await this.montarEEnviar(prompt); }
+        catch (erro) {
+          // Só o botão Parar interrompe. Qualquer outro problema (referência
+          // inexistente, diálogo travado, editor teimoso) vira falha DESTE
+          // prompt e a fila segue para o próximo.
+          if (erro && erro.stopped) throw erro;
+          const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
+          try { reg.call(this, `⏭️ Prompt ${prompt.promptNum} pulado: ${erro && erro.message ? erro.message : erro}`, 'error'); } catch (_) {}
+          try { await this.closeAssetPicker(); } catch (_) {}
+          try { await this.closeMenus(); } catch (_) {}
+          try { await this.clearEditor(); } catch (_) {}
+          return false;
+        }
+      },
+      async montarEEnviar(prompt) {
+        this.logDebug(`Preparando prompt ${prompt.promptNum}...`, 'info');
+        await this.clearEditor();
+        const partes = parsePrompt(prompt.text);
+        const t0 = Date.now();
+        const tempos = [];
+        for (let i = 0; i < partes.length; i++) {
+          if (this.modernStopped()) throw stopError();
+          const parte = partes[i];
+          if (parte.type === 'text') { await this.insertText(parte.content); continue; }
+          const marca = Date.now();
+          if (parte.type === 'ref') {
+            // Sem reaproveitar o painel: o caminho completo e o que comprovadamente
+            // funciona. O atalho economizava pouco e arriscava a referencia.
+            await this.searchAndSelect(parte.name);
+          } else if (parte.type === 'voice') {
+            await this.searchAndSelectVoice(parte.name);
+          }
+          tempos.push(parte.name + ' ' + ((Date.now() - marca) / 1000).toFixed(1) + 's');
+        }
+        // Medicao para saber ONDE esta o tempo, em vez de apertar no escuro.
+        if (tempos.length) this.logDebug('⏱️ referências: ' + tempos.join(' · '), 'info');
+        const enviou = await this.clickSubmit();
+        this.logDebug('⏱️ prompt ' + prompt.promptNum + ' montado e enviado em ' + ((Date.now() - t0) / 1000).toFixed(1) + 's', 'info');
+        return enviou;
+      },
+      getScroller() {
+        // Procura quem REALMENTE rola: o nome do container muda entre versoes do
+        // Flow, e pegar o errado fazia a rolagem automatica nao andar (a pagina so
+        // descia quando o usuario rolava na mao).
+        const rola = el => el && el.scrollHeight > el.clientHeight + 4;
+        for (const sel of ['cdk-virtual-scroll-viewport.tiles-container',
+                           'cdk-virtual-scroll-viewport',
+                           '.virtual-scroll-container',
+                           '[data-virtuoso-scroller="true"]']) {
+          const el = $(sel);
+          if (rola(el)) return el;
+        }
+        let el = this.getTiles()[0];
+        for (let i = 0; el && i < 14; i++) {
+          const s = getComputedStyle(el);
+          if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && rola(el)) return el;
+          el = el.parentElement;
+        }
+        const pagina = document.scrollingElement || document.documentElement;
+        if (rola(pagina)) return pagina;
+        return $('cdk-virtual-scroll-viewport.tiles-container') || $('.virtual-scroll-container') || null;
+      },
+
+      /** Rola um pedaco e confere se andou; nao insiste quando ja chegou na ponta. */
+      rolarUmPedaco(scroller, fracao, paraCima) {
+        const passo = Math.max(100, scroller.clientHeight * fracao);
+        const antes = Math.round(scroller.scrollTop);
+        const limite = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        if (!paraCima && antes >= limite - 2) return false;
+        if (paraCima && antes <= 2) return false;
+        scroller.scrollTop = paraCima ? Math.max(0, antes - passo) : Math.min(limite, antes + passo);
+        if (Math.round(scroller.scrollTop) !== antes) return true;
+        const tiles = this.getTiles();
+        const alvo = paraCima ? tiles[0] : tiles[tiles.length - 1];
+        if (!alvo || !alvo.scrollIntoView) return false;
+        alvo.scrollIntoView({ block: paraCima ? 'start' : 'end', inline: 'nearest' });
+        const agora = Math.round(scroller.scrollTop);
+        const foiPraFrente = paraCima ? agora < antes : agora > antes;
+        if (!foiPraFrente) { scroller.scrollTop = antes; return false; }
+        return true;
+      },
+      getTiles() { return $$('flow-grid-tile-container').filter(tile => $('flow-image-tile,flow-video-tile', tile)); },
+      getUuidFromTile(tile) {
+        // Video tiles expose their persistent thumbnail id instead of data-media-id.
+        // This is a gallery identity only; renaming/downloading use native UI actions.
+        if ($('flow-video-tile', tile)) {
+          this._modernVideoIds ||= new WeakMap();
+          this._modernVideoAliases ||= new Map();
+          if ($('flow-pending-tile', tile)) { this._modernVideoIds.delete(tile); return null; }
+          const source = $('flow-video-tile img.thumbnail', tile)?.getAttribute('src') || $('flow-video-tile video', tile)?.getAttribute('poster') || $('flow-video-tile video', tile)?.getAttribute('src') || '';
+          const key = videoIdentity(source), name = this.getTileName(tile), previous = this._modernVideoIds.get(tile);
+          if (!key) return previous?.id || null;
+          const sameTile = previous && (previous.key === key || previous.name === name);
+          const id = this._modernVideoAliases.get(key) || (sameTile ? previous.id : key);
+          this._modernVideoAliases.set(key, id); this._modernVideoIds.set(tile, { id, key, name });
+          return id;
+        }
+        return $('[data-media-id]', tile)?.getAttribute('data-media-id') || null;
+      },
+      getWorkflowIdFromTile(tile) { return this.getUuidFromTile(tile); },
+      // A grade e virtualizada: o tile pode ter saido da tela. Sem esta guarda,
+      // marcar uma midia que rolou para fora quebrava a atribuicao inteira.
+      getTileName(tile) { return tile ? norm(tile.getAttribute('aria-label') || $('.footer-title', tile)?.textContent) : ''; },
+      getPromptSubtitleFromTile(tile) { return this.getTileName(tile); },
+      isVideoTile(tile) { return !!$('flow-video-tile,video', tile); },
+      getMediaSrcFromTile(tile) { return $('video[src],img[data-media-id],flow-video-tile img.thumbnail', tile)?.src || ''; },
+      getImgSrcFromTile(tile) { return this.getMediaSrcFromTile(tile); },
+      tileHasProgress(tile) { return !!$('flow-pending-tile,[role="progressbar"],mat-progress-spinner,mat-spinner', tile); },
+      isTileError(tile) { return !this.tileHasProgress(tile) && (!!$('flow-error-tile,flow-failed-tile', tile) || $$('mat-icon', tile).some(el => ['error', 'warning', 'error_outline'].includes(norm(el.textContent)))); },
+      isTileLoaded(tile) { return !!this.getUuidFromTile(tile) && !this.tileHasProgress(tile) && !this.isTileError(tile) && !!$('img[src],video[src]', tile); },
+      isTilePending(tile) { return !this.isTileLoaded(tile) && !this.isTileError(tile); },
+      snapshotImageUuids() { return new Set(this.getTiles().map(t => this.getUuidFromTile(t)).filter(Boolean)); },
+      tileEntry(tile) {
+        const uuid = this.getUuidFromTile(tile);
+        return { uuid, workflowId: uuid, name: this.getTileName(tile), src: this.getMediaSrcFromTile(tile), isVideo: this.isVideoTile(tile), loaded: this.isTileLoaded(tile), error: this.isTileError(tile) };
+      },
+      async scanGallery(visit, { restore = true, completo = false, aoAndar = null, maxMs = 0 } = {}) {
+        const scroller = this.getScroller();
+        if (!scroller) throw new Error('Galeria do projeto não encontrada. Volte à tela de mídias.');
+        const originalTop = scroller.scrollTop;
+        const entries = new Map();
+        const inicio = Date.now();
+        const TETO = maxMs || (completo ? 180000 : 60000);
+        let settledBottom = 0;
+        scroller.scrollTop = 0;
+
+        // Espera a grade desenhar. No modo COMPLETO espera ela PARAR de mudar,
+        // senao lemos uma linha pela metade e a rolagem seguinte pula midias.
+        let assinaturaAnterior = '';
+        const esperarGrade = async () => {
+          if (!completo) {
+            for (let e = 0; e < 250; e += 50) {
+              await this.pausa(50);
+              const a = this.getTiles().map(x => this.getUuidFromTile(x)).join(',');
+              if (a && a !== assinaturaAnterior) { assinaturaAnterior = a; return; }
+            }
+            return;
+          }
+          let anterior = null;
+          for (let e = 0; e < 900; e += 80) {
+            await this.pausa(80);
+            const a = this.getTiles().map(x => this.getUuidFromTile(x)).join(',');
+            if (a && a === anterior) { assinaturaAnterior = a; return; }
+            anterior = a;
+          }
+        };
+
+        const colher = async () => {
+          for (const tile of this.getTiles()) {
+            const entry = this.tileEntry(tile);
+            if (!entry.uuid || entries.has(entry.uuid)) continue;
+            entries.set(entry.uuid, entry);
+            if (visit && await visit(entry, tile) === false) return false;
+          }
+          if (aoAndar) aoAndar(entries.size, Math.round(scroller.scrollTop));
+          return true;
+        };
+
+        try {
+          // ── Descida ──
+          for (let step = 0; step < 2000; step++) {
+            if (this.modernStopped()) throw stopError();
+            if (Date.now() - inicio >= TETO) return [...entries.values()];
+            await esperarGrade();
+            if (!(await colher())) return [...entries.values()];
+            if (!this.rolarUmPedaco(scroller, completo ? 0.45 : 0.65, false)) {
+              if (++settledBottom >= 2) break;
+            } else settledBottom = 0;
+          }
+
+          // ── Subida (so no modo completo): pega o que a lista virtualizada
+          //    nao chegou a desenhar na descida. ──
+          if (completo) {
+            let parado = 0;
+            for (let volta = 0; volta < 600; volta++) {
+              if (this.modernStopped()) throw stopError();
+              if (Date.now() - inicio >= TETO) break;
+              await esperarGrade();
+              if (!(await colher())) break;
+              if (!this.rolarUmPedaco(scroller, 0.45, true)) { if (++parado >= 2) break; } else parado = 0;
+            }
+          }
+          return [...entries.values()];
+        } finally { if (restore && scroller.isConnected) scroller.scrollTop = originalTop; }
+      },
+      async scrollToWorkflow(id) {
+        let found = this.getTiles().find(t => this.getUuidFromTile(t) === id);
+        if (found) { found.scrollIntoView({ block: 'center' }); return found; }
+        await this.scanGallery((entry, tile) => { if (entry.uuid === id) { found = tile; return false; } }, { restore: false });
+        return found || null;
+      },
+      async detectGrid() {
+        const tiles = this.getTiles();
+        const first = tiles[0]?.getBoundingClientRect();
+        this.gridCols = first ? tiles.filter(t => Math.abs(t.getBoundingClientRect().top - first.top) < 10).length || 1 : 1;
+        this.rowHeight = first?.height || 300;
+        const info = document.getElementById('flow-grid-info');
+        if (info) info.textContent = `Flow atualizado • ${this.gridCols} coluna(s)`;
+      },
+      async openTileMenu(tile) {
+        if (!tile?.isConnected) throw new Error('Mídia não está visível na galeria.');
+        tile.scrollIntoView({ block: 'center' });
+        const btn = $('button[aria-label="More options"]', tile);
+        if (btn) btn.click();
+        else tile.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }));
+        await this.modernWait(() => $$('[role="menu"]').some(visible));
+        return true;
+      },
+      async closeMenus() {
+        const active = document.activeElement;
+        active?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+        $$('.cdk-overlay-backdrop').filter(visible).forEach(el => el.click());
+        await this.pausa(150);
+      },
+      /**
+       * Renomeia. Tenta primeiro a API do Flow (um PATCH — era assim antes da
+       * atualização e é MUITO mais rápido que abrir menu). Se a API não
+       * responder, cai no menu da mídia. A decisão é tomada UMA vez.
+       */
+      /** Id sintetico de video (video-xxxx) nao existe na API do Flow. */
+      idServeNaApi(id) { return !!id && !/^video-/i.test(String(id)); },
+      async apiRename(id, name) {
+        if (this.idServeNaApi(id) && this._apiRenomearVale !== false && old.apiRename) {
+          try {
+            const deu = await old.apiRename.call(this, id, name);
+            if (deu) {
+              if (this._apiRenomearVale === undefined) {
+                this._apiRenomearVale = true;
+                this.logDebug('⚡ Renomeando pela API do Flow (rápido).', 'success');
+              }
+              return true;
+            }
+          } catch (_) {}
+          if (this._apiRenomearVale === undefined) {
+            this._apiRenomearVale = false;
+            this.logDebug('A API de renomear não respondeu; usando o menu da mídia (mais lento).', 'warning');
+          }
+        }
+        return this.renomearPeloMenu(id, name);
+      },
+
+      async renomearPeloMenu(id, name) {
+        try {
+          const tile = await this.scrollToWorkflow(id);
+          if (!tile) throw new Error('Mídia não encontrada para renomear.');
+          if (this.getTileName(tile) === name) return true;
+          await this.openTileMenu(tile);
+          const rename = menuItem(['Rename', 'Renomear']);
+          if (!rename) throw new Error('Comando Renomear não encontrado.');
+          rename.click();
+          const form = await this.modernWait(() => $$('.cdk-overlay-pane flow-editable-text').find(visible));
+          setInput($('input', form), name);
+          const done = $('button[aria-label="Done"]', form) || $$('button', form).find(b => norm($('mat-icon', b)?.textContent) === 'done');
+          if (!done) throw new Error('Confirmação de renomeação não encontrada.');
+          done.click();
+          await this.modernWait(() => this.getTiles().some(t => this.getUuidFromTile(t) === id && this.getTileName(t) === name));
+          return true;
+        } catch (error) { this.logDebug(`Renomear: ${error.message}`, 'error'); await this.closeMenus(); return false; }
+      },
+      async apiFavorite(id, value) {
+        if (this.idServeNaApi(id) && this._apiFavoritarVale !== false && old.apiFavorite) {
+          try {
+            const deu = await old.apiFavorite.call(this, id, value);
+            if (deu) { this._apiFavoritarVale = true; return true; }
+          } catch (_) {}
+          if (this._apiFavoritarVale === undefined) this._apiFavoritarVale = false;
+        }
+        return this.favoritarPeloBotao(id, value);
+      },
+
+      async favoritarPeloBotao(id, value) {
+        try {
+          const tile = await this.scrollToWorkflow(id);
+          if (!tile) throw new Error('Mídia não encontrada para favoritar.');
+          const target = $$('button[aria-label]', tile).find(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')));
+          if (!target) throw new Error('Botão de favorito não encontrado.');
+          const before = target.getAttribute('aria-label');
+          if (/remove|remover/i.test(before) === !!value) return true;
+          target.click();
+          await this.modernWait(() => $$('button[aria-label]', tile).some(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')) && b.getAttribute('aria-label') !== before));
+          return true;
+        } catch (error) { this.logDebug(`Favoritar: ${error.message}`, 'error'); return false; }
+      },
+      // ── MARCAR AGORA, RENOMEAR AO ATUALIZAR A PAGINA ────────────────────────
+      // Arrastar um nome nao mexe mais no servidor. A marcacao fica guardada e
+      // so vira renomeacao quando voce atualiza a pagina. Assim, se voce errar,
+      // basta tirar no ✕ e a midia continua com o NOME ORIGINAL dela — antes ela
+      // virava "Imagem gerada" e nao dava para voltar atras.
+      chaveDasMarcas() {
+        const proj = (typeof this.getProjectId === 'function' && this.getProjectId()) || location.pathname;
+        return 'flow_marcas_' + proj;
+      },
+      lerMarcas() {
+        try { return JSON.parse(localStorage.getItem(this.chaveDasMarcas()) || '{}') || {}; }
+        catch (_) { return {}; }
+      },
+      salvarMarcas(marcas) {
+        try { localStorage.setItem(this.chaveDasMarcas(), JSON.stringify(marcas || {})); } catch (_) {}
+        this.mostrarBarraDeAtualizar();
+      },
+      marcar(id, dados) {
+        const marcas = this.lerMarcas();
+        const antigo = marcas[id];
+        let original = (antigo && antigo.original) || '';
+        if (!original) {
+          // Guarda o nome que a midia tem AGORA, para o ✕ poder devolver.
+          try { original = this.getTileName(this.getTiles().find(t => this.getUuidFromTile(t) === id)) || ''; }
+          catch (_) { original = ''; }
+        }
+        marcas[id] = Object.assign({ original }, dados);
+        this.salvarMarcas(marcas);
+      },
+      desmarcar(id) {
+        const marcas = this.lerMarcas();
+        const marca = marcas[id];
+        delete marcas[id];
+        this.salvarMarcas(marcas);
+        return marca || null;
+      },
+      /** Avisa que ha marcacoes esperando a atualizacao da pagina. */
+      mostrarBarraDeAtualizar() {
+        const barra = document.getElementById('flow-assign-reload-bar');
+        if (!barra) return;
+        const quantas = Object.keys(this.lerMarcas()).length;
+        barra.classList.toggle('visible', quantas > 0);
+        const aplicar = document.getElementById('flow-aplicar-nomes');
+        if (aplicar) {
+          aplicar.textContent = quantas ? '✅ Aplicar renomeação (' + quantas + ')' : '✅ Aplicar renomeação';
+          aplicar.style.display = quantas ? '' : 'none';
+        }
+        const botao = document.getElementById('flow-assign-reload');
+        if (botao) botao.textContent = '🔄 Atualizar Página';
+      },
+      async assignScene(sceneNum, sceneName, id, tile) {
+        const assignments = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
+        const existing = assignments.get(sceneName) || [];
+        const known = existing.find(item => item.workflowId === id);
+        const imgNum = known?.imgNum || Math.max(0, ...existing.map(item => item.imgNum)) + 1;
+        const label = `Cena ${sceneNum} - ${this._videoAssignActive ? 'Vídeo' : 'Imagem'} ${imgNum}`;
+        for (const list of assignments.values()) {
+          const index = list.findIndex(item => item.workflowId === id);
+          if (index >= 0) list.splice(index, 1);
+        }
+        const list = assignments.get(sceneName) || [];
+        list.push({ imgNum, workflowId: id, src: this.getMediaSrcFromTile(tile) }); assignments.set(sceneName, list);
+        this.tileAssignments.set(id, { label, type: 'scene', scene: sceneName, imgNum, isVideo: !!this._videoAssignActive });
+        this.addLabelToTile(tile, label, id, 'scene', sceneName);
+        this.marcar(id, { nome: label, tipo: 'scene', cena: sceneName, favoritar: true });
+        this.updateAssignItemUI(sceneName, true); this.updateAssignCount(); this.startLabelObserver();
+
+        // Renomeia na API imediatamente para não depender de recarregar a página
+        try {
+          await this.apiRename(id, label);
+          await this.apiFavorite(id, true);
+          this.logDebug(`✅ ${label} atribuída e renomeada no Flow!`, 'success');
+        } catch (_) {
+          this.logDebug(`📌 ${label} atribuída localmente.`, 'info');
+        }
+        return true;
+      },
+      async assignReference(name, id, tile) {
+        const previous = this.refAssignments.get(name);
+        if (previous && previous !== id) {
+          this.desmarcar(previous);
+          this.tileAssignments.delete(previous);
+          this.removeLabelFromTile(previous);
+        }
+        this.refAssignments.set(name, id);
+        this.tileAssignments.set(id, { label: name, type: 'ref', name });
+        this.addLabelToTile(tile, name, id, 'ref', name);
+        const refName = name + CONFIG.REF_SUFFIX;
+        this.marcar(id, { nome: refName, tipo: 'ref', ref: name, favoritar: true });
+        this.updateAssignItemUI(name, true); this.updateAssignCount(); this.startLabelObserver();
+
+        // Renomeia na API imediatamente
+        try {
+          await this.apiRename(id, refName);
+          await this.apiFavorite(id, true);
+          this.logDebug(`✅ Referência [${name}] atribuída e renomeada no Flow!`, 'success');
+        } catch (_) {
+          this.logDebug(`📌 Referência [${name}] atribuída localmente.`, 'info');
+        }
+        return true;
+      },
+      /** Aplica de uma vez tudo que foi marcado. Roda sozinho ao abrir a pagina. */
+      async aplicarMarcas() {
+        const marcas = this.lerMarcas();
+        const ids = Object.keys(marcas);
+        if (!ids.length || this._aplicandoMarcas) return;
+        this._aplicandoMarcas = true;
+        const aviso = m => { try { this.setStatus('info', m); } catch (_) {} };
+        let ok = 0, falhou = 0;
+        try {
+          aviso('🏷️ Aplicando ' + ids.length + ' nome(s) marcado(s)...');
+          for (let i = 0; i < ids.length; i++) {
+            const id = ids[i], marca = marcas[id];
+            aviso('🏷️ Aplicando <b>' + (i + 1) + '/' + ids.length + '</b> — ' + marca.nome);
+            let deu = false;
+            try { deu = await this.apiRename(id, marca.nome); } catch (_) {}
+            if (deu) {
+              ok++;
+              this.pintarNomeNoTile(id, marca.nome);
+              if (marca.favoritar) { try { await this.apiFavorite(id, true); } catch (_) {} }
+              delete marcas[id];
+              this.salvarMarcas(marcas);
+            } else {
+              falhou++;
+              this.logDebug('Não consegui aplicar "' + marca.nome + '"; a marcação continua guardada.', 'warning');
+            }
+          }
+          try {
+            this.setStatus(falhou ? 'warning' : 'success',
+              '✅ <b>' + ok + '</b> nome(s) aplicado(s)' +
+              (falhou ? ' · ' + falhou + ' continuam marcados' : '') +
+              (ok ? '. Agora dá para usar <b>Baixar Cenas</b> — vem tudo de uma vez, já com os nomes.' : '.'));
+          } catch (_) {}
+        } finally {
+          this._aplicandoMarcas = false;
+          this.mostrarBarraDeAtualizar();
+        }
+      },
+      async validateReferences(source = 'images') {
+        const video = source === 'video', prefix = video ? 'fv' : 'flow';
+        const btn = document.getElementById(`${prefix}-validate-btn`), label = btn.textContent;
+        const status = (type, message) => video ? this.setVideoStatus(type, message) : this.setStatus(type, message);
+        btn.disabled = true;
+        try {
+          const refs = extractReferences(parsePromptsText(document.getElementById(`${prefix}-prompts-input`).value));
+          const missing = [];
+          for (let i = 0; i < refs.length; i++) {
+            btn.textContent = `⏳ ${i + 1}/${refs.length}`;
+            let valid = false;
+            try { await this.findAsset(refs[i], 'image'); valid = true; }
+            catch (error) { missing.push(refs[i]); this.logDebug(error.message, 'warning'); }
+            this.validatedRefs[refs[i].toLowerCase().trim()] = valid;
+            this.validatedRefs[this.referenceKey(refs[i])] = valid;
+          }
+          this.saveValidatedRefs(); this.updateReferences(); this.updateVideoReferences();
+          status(missing.length ? 'error' : 'success', missing.length ? `Não encontradas: ${missing.join(', ')}` : `✅ ${refs.length} referência(s) conferida(s) no Flow.`);
+        } catch (error) { status('error', error.message); }
+        finally { await this.closeAssetPicker(); btn.disabled = false; btn.textContent = label; }
+      },
+      async analyzeProject(source = 'images') {
+        const video = source === 'video', prefix = video ? 'fv' : 'flow';
+        const btn = document.getElementById(`${prefix}-analyze-btn`), label = btn?.textContent;
+        if (btn) { btn.disabled = true; btn.textContent = '⏳ Analisando...'; }
+        try {
+          const entries = await this.scanGallery();
+          this.tileAssignments.clear(); this.refAssignments.clear(); this.sceneAssignments.clear(); this.videoSceneAssignments.clear();
+          for (const entry of entries) {
+            const scene = sceneInfo(entry.name);
+            if (scene) {
+              const assignments = entry.isVideo ? this.videoSceneAssignments : this.sceneAssignments;
+              if (!assignments.has(scene.scene)) assignments.set(scene.scene, []);
+              assignments.get(scene.scene).push({ imgNum: scene.imgNum, workflowId: entry.uuid, src: entry.src });
+              this.tileAssignments.set(entry.uuid, { label: entry.name, type: 'scene', scene: scene.scene, imgNum: scene.imgNum, isVideo: entry.isVideo });
+            } else if (entry.name.endsWith(CONFIG.REF_SUFFIX)) {
+              const name = entry.name.slice(0, -CONFIG.REF_SUFFIX.length);
+              this.refAssignments.set(name, entry.uuid);
+              this.tileAssignments.set(entry.uuid, { label: name, name, type: 'ref', isVideo: entry.isVideo });
+            }
+          }
+          this.startLabelObserver(); this.updateAssignCount();
+          document.getElementById(`${prefix}-download-section`).style.display = '';
+          (video ? this.setVideoStatus : this.setStatus).call(this, 'success', `✅ ${entries.length} mídias analisadas; ${this.tileAssignments.size} identificadas.`);
+        } catch (error) { (video ? this.setVideoStatus : this.setStatus).call(this, 'error', error.message); }
+        finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+      },
+      /**
+       * Escreve o nome novo no proprio tile. O Flow so redesenha o rotulo dele
+       * quando a pagina recarrega; sem isto a renomeacao ficava invisivel ate
+       * o F5, mesmo tendo dado certo no servidor.
+       */
+      pintarNomeNoTile(id, nome) {
+        try {
+          const tile = this.getTiles().find(t => this.getUuidFromTile(t) === id);
+          if (!tile) return false;
+          tile.setAttribute('aria-label', nome);
+          const titulo = $('.footer-title', tile);
+          if (titulo) titulo.textContent = nome;
+          return true;
+        } catch (_) { return false; }
+      },
+      startLabelObserver() {
+        const render = () => {
+          for (const tile of this.getTiles()) {
+            const id = this.getUuidFromTile(tile), data = this.tileAssignments.get(id);
+            const previous = $('.flow-tile-label', tile);
+            if (previous && (previous.dataset.wf !== id || !data)) previous.remove();
+            if (data && !$('.flow-tile-label', tile)) this.addLabelToTile(tile, data.label, id, data.type, data.type === 'ref' ? data.name : data.scene);
+          }
+        };
+        render();
+        if (!this._labelObserverId) this._labelObserverId = setInterval(render, 800);
+      },
+      saveDownload(blob, filename) {
+        const link = document.createElement('a'), url = URL.createObjectURL(blob);
+        link.href = url; link.download = filename;
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      },
+      async baixarPeloMenuDoFlow(tile, preferencias) {
+        const capturado = { blob: null, nome: null, houveClique: false };
+        const porUrl = new Map();
+        const origCriar = URL.createObjectURL;
+        const origClicar = HTMLAnchorElement.prototype.click;
+        let clicarQualidade = null;
+        try {
+          // A pagina cria varios arquivos temporarios o tempo todo. Guardamos
+          // TODOS por endereco e so ficamos com o do link de download — antes eu
+          // pegava o primeiro que aparecesse, e vinha um arquivo vazio.
+          URL.createObjectURL = function (b) {
+            const url = origCriar.apply(this, arguments);
+            try { if (b && b.size > 0) porUrl.set(String(url), b); } catch (_) {}
+            return url;
+          };
+          HTMLAnchorElement.prototype.click = function () {
+            let ehNosso = false;
+            try {
+              const href = String(this.href || '');
+              const baixa = this.hasAttribute('download');
+              if (baixa && href.startsWith('blob:')) {
+                ehNosso = true;
+                capturado.houveClique = true;
+                capturado.nome = this.getAttribute('download') || capturado.nome;
+                const b = porUrl.get(href);
+                if (b) capturado.blob = b;
+              }
+            } catch (_) {}
+            // Só engolimos o clique que é do download; o resto da página segue igual.
+            if (!ehNosso) return origClicar.apply(this, arguments);
+          };
+
+          await this.openTileMenu(tile);
+          const baixar = menuItem(['Download', 'Baixar']);
+          if (!baixar) throw new Error('Download não encontrado no menu da mídia.');
+          const r = baixar.getBoundingClientRect();
+          for (const t of ['pointerover', 'mouseover', 'mouseenter', 'mousemove']) {
+            try { baixar.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 })); } catch (_) {}
+          }
+          baixar.click();
+
+          const opcoes = await this.modernWait(() => {
+            const itens = $$('[role="menuitem"]').filter(b => visible(b) && !b.disabled &&
+              /original|upscaled|\b\d(?:k|80p|20p)\b/i.test(b.textContent));
+            return itens.length ? itens : null;
+          }, 8000);
+          for (const re of preferencias) {
+            clicarQualidade = opcoes.find(b => re.test(norm(b.textContent)));
+            if (clicarQualidade) break;
+          }
+          if (!clicarQualidade) clicarQualidade = opcoes[0];
+          this.logDebug('⬇️ qualidade: ' + norm(clicarQualidade.textContent), 'info');
+          clicarQualidade.click();
+
+          // Espera o Flow montar o arquivo e disparar o link.
+          for (let esperou = 0; esperou < 40000; esperou += 200) {
+            if (capturado.blob && capturado.blob.size > 0) break;
+            await this.sleep(200);
+          }
+        } finally {
+          URL.createObjectURL = origCriar;
+          HTMLAnchorElement.prototype.click = origClicar;
+        }
+        try { await this.closeMenus(); } catch (_) {}
+
+        if (!capturado.blob || !capturado.blob.size) {
+          this.logDebug('Não consegui pegar o arquivo do menu' +
+            (capturado.houveClique ? ' (o link veio sem conteúdo)' : ' (o Flow não disparou o link)') +
+            '; deixando o Flow salvar sozinho.', 'warning');
+          if (clicarQualidade && clicarQualidade.isConnected) clicarQualidade.click();
+          return null;
+        }
+        return capturado;
+      },
+      /**
+       * Tira o "-rw" do endereco da imagem.
+       *
+       * Medido na pagina (05/09): o Flow serve a grade como
+       *   .../asb/<id>=s1600-rw   -> image/webp  125 KB   (o "arquivo web")
+       * e o MESMO endereco sem o -rw devolve
+       *   .../asb/<id>=s1600      -> image/jpeg  139 KB
+       * Mesma resolucao, arquivo de imagem de verdade, e continua sendo um
+       * unico pedido — entao o download segue rapido e em ZIP.
+       */
+      urlDeImagemReal(src) {
+        try {
+          if (!src || /^blob:|^data:/.test(src)) return src;
+          const u = new URL(src, location.href);
+          if (!/=/.test(u.pathname)) return src;
+          u.pathname = u.pathname.replace(/-rw(?=$|-)/g, '');
+          return u.toString();
+        } catch (_) { return src; }
+      },
+      /**
+       * Baixar o arquivo ORIGINAL. É o PADRÃO: ele nao quer o JPEG menor que
+       * vem pelo endereco da grade, quer o arquivo cheio do Flow. So fica
+       * desligado se ele desmarcar na mao.
+       */
+      altaQualidadeLigada() {
+        const caixa = document.getElementById('flow-alta-qualidade');
+        if (caixa) return !!caixa.checked;
+        try { return localStorage.getItem('flow_baixar_original') !== '0'; } catch (_) { return true; }
+      },
+      async downloadEntry(entry, filename, collect = false) {
+        const tile = await this.scrollToWorkflow(entry.uuid || entry.workflowId);
+        if (!tile) throw new Error(`Mídia não encontrada: ${entry.name || entry.uuid}`);
+        const ehVideo = this.isVideoTile(tile);
+
+        // Video sempre pelo menu: nao da para pegar o arquivo por endereco.
+        // Imagem so vai pelo menu quando VOCE pedir o original.
+        if (ehVideo || this.altaQualidadeLigada()) {
+          const preferencias = ehVideo
+            ? [/original/i, /1080/, /720/]
+            : [/original/i, /\b1k\b/i, /\b2k\b/i, /\b4k\b/i];
+          let pego = null;
+          try { pego = await this.baixarPeloMenuDoFlow(tile, preferencias); }
+          catch (erro) { this.logDebug('Menu de download falhou: ' + erro.message, 'warning'); }
+          if (pego && pego.blob) {
+            const tipo = pego.blob.type || '';
+            const ext = ehVideo
+              ? (tipo.includes('webm') ? 'webm' : 'mp4')
+              : 'jpg';
+            let finalBlob = pego.blob;
+            if (!ehVideo && !tipo.includes('jpeg') && !tipo.includes('jpg')) {
+              finalBlob = await blobToJpeg(pego.blob);
+            }
+            const file = { blob: finalBlob, name: `${safeName(filename)}.${ext}` };
+            this.logDebug('⬇️ ' + file.name + ': ' + Math.round(finalBlob.size / 1024) + ' KB (original do Flow)', 'success');
+            if (collect) return file;
+            this.saveDownload(finalBlob, file.name);
+            return file;
+          }
+          if (ehVideo) return;   // o Flow salvou sozinho
+          this.logDebug('Baixando via URL direta em JPEG...', 'info');
+        }
+
+        // Caminho rapido e confiavel: tira o "-rw" da URL para devolver JPEG real
+        const imagem = $('img[data-media-id]', tile) || $('img', tile);
+        const src = (imagem && (imagem.currentSrc || imagem.src)) || this.getMediaSrcFromTile(tile);
+        const real = this.urlDeImagemReal(src);
+        let response = null;
+        if (real !== src) {
+          try { response = await fetch(real, { credentials: 'include' }); } catch (_) { response = null; }
+          if (response && !response.ok) response = null;
+        }
+        if (!response) response = await fetch(src, { credentials: 'include' });
+        if (!response.ok) throw new Error(`Download recusado (${response.status}).`);
+        let blob = await response.blob();
+        if (!blob.type.startsWith('image/')) throw new Error('O Flow não retornou um arquivo de imagem.');
+        blob = await blobToJpeg(blob);
+        const file = { blob, name: `${safeName(filename)}.jpg` };
+        if (collect) return file;
+        this.saveDownload(blob, file.name);
+        return file;
+      },
+      /**
+       * Suaviza os menus do Flow enquanto o lote roda, sem bloquear eventos do DOM.
+       */
+      silenciarMenus(ligar) {
+        const id = 'flow-esconde-menus';
+        const antigo = document.getElementById(id);
+        if (!ligar) { if (antigo) antigo.remove(); return; }
+        if (antigo) return;
+        const st = document.createElement('style');
+        st.id = id;
+        st.textContent = '.cdk-overlay-container{opacity:0.01!important;}' +
+          '.cdk-overlay-backdrop{opacity:0.01!important;}';
+        document.head.appendChild(st);
+      },
+      async downloadEntries(entries) {
+        if (this._modernDownloading) return;
+        this._modernDownloading = true;
+        this.silenciarMenus(true);
+        let done = 0, failed = 0;
+        const files = [], names = new Set();
+        const list = unique(entries.map(e => ({ ...e, uuid: e.uuid || e.workflowId })));
+        try {
+        for (const entry of list) {
+          try {
+            this.setStatus('info', '⬇️ Baixando <b>' + (done + failed + 1) + '/' + list.length + '</b> — ' +
+              String(entry.filename || entry.name || '').slice(0, 40));
+            const baseNome = entry.filename || entry.name || `media_${entry.uuid}`;
+            const file = await this.downloadEntry(entry, baseNome, true);
+            if (file) {
+              if (names.has(file.name)) file.name = `${safeName(file.name)}_${entry.uuid}.${file.name.split('.').pop()}`;
+              names.add(file.name);
+              files.push(file);
+            }
+            done++;
+          }
+          catch (error) { failed++; this.logDebug(error.message, 'error'); }
+        }
+        if (files.length) {
+          this.setStatus('info', `📦 Criando arquivo ZIP com ${files.length} mídia(s)...`);
+          const zip = await zipFiles(files);
+          this.saveDownload(zip, `Flow_cenas_${Date.now()}.zip`);
+        }
+        this.setStatus(failed ? 'warning' : 'success', `⬇️ ${done} mídia(s) processada(s)${files.length ? `; ${files.length} no ZIP` : ''}${failed ? `; ${failed} falha(s)` : ''}. Confira os downloads.`);
+        } catch (error) { this.setStatus('error', `Download: ${error.message}`); }
+        finally { this._modernDownloading = false; this.silenciarMenus(false); }
+      },
+      async downloadScenes() {
+        const assignments = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
+        let entries = [...assignments].flatMap(([name, items]) => items.map(item => ({
+          ...item,
+          uuid: item.workflowId,
+          filename: `${name.replace(/\s+/g, '_')}_${item.imgNum}`
+        })));
+
+        // Se o mapa em memória estiver vazio (ex: após F5 ou uso da aba Renomear),
+        // varre a galeria buscando todas as cenas já identificadas!
+        if (!entries.length) {
+          this.logDebug('Buscando cenas na galeria para gerar o ZIP...', 'info');
+          const gallery = await this.scanGallery();
+          const encontradas = [];
+          for (const item of gallery) {
+            const info = sceneInfo(item.name) || (item.name ? this.lerNome(item.name) : null);
+            if (info) {
+              encontradas.push({
+                uuid: item.uuid,
+                name: item.name,
+                isVideo: item.isVideo,
+                filename: `Cena_${info.sceneNum}_${info.imgNum || 1}`
+              });
+            } else {
+              const tileAssigned = this.tileAssignments.get(item.uuid);
+              if (tileAssigned && tileAssigned.type === 'scene') {
+                encontradas.push({
+                  uuid: item.uuid,
+                  name: tileAssigned.label || item.name,
+                  isVideo: item.isVideo,
+                  filename: `${(tileAssigned.scene || 'Cena').replace(/\s+/g, '_')}_${tileAssigned.imgNum || 1}`
+                });
+              }
+            }
+          }
+          entries = encontradas;
+        }
+
+        if (!entries.length) {
+          this.setStatus('warning', 'Nenhuma cena encontrada para download. Atribua ou renomeie as cenas primeiro.');
+          return;
+        }
+
+        return this.downloadEntries(entries);
+      },
+      async downloadProjectImages(mode) {
+        const entries = await this.scanGallery();
+        const filtered = entries.filter(e => mode === 'all' || (mode === 'scenes' ? this.tileAssignments.get(e.uuid)?.type === 'scene' : mode === 'refs' ? this.tileAssignments.get(e.uuid)?.type === 'ref' : this.tileAssignments.has(e.uuid)));
+        return this.downloadEntries(filtered);
+      },
+      async downloadAllGalleryImages() { return this.downloadEntries(await this.scanGallery()); },
+      async downloadLastRunMedia() { return this.downloadEntries(this._lastRunMedia || []); }
+    });
+
+    const prepare = proto.prepareAndSubmit;
+    Object.assign(proto, {
+      async prepareAndSubmit(prompt) {
+        this._modernCurrentPrompt = prompt.promptNum;
+        const beforeIds = this.snapshotImageUuids();
+        const expected = this.videoIsRunning ? this.videoResultsPerPrompt : this.imagesPerPrompt;
+        const enviou = await prepare.call(this, prompt);
+        // Pulado lá dentro: não adianta esperar resultados que não virão.
+        if (enviou === false) return false;
+        const record = { promptNum: prompt.promptNum, nodes: [], results: new Map(), beforeIds, expected, signature: this._modernPreparedText };
+        this._modernActiveRecords ||= [];
+        this._modernActiveRecords.push(record);
+        try {
+          await this.modernWait(() => {
+            this.captureModernResults();
+            return record.nodes.length === expected;
+          }, 12000);
+        } catch (error) {
+          if (error && error.stopped) throw error;
+          this._modernUncertain = true;
+          const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
+          try { reg.call(this, `⏭️ Prompt ${prompt.promptNum}: envio feito, mas não identifiquei os resultados — conta como falha e sigo.`, 'error'); } catch (_) {}
+          return false;
+        }
+        if (!this._modernGalleryObserver) {
+          this._modernGalleryObserver = new MutationObserver(() => this.captureModernResults());
+          this._modernGalleryObserver.observe(this.getScroller(), { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'data-media-id', 'aria-label'] });
+        }
+        record.observer = this._modernGalleryObserver;
+        this._modernRecords ||= new Map();
+        this._modernRecords.set(prompt.promptNum, record);
+        this._modernObservers ||= []; this._modernObservers.push(record.observer);
+        return true;
+      },
+      captureModernResults() {
+        const records = this._modernActiveRecords || [];
+        const total = records.reduce((sum, rec) => sum + rec.expected, 0);
+        const ignoredErrors = new Map(this._modernIgnoredErrors || []);
+        const fresh = this.getTiles().filter(tile => !this._modernBaseline?.has(this.getUuidFromTile(tile))).reverse().filter(tile => {
+          if (!this.isTileError(tile)) return true;
+          const key = norm(tile.textContent), remaining = ignoredErrors.get(key) || 0;
+          if (!remaining) return true;
+          ignoredErrors.set(key, remaining - 1); return false;
+        }).reverse();
+        // CDK rebuilds entire rows on insertion. Associate fresh slots by creation
+        // order, not DOM object identity, and validate pending text when available.
+        if (!total || fresh.length !== total) return;
+        let offset = 0;
+        for (const record of [...records].reverse()) {
+          const nodes = fresh.slice(offset, offset + record.expected);
+          offset += record.expected;
+          if (nodes.some(tile => {
+            const pendingText = norm($('flow-pending-tile .subtitle', tile)?.textContent);
+            return pendingText && pendingText !== record.signature;
+          })) { this._modernCaptureError = 'A ordem dos resultados mudou ou há uma geração externa ao lote.'; return; }
+          record.nodes = nodes;
+          nodes.forEach((tile, index) => {
+            const entry = this.tileEntry(tile), previous = record.results.get(index);
+            if (previous?.uuid && entry.uuid && previous.uuid !== entry.uuid) {
+              this._modernCaptureError = 'A ordem da galeria mudou durante o acompanhamento.'; return;
+            }
+            if (entry.loaded && !record.beforeIds.has(entry.uuid)) record.results.set(index, entry);
+            else if (entry.error) record.results.set(index, { error: true });
+          });
+        }
+      },
+      buildPositionMatrix(batch, count) {
+        return batch.flatMap(prompt => Array.from({ length: count }, (_, index) => ({ promptNum: prompt.promptNum, imgNum: index + 1, state: 'pending', record: this._modernRecords?.get(prompt.promptNum), index })));
+      },
+      async waitForMatrix(matrix) {
+        const noProgressLimit = Math.max(60000, Number(document.getElementById('flow-t-semprog')?.value || 2) * 60000);
+        let lastProgress = Date.now(), signature = '';
+        let motivoParada = null;   // encerra o lote sem derrubar a fila
+        // Teto do lote derivado do SEU campo "desistir sem progresso": estourou,
+        // o que faltou conta como falha e passamos para o proximo lote.
+        const hardDeadline = Date.now() + Math.max(noProgressLimit * 5, 5 * 60000);
+        // "Confirmar por" do painel: espera esse tempinho depois que tudo chegou,
+        // para nao cortar um resultado que ainda esta assentando.
+        const confirmar = Math.max(0, Number(CONFIG.STABILIZE_TIME) || 0);
+        let zeradoEm = null;
+        while (true) {
+          if (this.modernStopped()) throw stopError();
+          this.captureModernResults();
+          if (this._modernCaptureError) { motivoParada = this._modernCaptureError; break; }
+          let pending = 0;
+          for (const slot of matrix) {
+            if (slot.state !== 'pending') continue;
+            if (!slot.record) { slot.state = 'error'; continue; }
+            const result = slot.record.results.get(slot.index);
+            if (result?.error) slot.state = 'error';
+            else if (result?.loaded) Object.assign(slot, result, { state: 'loaded' });
+            else pending++;
+          }
+          if (!pending) {
+            if (!confirmar) break;
+            if (zeradoEm == null) zeradoEm = Date.now();
+            if (Date.now() - zeradoEm >= confirmar) break;
+          } else zeradoEm = null;
+          const nextSignature = matrix.map(slot => `${slot.state}:${norm(slot.record?.nodes[slot.index]?.querySelector('.loading-percentage')?.textContent)}`).join('|');
+          if (signature !== nextSignature) { signature = nextSignature; lastProgress = Date.now(); }
+          if (Date.now() - lastProgress > noProgressLimit || Date.now() > hardDeadline) {
+            motivoParada = 'A geração não terminou em ' + Math.round(noProgressLimit / 60000) + ' min sem progresso (seu limite).'; break;
+          }
+          if (matrix.some(slot => slot.state === 'pending' && !slot.record?.nodes[slot.index]?.isConnected)) {
+            motivoParada = 'A galeria mudou durante o lote.'; break;
+          }
+          const passo = Math.max(300, Number(document.getElementById('flow-t-poll')?.value || 0.5) * 1000);
+          await this.sleep(Math.round(passo * this.fatorVelocidade()));
+        }
+        if (motivoParada) {
+          this._modernUncertain = true;
+          const faltaram = matrix.filter(s => s.state === 'pending');
+          for (const s of faltaram) s.state = 'error';
+          const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
+          try { reg.call(this, '⚠️ ' + motivoParada + ' ' + faltaram.length + ' contam como falha — a fila SEGUE.', 'warning'); } catch (_) {}
+        }
+        for (const record of new Set(matrix.map(slot => slot.record).filter(Boolean))) record.observer.disconnect();
+        for (const slot of matrix) if (slot.uuid) this._modernBaseline?.add(slot.uuid);
+        this.rememberModernErrors();
+        this._modernActiveRecords = [];
+        this._modernGalleryObserver = null;
+        // Keep only serializable result fields in assignment/download history.
+        matrix.forEach(slot => { delete slot.record; delete slot.index; });
+      },
+      async prepareGalleryForRun() {
+        const nav = $('[aria-label="Project navigation"]');
+        const all = nav && $$('*', nav).find(el => !el.children.length && ['All media','Todas as mídias'].includes(norm(el.textContent)));
+        if (all) { all.click(); await this.pausa(200); }
+        const search = $('main input[aria-label="Search"]');
+        if (search?.value) { setInput(search, ''); await this.sleep(350); }
+        const filterTrigger = $('button[aria-label="Filtering and sorting options"]') || $$('main button').find(b => norm($('mat-icon', b)?.textContent) === 'filter_list');
+        if (filterTrigger) {
+          filterTrigger.click();
+          const dialog = await this.modernWait(() => $$('[role="dialog"]').find(d => visible(d) && $('[role="radiogroup"]', d)));
+          const clear = $('button[aria-label="Clear all filters"]', dialog) || textButton(['Clear', 'Limpar', 'Limpar todos os filtros'], 'button', dialog);
+          if (clear) clear.click();
+          const newest = $$('[role="radio"],input[type="radio"]', dialog).find(r => ['Newest','Mais recentes','Mais recente'].includes(norm(r.getAttribute('aria-label') || r.closest('mat-radio-button')?.textContent || r.textContent)));
+          if (newest && newest.getAttribute('aria-checked') !== 'true' && !newest.checked) newest.click();
+          await this.closeMenus();
+        }
+        const scroller = this.getScroller();
+        if (!scroller) throw new Error('Abra a galeria do projeto antes de iniciar.');
+        scroller.scrollTop = 0; await this.sleep(300);
+        if (this.getTiles().some(t => this.tileHasProgress(t))) throw new Error('Já há gerações em andamento no Flow. Aguarde terminarem antes de iniciar outro lote.');
+        // O Flow ordena por "Mais recentes", entao tudo que nascer novo aparece
+        // ACIMA do que ja existe. Varrer a galeria inteira so para montar a linha
+        // de base atrasava o primeiro envio em ate um minuto em projetos grandes.
+        this._modernBaseline = new Set();
+        for (let volta = 0; volta < 4; volta++) {
+          this.getTiles().forEach(t => { const id = this.getUuidFromTile(t); if (id) this._modernBaseline.add(id); });
+          if (!this.rolarUmPedaco(scroller, 0.9, false)) break;
+          await this.sleep(250);
+        }
+        scroller.scrollTop = 0; await this.sleep(300);
+        this.rememberModernErrors();
+      },
+      rememberModernErrors() {
+        this._modernIgnoredErrors = new Map();
+        for (const tile of this.getTiles().filter(t => this.isTileError(t))) {
+          const key = norm(tile.textContent);
+          this._modernIgnoredErrors.set(key, (this._modernIgnoredErrors.get(key) || 0) + 1);
+        }
+      },
+      async runModern(video) {
+        if (this.isRunning || this.videoIsRunning || this._modernTaskRunning) return;
+        const status = (type, text) => (video ? this.setVideoStatus : this.setStatus).call(this, type, text);
+        this._modernTaskRunning = true; this.shouldStop = false; this.videoShouldStop = false; this._modernUncertain = false;
+        this._modernActiveRecords = []; this._modernCaptureError = null;
+        try {
+          const prefix = video ? 'fv' : 'flow';
+          if (!norm(document.getElementById(`${prefix}-prompts-input`).value)) { status('warning', 'Insira pelo menos um prompt.'); return; }
+          if (document.getElementById(`${prefix}-start-from`).value.trim() === '0') {
+            await (video ? old.startVideo : old.start).call(this); return;
+          }
+          const count = video ? this.videoResultsPerPrompt : this.imagesPerPrompt;
+          await this.configureGeneration(video, count);
+          await this.prepareGalleryForRun();
+          const original = video ? old.startVideo : old.start;
+          await original.call(this);
+        } catch (error) { status(error.stopped ? 'warning' : 'error', error.message); }
+        finally {
+          this._modernTaskRunning = false;
+          this.isRunning = false; this.videoIsRunning = false;
+          this._modernObservers?.forEach(observer => observer.disconnect()); this._modernObservers = [];
+          this._modernGalleryObserver = null;
+          for (const prefix of ['flow', 'fv']) {
+            const start = document.getElementById(`${prefix}-start-btn`), stop = document.getElementById(`${prefix}-stop-btn`), input = document.getElementById(`${prefix}-prompts-input`);
+            if (start) start.disabled = false;
+            if (stop) stop.disabled = true;
+            if (input) input.disabled = false;
+          }
+        }
+      },
+      async start() { return this.runModern(false); },
+      async startVideo() { return this.runModern(true); },
+      async autoEnumerarCenas() {
+        const matrices = this._lastMatrices || [];
+        if (matrices.some(m => m.some(s => s.state === 'loaded' && s.workflowId))) return this.autoAssignScenesFromMatrices(matrices, { isVideo: !!this._videoAssignActive });
+        const prompts = parsePromptsText(document.getElementById(this._videoAssignActive ? 'fv-prompts-input' : 'flow-prompts-input').value);
+        // A galeria manda: se o que esta na tela e video, tratamos como video,
+        // nao importa por qual aba o botao foi clicado. Era isso que fazia o
+        // Enumerar descartar tudo e dizer que nao achou correspondencia.
+        const naTela = this.getTiles().filter(x => this.isTileLoaded(x));
+        const qtdVideo = naTela.filter(x => this.isVideoTile(x)).length;
+        if (naTela.length) this._videoAssignActive = qtdVideo > naTela.length / 2;
+        const ehVideo = !!this._videoAssignActive;
+        const aviso = (m) => { try { (ehVideo ? this.setVideoStatus : this.setStatus).call(this, 'info', m); } catch (_) {} };
+        aviso('🔎 Varrendo a galeria de ' + (ehVideo ? 'vídeos' : 'imagens') + '...');
+
+        // 1ª passada: lê o prompt de quem não tem número, clicando em
+        // "Reutilizar comando" (o Flow joga o prompt na caixa de texto).
+        const promptsLidos = new Map();
+        let lidos = 0;
+        const entries = await this.scanGallery(async (entry, tile) => {
+          if (!entry.uuid || !entry.loaded) return;
+          if (entry.isVideo !== !!this._videoAssignActive) return;
+          if (sceneInfo(entry.name)) return;
+          if (this.numeroDaCenaNoTexto(entry.name) != null) return;
+          const texto = await this.promptViaReutilizar(tile);
+          if (this.numeroDaCenaNoTexto(texto) != null) { promptsLidos.set(entry.uuid, texto); lidos++; }
+          aviso('🔎 Lendo os prompts... ' + lidos + ' lido(s)');
+        });
+        aviso('🏷️ Preparando a renomeação...');
+
+        const results = [];
+        for (const entry of entries) {
+          if (entry.isVideo !== !!this._videoAssignActive || !entry.loaded) continue;
+          const known = sceneInfo(entry.name);
+
+          // Já nomeada: usa o número do próprio nome.
+          if (known) { results.push({ ...entry, promptNum: known.sceneNum, imgNum: known.imgNum || 1, state: 'loaded' }); continue; }
+
+          // Número que veio do prompt (rótulo ou botão Reutilizar).
+          const doPrompt = this.numeroDaCenaNoTexto(entry.name) != null
+            ? this.numeroDaCenaNoTexto(entry.name)
+            : this.numeroDaCenaNoTexto(promptsLidos.get(entry.uuid));
+          if (doPrompt != null) { results.push({ ...entry, promptNum: doPrompt, imgNum: 1, state: 'loaded' }); continue; }
+          const exact = prompts.filter(p => norm(p.text).toLowerCase() === norm(entry.name).toLowerCase());
+          const prompt = known ? prompts.find(p => p.promptNum === known.sceneNum) : exact.length === 1 ? exact[0] : null;
+          if (prompt?.promptNum) results.push({ ...entry, promptNum: prompt.promptNum, imgNum: known?.imgNum || 1, state: 'loaded' });
+        }
+        if (!results.length) {
+          const carregadas = entries.filter(e => e.loaded);
+          const doTipo = carregadas.filter(e => e.isVideo === ehVideo).length;
+          const msg = doTipo === 0
+            ? 'Não encontrei ' + (ehVideo ? 'vídeos' : 'imagens') + ' carregados nesta galeria (' + entries.length + ' item(ns) vistos).'
+            : 'Encontrei ' + doTipo + ' mídia(s), mas não consegui ler o número da cena em nenhuma. O número precisa estar no começo do prompt (ex.: "235 - ...").';
+          (ehVideo ? this.setVideoStatus : this.setStatus).call(this, 'warning', msg);
+          this.logDebug('🔎 ' + entries.length + ' mídias vistas · ' + doTipo + ' do tipo ' + (ehVideo ? 'vídeo' : 'imagem') + ' · prompts lidos: ' + lidos + '.', 'warning');
+          return;
+        }
+        await this.autoAssignScenesFromMatrices([results], { isVideo: !!this._videoAssignActive });
+      },
+      async renameUploadReferencesFromFilenames() {
+        const aviso = (m) => { try { (this._videoAssignActive ? this.setVideoStatus : this.setStatus).call(this, 'info', m); } catch (_) {} };
+        aviso('🔎 Varrendo a galeria inteira...');
+        const entries = await this.scanGallery(null, {
+          completo: true,
+          aoAndar: (qtd) => aviso('🔎 Varrendo a galeria... ' + qtd + ' mídias encontradas')
+        });
+        aviso('🔎 Varredura concluída: ' + entries.length + ' mídias.');
+        let count = 0;
+        for (const entry of entries) {
+          if (!/\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif)$/i.test(entry.name)) continue;
+          const name = entry.name.replace(/\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif)$/i, '').replace(/ _$/, '');
+          if (await this.apiRename(entry.uuid, name + CONFIG.REF_SUFFIX)) { await this.apiFavorite(entry.uuid, true); count++; }
+        }
+        this.setStatus('success', `✅ ${count} referência(s) renomeada(s) a partir dos nomes dos arquivos.`);
+      },
+      async startUpscaleProcess() {
+        if (this._modernUpscaling) return;
+        this._modernUpscaling = true; this.upscaleShouldStop = false; this._modernUpscaleFailures = [];
+        const button = document.getElementById('fv-upscale-btn'), stop = document.getElementById('fv-upscale-stop-btn');
+        button.disabled = true; stop.style.display = '';
+        try {
+          const entries = [...(await this.scanIdentifiedVideosForUpscale()).values()].filter(e => !this.getUpscaleRequestedSet().has(e.uuid));
+          if (!entries.length) throw new Error('Analise o projeto e atribua os vídeos às cenas antes do upscale.');
+          let requested = 0;
+          for (const entry of entries) {
+            if (this.upscaleShouldStop) break;
+            try { await this.requestModernUpscale(entry); requested++; }
+            catch (error) { this._modernUpscaleFailures.push(entry); this.logVideoDebug(error.message, 'error'); }
+          }
+          this.setVideoStatus(this._modernUpscaleFailures.length || this.upscaleShouldStop ? 'warning' : 'success', `Upscale solicitado para ${requested} vídeo(s); ${this._modernUpscaleFailures.length} falha(s)${this.upscaleShouldStop ? '; interrompido pelo usuário' : ''}. Acompanhe os downloads do Flow.`);
+        } catch (error) { this.setVideoStatus('error', error.message); }
+        finally {
+          this._modernUpscaling = false; button.disabled = false; stop.style.display = 'none';
+          document.getElementById('fv-upscale-retry-btn').style.display = this._modernUpscaleFailures.length ? '' : 'none';
+        }
+      },
+      async scanIdentifiedVideosForUpscale() {
+        const entries = await this.scanGallery();
+        return new Map(entries.filter(e => e.isVideo && (sceneInfo(e.name) || this.tileAssignments.get(e.uuid)?.type === 'scene')).map(e => {
+          const scene = sceneInfo(e.name) || sceneInfo(this.tileAssignments.get(e.uuid)?.label);
+          return [e.uuid, { ...e, label: e.name, sceneNum: scene?.sceneNum, videoNum: scene?.imgNum }];
+        }));
+      },
+      async requestModernUpscale(entry) {
+        const tile = await this.scrollToWorkflow(entry.uuid);
+        if (!tile) throw new Error(`Vídeo não encontrado: ${entry.name}`);
+        await this.openTileMenu(tile);
+        const download = menuItem(['Download', 'Baixar']);
+        if (!download) throw new Error('Menu de download não encontrado.');
+        download.click();
+        const upscale = await this.modernWait(() => $$('[role="menuitem"]').find(b => visible(b) && /1080p/i.test(b.textContent)));
+        if (upscale.disabled || upscale.getAttribute('aria-disabled') === 'true') throw new Error(`1080p indisponível para ${entry.name}.`);
+        upscale.click();
+        await this.modernWait(() => !visible(upscale), 10000);
+        this.getUpscaleRequestedSet().add(entry.uuid);
+        await this.sleep(800); await this.closeMenus();
+      },
+      async retryFailedUpscale() {
+        if (this._modernUpscaling) return;
+        this._modernUpscaling = true; this.upscaleShouldStop = false;
+        const pending = this._modernUpscaleFailures || [];
+        this._modernUpscaleFailures = [];
+        let requested = 0;
+        try {
+        for (const entry of pending) {
+          if (this.upscaleShouldStop) { this._modernUpscaleFailures.push(entry); continue; }
+          try { await this.requestModernUpscale(entry); requested++; }
+          catch (error) { this._modernUpscaleFailures.push(entry); this.logVideoDebug(error.message, 'error'); }
+        }
+        this.setVideoStatus(this._modernUpscaleFailures.length ? 'warning' : 'success', `${requested} solicitação(ões) reenviada(s).`);
+        } finally { this._modernUpscaling = false; }
+      }
+    });
+    // =====================================================================
+    // ABA RENOMEAR — analisa o prompt de cada geração e renomeia
+    // =====================================================================
+    // Mesmo estilo de antes do Flow atualizar: varre a página de cima a baixo,
+    // lê o número da cena no prompt de cada mídia, agrupa por cena e numera as
+    // variações na ordem em que aparecem. A diferença é que agora o formato do
+    // nome é escolhido por você, e imagens e vídeos são tratados na mesma passada.
+
+    const MODELO_PADRAO = 'Cena {n} - {tipo} {g}';
+    const CHAVE_MODELO = 'flow_modelo_nome';
+    const CHAVE_ESCOPO = 'flow_renomear_escopo';
+
+    const lerModelo = () => {
+      try { return localStorage.getItem(CHAVE_MODELO) || MODELO_PADRAO; }
+      catch (_) { return MODELO_PADRAO; }
+    };
+
+    const montarNome = (n, g, isVideo, modelo) => {
+      const pad = v => String(v).padStart(2, '0');
+      return String(modelo || lerModelo())
+        .replace(/\{nn\}/gi, pad(n))
+        .replace(/\{gg\}/gi, pad(g))
+        .replace(/\{n\}/gi, String(n))
+        .replace(/\{g\}/gi, String(g))
+        .replace(/\{tipo\}/gi, isVideo ? 'Vídeo' : 'Imagem')
+        .trim();
+    };
+
+    // Transforma o modelo numa expressão que RECONHECE nomes já aplicados,
+    // para o Analisar, o Upscale e os Downloads continuarem achando as mídias.
+    const regexDoModelo = (modelo) => {
+      const marcas = [];
+      const SEP = '\u0001';
+      let padrao = String(modelo).replace(/\{(nn|gg|n|g|tipo)\}/gi, (_, m) => {
+        marcas.push(m.toLowerCase());
+        return SEP + marcas.length + SEP;
+      });
+      padrao = padrao.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[ \t]+/g, '\\s+');
+      padrao = padrao.replace(new RegExp(SEP + '(\\d+)' + SEP, 'g'), (_, i) => {
+        const m = marcas[Number(i) - 1];
+        if (m === 'tipo') return '(Imagem|V[ií]deo|Video)';
+        if (m === 'n' || m === 'nn') return '(\\d+(?:\\.\\d+)?)';
+        return '(\\d+)';
+      });
+      return { re: new RegExp('^' + padrao + '$', 'i'), marcas };
+    };
+
+    const lerNomeModelo = (nome) => {
+      const texto = norm(nome);
+      if (!texto) return null;
+      for (const modelo of [lerModelo(), MODELO_PADRAO]) {
+        let info;
+        try { info = regexDoModelo(modelo); } catch (_) { continue; }
+        const m = texto.match(info.re);
+        if (!m) continue;
+        const d = { sceneNum: null, imgNum: 1, isVideo: false };
+        info.marcas.forEach((marca, i) => {
+          const v = m[i + 1];
+          if (marca === 'n' || marca === 'nn') d.sceneNum = Number(v);
+          else if (marca === 'g' || marca === 'gg') d.imgNum = Number(v);
+          else if (marca === 'tipo') d.isVideo = /^v/i.test(v);
+        });
+        if (d.sceneNum != null && !isNaN(d.sceneNum)) return d;
+      }
+      return null;
+    };
+
+    Object.assign(proto, {
+      modeloNome: lerModelo,
+      montarNome(n, g, isVideo) { return montarNome(n, g, isVideo); },
+      lerNome(nome) { return lerNomeModelo(nome); },
+
+      /**
+       * Descobre o número da cena de uma mídia, do mais barato ao mais caro:
+       *   1. o nome atual já está no formato de cena
+       *   2. o rótulo da mídia começa com o número ("97.2 - ...")
+       *   3. pede o prompt ao Flow (botão Reutilizar) — só quando precisa
+       */
+      async cenaDaMidia(entry, tile, permitirReutilizar) {
+        const jaNomeada = lerNomeModelo(entry.name) || sceneInfo(entry.name);
+        if (jaNomeada) return { num: jaNomeada.sceneNum, origem: 'nome' };
+
+        const doRotulo = this.numeroDaCenaNoTexto(entry.name);
+        if (doRotulo != null) return { num: doRotulo, origem: 'rótulo' };
+
+        // 3. Prompt inteiro pelo painel que abre ao passar o mouse. É onde o
+        //    Flow novo guarda o prompt (flow-expandable-prompt > .prompt-text).
+        //    Faz o papel do __reactFiber$ da versão antiga: o __ngContext__ do
+        //    Angular em produção é só um número, não dá para ler por lá.
+        if (tile) {
+          const doPainel = this.numeroDaCenaNoTexto(await this.promptPorHover(tile));
+          if (doPainel != null) return { num: doPainel, origem: 'painel' };
+        }
+
+        // 4. Último recurso: pedir o prompt ao Flow pelo botão Reutilizar.
+        if (!permitirReutilizar || !tile) return null;
+        const texto = await this.promptViaReutilizar(tile);
+        const doPrompt = this.numeroDaCenaNoTexto(texto);
+        if (doPrompt != null) return { num: doPrompt, origem: 'reutilizar' };
+        return null;
+      },
+
+      /**
+       * Lê o PROMPT da mídia direto do componente Angular, sem clicar em nada.
+       * É o mesmo truque que a versão antiga usava com o React (__reactFiber$):
+       * o Angular guarda o estado do componente em __ngContext__, e o prompt
+       * está lá dentro — inteiro, não cortado como no rótulo.
+       */
+      promptDoContexto(tile) {
+        if (!tile) return null;
+        const pareceprompt = (chave, valor) =>
+          typeof valor === 'string' && valor.length > 20 && valor.length < 4000 &&
+          (/^\s*\d{1,4}(?:[.,]\d+)?\s*[-–—.):]\s+/.test(valor) ||
+           /^\s*[{[(]\s*(?:cena|prompt|scene)\s*\d/i.test(valor) ||
+           /prompt|subtitle|caption|descri|titulo|title|text/i.test(String(chave)));
+
+        const vistos = new Set();
+        let passos = 0;
+        const procurar = (obj, prof) => {
+          if (!obj || prof > 5 || passos > 4000) return null;
+          if (typeof obj !== 'object') return null;
+          if (vistos.has(obj)) return null;
+          vistos.add(obj);
+          let chaves;
+          try { chaves = Object.keys(obj); } catch (_) { return null; }
+          for (const k of chaves) {
+            passos++;
+            if (passos > 4000) return null;
+            let v;
+            try { v = obj[k]; } catch (_) { continue; }
+            if (pareceprompt(k, v)) return v;
+            if (v && typeof v === 'object' && !(v instanceof Node) && !(v instanceof Window)) {
+              const achou = procurar(v, prof + 1);
+              if (achou) return achou;
+            }
+          }
+          return null;
+        };
+
+        let el = tile;
+        for (let i = 0; i < 6 && el; i++) {
+          const ctx = el.__ngContext__;
+          if (ctx) {
+            const achou = procurar(ctx, 0);
+            if (achou) return norm(achou);
+          }
+          el = el.parentElement;
+        }
+        return null;
+      },
+
+      /**
+       * Lê o PROMPT da mídia passando o mouse por cima. O Flow abre um painel
+       * (flow-info-panel > flow-expandable-prompt) com o prompt INTEIRO, que é
+       * onde está o número da cena. Substitui o truque do React da versão antiga.
+       */
+      lerPainelDePrompt() {
+        // O id cdk-overlay-N muda a cada abertura; por isso ancoramos nos
+        // componentes estáveis e lemos primeiro o span exato mostrado no DevTools.
+        const seletores = [
+          '.cdk-overlay-pane flow-info-panel flow-expandable-prompt .prompt-text > span:nth-child(1)',
+          'flow-info-panel flow-expandable-prompt .prompt-text > span:nth-child(1)',
+          '.cdk-overlay-pane flow-info-panel flow-expandable-prompt .prompt-text',
+          'flow-info-panel flow-expandable-prompt .prompt-text',
+          '.cdk-overlay-container flow-expandable-prompt .prompt-text'
+        ];
+        const alvos = document.querySelectorAll(seletores.join(','));
+        for (const el of alvos) {
+          if (!visible(el)) continue;
+          const t = norm(el.textContent);
+          if (t.length > 3) return t;
+        }
+        return null;
+      },
+
+      async promptPorHover(tile, tetoMs = 3000) {
+        if (!tile) return null;
+        // O Flow decide o hover em algum nivel entre o <video>/<img> e o tile
+        // inteiro, e isso muda entre versoes. Em vez de apostar num alvo so,
+        // avisamos a cadeia inteira, de dentro para fora.
+        const midia = tile.querySelector('flow-video-tile video, flow-image-tile img, video, img') || tile;
+        const cadeia = [];
+        for (let el = midia; el && el !== document.body && cadeia.length < 6; el = el.parentElement) cadeia.push(el);
+        if (!cadeia.includes(tile)) cadeia.push(tile);
+        const r = (midia.getBoundingClientRect().width ? midia : tile).getBoundingClientRect();
+        if (!r.width || !r.height) return null;
+        const x = Math.round(r.left + r.width / 2);
+        const y = Math.round(r.top + r.height / 2);
+
+        const disparar = (el, tipo) => {
+          const base = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, screenX: x, screenY: y, buttons: 0 };
+          try {
+            el.dispatchEvent(/^pointer/.test(tipo)
+              ? new PointerEvent(tipo, Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, base))
+              : new MouseEvent(tipo, base));
+          } catch (_) {}
+        };
+        const ENTRAR = ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove'];
+        const SAIR = ['pointermove', 'mousemove', 'pointerout', 'mouseout', 'pointerleave', 'mouseleave'];
+        // O diagnostico provou que o Flow so abre o painel quando TODOS os
+        // filhos do tile recebem o hover. Por isso isso vem de primeira.
+        const filhos = () => [tile, ...tile.querySelectorAll('*')];
+        const entrarTudo = () => {
+          cadeia.forEach(el => ENTRAR.forEach(t => disparar(el, t)));
+          filhos().forEach(el => { disparar(el, 'pointerover'); disparar(el, 'mouseover'); disparar(el, 'mouseenter'); disparar(el, 'mousemove'); });
+        };
+        const sairTudo = () => {
+          cadeia.forEach(el => SAIR.forEach(t => disparar(el, t)));
+          filhos().forEach(el => { disparar(el, 'pointerout'); disparar(el, 'mouseout'); disparar(el, 'mouseleave'); });
+        };
+
+        let texto = null;
+        try {
+          tile.scrollIntoView({ block: 'center' });
+          // O painel da midia ANTERIOR pode ainda estar aberto. Se lermos nesse
+          // instante pegamos o prompt errado e a midia recebe o nome de outra
+          // cena. Entao primeiro afastamos o mouse e esperamos o painel fechar.
+          if (this.lerPainelDePrompt()) {
+            sairTudo();
+            const corpo = document.body;
+            ['pointermove', 'mousemove'].forEach(t => {
+              try { corpo.dispatchEvent(new MouseEvent(t, { bubbles: true, clientX: 2, clientY: 2 })); } catch (_) {}
+            });
+            for (let e = 0; e < 1200 && this.lerPainelDePrompt(); e += 100) await this.sleep(100);
+          }
+          entrarTudo();
+          for (let esperou = 0; esperou < tetoMs; esperou += 80) {
+            await this.pausa(80);
+            texto = this.lerPainelDePrompt();
+            if (texto) break;
+            if (esperou % 400 === 0) entrarTudo();
+            else cadeia.forEach(el => { disparar(el, 'pointermove'); disparar(el, 'mousemove'); });
+          }
+        } finally {
+          sairTudo();
+        }
+        return texto;
+      },
+
+      /**
+       * Mostra o plano como uma lista de atribuicoes, igual ao seletor de
+       * atribuir: cada linha traz o nome atual, o nome novo e um X para tirar
+       * aquela midia antes de aplicar.
+       */
+      mostrarPlanoRenomear(plano) {
+        this._planoRenomear = plano.slice();
+        const painel = document.getElementById('rn-resultado');
+        const botao = document.getElementById('rn-aplicar');
+        if (!painel) return;
+        const desenhar = () => {
+          painel.innerHTML = '';
+          for (const p of this._planoRenomear) {
+            const linha = document.createElement('div');
+            linha.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 8px;' +
+              'border-radius:6px;margin-bottom:3px;background:var(--cd-bg-secondary);border:1px solid var(--cd-border-light);';
+            const texto = document.createElement('span');
+            texto.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            texto.innerHTML = '<span style="opacity:.55">' + (p.name || 'sem nome').slice(0, 30) + '</span> → <b>' + p.novo + '</b>';
+            texto.title = p.prompt ? String(p.prompt).slice(0, 400) : '';
+            const x = document.createElement('button');
+            x.textContent = '✕';
+            x.title = 'Tirar esta mídia da lista';
+            x.style.cssText = 'border:0;background:transparent;cursor:pointer;color:#dc2626;font-size:13px;line-height:1;padding:2px 5px;';
+            x.addEventListener('click', () => { this._planoRenomear = this._planoRenomear.filter(o => o !== p); desenhar(); });
+            linha.appendChild(texto); linha.appendChild(x);
+            painel.appendChild(linha);
+          }
+          if (botao) {
+            const n = this._planoRenomear.length;
+            botao.style.display = n ? '' : 'none';
+            botao.disabled = !n;
+            botao.textContent = '✅ Aplicar em ' + n + ' mídia(s)';
+          }
+        };
+        desenhar();
+      },
+
+      /** Aplica o que sobrou na lista depois das suas remocoes. */
+      async aplicarPlanoRenomear() {
+        const plano = (this._planoRenomear || []).slice();
+        if (!plano.length || this._renomeando) return;
+        this._renomeando = true;
+        this.renomearParar = false;
+        const aviso = (m, tipo) => {
+          const el = document.getElementById('rn-status');
+          if (el) { el.className = 'flow-status ' + (tipo || 'info'); el.innerHTML = m; }
+        };
+        const barra = document.getElementById('rn-barra');
+        const botao = document.getElementById('rn-aplicar');
+        if (botao) botao.disabled = true;
+        let ok = 0, falhou = 0;
+        try {
+          for (let i = 0; i < plano.length; i++) {
+            if (this.renomearParar) { aviso('⏹ Parado por você. ' + ok + ' renomeada(s).', 'warning'); return; }
+            const p = plano[i];
+            aviso('🏷️ Renomeando <b>' + (i + 1) + '/' + plano.length + '</b> — ' + p.novo);
+            if (barra) barra.style.width = Math.round((i / plano.length) * 100) + '%';
+            if (norm(p.name) === norm(p.novo)) { ok++; continue; }
+            if (await this.apiRename(p.uuid, p.novo)) {
+              ok++;
+              this.tileAssignments.set(p.uuid, { label: p.novo, type: 'scene', scene: 'Cena ' + p.cena, imgNum: p.g });
+              this.pintarNomeNoTile(p.uuid, p.novo);
+              this.startLabelObserver();
+              try { await this.apiFavorite(p.uuid, true); } catch (_) {}
+              this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
+            } else falhou++;
+          }
+          if (barra) barra.style.width = '100%';
+          aviso('✅ <b>' + ok + '</b> mídia(s) renomeada(s)' + (falhou ? ' · ' + falhou + ' falha(s)' : '') + '.', 'success');
+        } catch (erro) {
+          aviso('❌ ' + erro.message, 'error');
+        } finally {
+          this._renomeando = false;
+          this.mostrarPlanoRenomear(this._planoRenomear || []);
+        }
+      },
+      /** Varre tudo, monta o plano e renomeia. escopo: 'ambos' | 'imagens' | 'videos' */
+      async renomearGaleria({ escopo = 'ambos', apenasAnalisar = false } = {}) {
+        if (this._renomeando) return;
+        this._renomeando = true;
+        this.renomearParar = false;
+
+        const painel = document.getElementById('rn-resultado');
+        const barra = document.getElementById('rn-barra');
+        const aviso = (m, tipo) => {
+          const el = document.getElementById('rn-status');
+          if (el) { el.className = 'flow-status ' + (tipo || 'info'); el.innerHTML = m; }
+        };
+        const linha = (texto, cor) => {
+          if (!painel) return;
+          const d = document.createElement('div');
+          d.style.cssText = 'font-size:12px;padding:3px 8px;border-radius:6px;margin-bottom:3px;' +
+            'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' +
+            (cor === 'erro' ? 'background:#fef2f2;color:#991b1b;' : 'background:#dcfce7;color:#166534;');
+          d.textContent = texto;
+          painel.appendChild(d);
+          painel.scrollTop = painel.scrollHeight;
+        };
+        const progresso = (f) => { if (barra) barra.style.width = Math.round(f * 100) + '%'; };
+
+        if (painel) painel.innerHTML = '';
+        progresso(0);
+
+        try {
+          // ── 1. VARREDURA: coleta na ORDEM em que aparecem, de cima para baixo
+          aviso('🔎 Varrendo a galeria...');
+          const coletadas = [];
+          const vistos = new Set();
+          await this.scanGallery(async (entry, tile) => {
+            if (this.renomearParar) return false;
+            if (!entry.uuid || !entry.loaded || vistos.has(entry.uuid)) return;
+            if (escopo === 'imagens' && entry.isVideo) return;
+            if (escopo === 'videos' && !entry.isVideo) return;
+            vistos.add(entry.uuid);
+
+            let cena = null, origem = null;
+            // 1. Já está nomeada? (ex: "Cena 1 - Imagem 1")
+            const jaNomeada = lerNomeModelo(entry.name) || sceneInfo(entry.name);
+            if (jaNomeada) {
+              cena = jaNomeada.sceneNum;
+              origem = 'nome';
+            } else {
+              // 2. Número da cena no rótulo/título visível do card (ex: "1 - Homem...", "{cena 1}...")
+              const doRotulo = this.numeroDaCenaNoTexto(entry.name);
+              if (doRotulo != null) {
+                cena = doRotulo;
+                origem = 'rótulo';
+              } else {
+                // 3. Pelo componente Angular na memória
+                const doAngular = this.promptDoComponente(tile);
+                const cenaAngular = doAngular ? this.numeroDaCenaNoTexto(doAngular) : null;
+                if (cenaAngular != null) {
+                  cena = cenaAngular;
+                  origem = 'angular';
+                } else {
+                  // 4. Hover rápido (1.2s máx)
+                  try {
+                    const promptHover = await this.promptPorHover(tile, 1200);
+                    const doHover = this.numeroDaCenaNoTexto(promptHover);
+                    if (doHover != null) {
+                      cena = doHover;
+                      origem = 'hover';
+                    }
+                  } catch (_) {}
+                }
+              }
+            }
+
+            coletadas.push({ uuid: entry.uuid, name: entry.name, isVideo: entry.isVideo, cena, origem });
+            aviso('🔎 Varrendo a galeria... <b>' + coletadas.length + '</b> mídia(s)');
+          }, { completo: true });
+
+          if (this.renomearParar) { aviso('⏹ Parado por você.', 'warning'); return; }
+          if (!coletadas.length) { aviso('Nenhuma mídia encontrada nesta tela.', 'warning'); return; }
+
+          // ── 2. NÚMERO DA CENA: caso ainda haja mídias sem número, tenta casar com os prompts digitados
+          aviso('🔎 Identificando cenas de ' + coletadas.length + ' mídia(s)...');
+          const promptsInput = document.getElementById('flow-prompts-input')?.value || document.getElementById('fv-prompts-input')?.value || '';
+          const parsedPrompts = parsePromptsText(promptsInput);
+          if (parsedPrompts.length > 0) {
+            for (const item of coletadas) {
+              if (item.cena != null) continue;
+              const match = parsedPrompts.find(p => norm(p.text).toLowerCase() === norm(item.name).toLowerCase());
+              if (match && match.promptNum) {
+                item.cena = match.promptNum;
+                item.origem = 'prompt_digitado';
+              }
+            }
+          }
+
+          const semNumero = coletadas.filter(x => x.cena == null);
+          const porOrigem = {};
+          coletadas.forEach(x => { if (x.origem) porOrigem[x.origem] = (porOrigem[x.origem] || 0) + 1; });
+          this.logDebug('🔎 Números encontrados por: ' +
+            (Object.entries(porOrigem).map(([k, v]) => k + '=' + v).join(' · ') || 'nenhum'), 'info');
+
+          if (semNumero.length) {
+            this.logDebug('🔎 ' + semNumero.length + ' mídia(s) sem número de cena identificado.', 'warning');
+          }
+          progresso(0.4);
+
+          // ── 3. PLANO: agrupa por cena e numera as variações na ordem de aparição
+          const contador = new Map();
+          const plano = [];
+          let semCena = 0;
+          for (const item of coletadas) {
+            if (item.cena == null) { semCena++; continue; }
+            const chave = item.cena + '|' + (item.isVideo ? 'v' : 'i');
+            const g = (contador.get(chave) || 0) + 1;
+            contador.set(chave, g);
+            plano.push({ ...item, g, novo: montarNome(item.cena, g, item.isVideo) });
+          }
+
+          const cenas = new Set(plano.map(p => p.cena)).size;
+          if (!plano.length) {
+            aviso('Não consegui ler o número da cena de nenhuma mídia. ' +
+                  'Confira se os prompts começam com o número (ex: <b>12 - ...</b> ou <b>{cena 12}</b>).', 'warning');
+            return;
+          }
+
+          if (apenasAnalisar) {
+            aviso('🔎 <b>' + plano.length + '</b> mídia(s) em <b>' + cenas + '</b> cena(s) prontas para renomear' +
+                  (semCena ? ' · ' + semCena + ' sem número (ficam de fora)' : '') + '.', 'success');
+            this.mostrarPlanoRenomear(plano);
+            progresso(1);
+            return;
+          }
+
+          // ── 4. RENOMEIA
+          let ok = 0, falhou = 0;
+          for (let i = 0; i < plano.length; i++) {
+            if (this.renomearParar) { aviso('⏹ Parado por você. ' + ok + ' renomeada(s).', 'warning'); return; }
+            const p = plano[i];
+            aviso('🏷️ Renomeando <b>' + (i + 1) + '/' + plano.length + '</b> — ' + p.novo);
+            progresso(0.4 + (i / plano.length) * 0.6);
+            if (norm(p.name) === norm(p.novo)) { ok++; linha('já estava: ' + p.novo); continue; }
+            const deu = await this.apiRename(p.uuid, p.novo);
+            if (deu) {
+              ok++;
+              linha(p.novo);
+              this.tileAssignments.set(p.uuid, { label: p.novo, type: 'scene', scene: 'Cena ' + p.cena, imgNum: p.g });
+              this.pintarNomeNoTile(p.uuid, p.novo);
+              this.startLabelObserver();
+              try { await this.apiFavorite(p.uuid, true); } catch (_) {}
+
+              // Mantém o mapa de cenas atualizado para o download em ZIP logo em seguida
+              const assignments = p.isVideo ? this.videoSceneAssignments : this.sceneAssignments;
+              const sceneName = 'Cena ' + p.cena;
+              if (!assignments.has(sceneName)) assignments.set(sceneName, []);
+              const list = assignments.get(sceneName);
+              const idx = list.findIndex(item => item.workflowId === p.uuid);
+              if (idx >= 0) list.splice(idx, 1);
+              list.push({ imgNum: p.g, workflowId: p.uuid, src: p.src || '' });
+            } else {
+              falhou++;
+              linha('falhou: ' + p.name.slice(0, 40), 'erro');
+            }
+          }
+
+          progresso(1);
+          aviso('✅ <b>' + ok + '</b> mídia(s) renomeada(s) em <b>' + cenas + '</b> cena(s)' +
+                (falhou ? ' · ' + falhou + ' falha(s)' : '') +
+                (semCena ? ' · ' + semCena + ' sem número' : '') + '.', 'success');
+        } catch (erro) {
+          if (erro && erro.stopped) aviso('⏹ Parado por você.', 'warning');
+          else aviso('❌ ' + erro.message, 'error');
+        } finally {
+          this._renomeando = false;
+          const b1 = document.getElementById('rn-start'), b2 = document.getElementById('rn-stop');
+          if (b1) b1.disabled = false;
+          if (b2) b2.disabled = true;
+        }
+      },
+    });
+
+    // ── A ABA em si ──
+    function montarAbaRenomear() {
+      const abas = document.querySelector('.flow-tabs');
+      const scroll = document.querySelector('.flow-scroll');
+      if (!abas || !scroll || document.querySelector('.flow-tab[data-tab="renomear"]')) return;
+
+      const botao = document.createElement('button');
+      botao.className = 'flow-tab';
+      botao.setAttribute('data-tab', 'renomear');
+      botao.textContent = '🏷️ Renomear';
+      abas.appendChild(botao);
+
+      const conteudo = document.createElement('div');
+      conteudo.className = 'flow-tab-content';
+      conteudo.setAttribute('data-tab', 'renomear');
+      conteudo.innerHTML =
+        '<div class="flow-tab-body">' +
+          '<div class="flow-card">' +
+            '<div class="flow-card-header">' +
+              '<h3 class="flow-card-title">Formato do nome</h3>' +
+              '<p class="flow-card-description">Ele lê o número da cena no prompt de cada geração e renomeia na ordem.</p>' +
+            '</div>' +
+            '<div class="flow-card-content">' +
+              '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                '<button class="flow-validate-btn" data-rnmodelo="Cena {n} - {tipo} {g}" style="margin:0;flex:1;min-width:140px;">Cena 7 - Imagem 2</button>' +
+                '<button class="flow-validate-btn" data-rnmodelo="cena_{n}_{g}_" style="margin:0;flex:1;min-width:140px;">cena_7_2_</button>' +
+                '<button class="flow-validate-btn" data-rnmodelo="cena_M_{n}_{g}_" style="margin:0;flex:1;min-width:140px;">cena_M_7_2_</button>' +
+                '<button class="flow-validate-btn" data-rnmodelo="cena_{nn}_{gg}_" style="margin:0;flex:1;min-width:140px;">cena_07_02_</button>' +
+              '</div>' +
+              '<input type="text" id="rn-modelo" class="flow-textarea" style="min-height:auto;padding:8px 10px;margin-top:8px;font-family:monospace;">' +
+              '<div style="font-size:11px;color:var(--cd-text-muted);margin-top:6px;line-height:1.6;">' +
+                '<b>{n}</b> nº da cena · <b>{g}</b> nº da variação · <b>{tipo}</b> Imagem/Vídeo · <b>{nn}</b>/<b>{gg}</b> com dois dígitos' +
+              '</div>' +
+              '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;cursor:pointer;font-size:12px;">' +
+                '<input type="checkbox" id="rn-variacao" style="margin-top:2px;">' +
+                '<span><b>Numerar as variações</b><br><span style="color:var(--cd-text-light);font-size:11px;">' +
+                'Ligado: cena_7_1_, cena_7_2_. Desligado: todas ficam como cena_7_.</span></span></label>' +
+              '<div id="rn-preview" style="font-size:12px;margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--cd-bg-secondary);border:1px solid var(--cd-border-light);"></div>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="flow-card">' +
+            '<div class="flow-card-header"><h3 class="flow-card-title">O que renomear</h3></div>' +
+            '<div class="flow-card-content">' +
+              '<div class="flow-mode-btns">' +
+                '<button class="flow-mode-btn active" data-rnescopo="ambos">🖼️🎬 Tudo</button>' +
+                '<button class="flow-mode-btn" data-rnescopo="imagens">🖼️ Só imagens</button>' +
+                '<button class="flow-mode-btn" data-rnescopo="videos">🎬 Só vídeos</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="flow-actions">' +
+            '<button id="rn-start" class="flow-btn flow-btn-primary">🔎 Analisar a galeria</button>' +
+            '<button id="rn-stop" class="flow-btn flow-btn-secondary" disabled>⏹ Parar</button>' +
+          '</div>' +
+          '<button class="flow-validate-btn" id="rn-testar" style="display:none;">analisar</button>' +
+          '<button class="flow-btn flow-btn-primary" id="rn-aplicar" style="width:100%;margin-top:6px;display:none;" disabled>✅ Aplicar renomeação</button>' +
+          '<div style="font-size:11px;color:var(--cd-text-muted);margin:2px 0 8px;line-height:1.5;">' +
+            'Nada é renomeado até você clicar em <b>Aplicar</b>. Revise a lista e use o <b>✕</b> para tirar o que não quer.' +
+          '</div>' +
+          '<div id="rn-status" class="flow-status"></div>' +
+          '<div class="flow-progress"><div id="rn-barra" class="flow-progress-bar"></div></div>' +
+          '<div id="rn-resultado" style="max-height:260px;overflow-y:auto;margin-top:8px;"></div>' +
+        '</div>';
+      scroll.appendChild(conteudo);
+      console.info('%c[Flow] aba 🏷️ Renomear montada', 'color:#10b981;font-weight:bold');
+
+      // troca de aba
+      abas.querySelectorAll('.flow-tab').forEach(t => {
+        t.addEventListener('click', () => {
+          abas.querySelectorAll('.flow-tab').forEach(x => x.classList.remove('active'));
+          scroll.querySelectorAll('.flow-tab-content').forEach(x => x.classList.remove('active'));
+          t.classList.add('active');
+          const alvo = scroll.querySelector('.flow-tab-content[data-tab="' + t.getAttribute('data-tab') + '"]');
+          if (alvo) alvo.classList.add('active');
+        });
+      });
+
+      const campo = document.getElementById('rn-modelo');
+      const caixaVar = document.getElementById('rn-variacao');
+      const temVar = m => { const s = String(m).toLowerCase(); return s.includes('{g}') || s.includes('{gg}'); };
+      campo.value = lerModelo();
+
+      const atualizar = (salvar) => {
+        const modelo = campo.value.trim() || MODELO_PADRAO;
+        if (salvar) { try { localStorage.setItem(CHAVE_MODELO, modelo); } catch (_) {} }
+        caixaVar.checked = temVar(modelo);
+        const alvo = document.getElementById('rn-preview');
+        if (alvo) {
+          alvo.innerHTML = 'Vai ficar assim:<br><b>' + montarNome(7, 1, false, modelo) + '</b> · <b>' +
+            montarNome(7, 2, false, modelo) + '</b> · <b>' + montarNome(12, 1, true, modelo) + '</b>' +
+            (temVar(modelo) ? '' :
+              '<br><span style="color:#92400e;">⚠️ Sem <b>{g}</b>, todas as variações da cena ficam com o mesmo nome.</span>');
+        }
+      };
+
+      campo.addEventListener('input', () => atualizar(false));
+      campo.addEventListener('change', () => atualizar(true));
+      campo.addEventListener('blur', () => atualizar(true));
+      conteudo.querySelectorAll('[data-rnmodelo]').forEach(b => {
+        b.addEventListener('click', () => { campo.value = b.getAttribute('data-rnmodelo'); atualizar(true); });
+      });
+      caixaVar.addEventListener('change', () => {
+        let m = campo.value.trim() || MODELO_PADRAO;
+        if (caixaVar.checked) {
+          if (!temVar(m)) {
+            const base = m.trimEnd();
+            m = base.endsWith('_') ? base.slice(0, -1) + '_{g}_' : base + (base.includes('_') ? '_' : ' ') + '{g}';
+          }
+        } else {
+          m = m.split('{gg}').join('').split('{GG}').join('').split('{g}').join('').split('{G}').join('');
+          while (m.includes('__')) m = m.split('__').join('_');
+        }
+        campo.value = m;
+        atualizar(true);
+      });
+
+      let escopo = 'ambos';
+      try { escopo = localStorage.getItem(CHAVE_ESCOPO) || 'ambos'; } catch (_) {}
+      conteudo.querySelectorAll('[data-rnescopo]').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('data-rnescopo') === escopo);
+        b.addEventListener('click', () => {
+          conteudo.querySelectorAll('[data-rnescopo]').forEach(x => x.classList.remove('active'));
+          b.classList.add('active');
+          escopo = b.getAttribute('data-rnescopo');
+          try { localStorage.setItem(CHAVE_ESCOPO, escopo); } catch (_) {}
+        });
+      });
+
+      const inst = root.__flowInstance;
+      const rodar = (apenasAnalisar) => {
+        const alvo = root.__flowInstance;
+        if (!alvo) return;
+        document.getElementById('rn-start').disabled = true;
+        document.getElementById('rn-stop').disabled = false;
+        alvo.renomearGaleria({ escopo, apenasAnalisar });
+      };
+      // Analisar NUNCA renomeia. Aplicar e um segundo clique, seu.
+      document.getElementById('rn-start').addEventListener('click', () => rodar(true));
+      document.getElementById('rn-testar').addEventListener('click', () => rodar(true));
+      document.getElementById('rn-aplicar').addEventListener('click', () => {
+        const alvo = root.__flowInstance;
+        if (alvo) alvo.aplicarPlanoRenomear();
+      });
+      document.getElementById('rn-stop').addEventListener('click', () => {
+        const alvo = root.__flowInstance;
+        if (alvo) alvo.renomearParar = true;
+        document.getElementById('rn-stop').disabled = true;
+      });
+
+      atualizar(false);
+    }
+
+    // Tenta cedo e insiste: o painel do Flow demora a montar em máquina lenta.
+    [300, 800, 1500, 2500, 4000].forEach(ms => setTimeout(montarAbaRenomear, ms));
+    setInterval(montarAbaRenomear, 4000);
+
+    // Diagnostico do hover: descobre O QUE abre o painel de prompt.
+    root.__flowDiag = async function (indice) {
+      const i = root.__flowInstance;
+      if (!i) return 'sem instancia';
+      const tiles = i.getTiles();
+      const tile = tiles[indice || 0];
+      if (!tile) return { erro: 'nenhuma midia na tela', tiles: tiles.length };
+      const espera = ms => new Promise(r => setTimeout(r, ms));
+      const conta = () => ({
+        overlays: document.querySelectorAll('.cdk-overlay-pane').length,
+        infoPanel: document.querySelectorAll('flow-info-panel').length,
+        expandable: document.querySelectorAll('flow-expandable-prompt').length,
+        promptText: document.querySelectorAll('.prompt-text').length,
+        lido: i.lerPainelDePrompt()
+      });
+      const disparar = (el, tipos) => tipos.forEach(t => {
+        const r = el.getBoundingClientRect();
+        const o = { bubbles: true, cancelable: true, view: window, clientX: Math.round(r.left + r.width / 2), clientY: Math.round(r.top + r.height / 2), buttons: 0 };
+        try { el.dispatchEvent(/^pointer/.test(t) ? new PointerEvent(t, Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, o)) : new MouseEvent(t, o)); } catch (_) {}
+      });
+      const EV = ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove'];
+
+      tile.scrollIntoView({ block: 'center' });
+      await espera(300);
+      const relatorio = { tiles: tiles.length, antes: conta(), tentativas: [] };
+
+      const midia = tile.querySelector('flow-video-tile video, flow-image-tile img, video, img') || tile;
+      const cadeia = [];
+      for (let el = midia; el && el !== document.body && cadeia.length < 6; el = el.parentElement) cadeia.push(el);
+
+      for (const el of cadeia) {
+        disparar(el, EV);
+        await espera(700);
+        const c = conta();
+        relatorio.tentativas.push(Object.assign({ modo: 'hover ' + el.tagName.toLowerCase() }, c));
+        if (c.lido) { relatorio.funcionou = 'hover ' + el.tagName.toLowerCase(); return relatorio; }
+      }
+
+      tile.querySelectorAll('*').forEach(el => disparar(el, ['pointerover', 'mouseover', 'mouseenter']));
+      await espera(900);
+      const ultimo = Object.assign({ modo: 'todos os filhos' }, conta());
+      relatorio.tentativas.push(ultimo);
+      if (ultimo.lido) { relatorio.funcionou = 'todos os filhos'; return relatorio; }
+
+      relatorio.botoes = [...tile.querySelectorAll('button,[role="button"],[aria-label]')]
+        .map(b => b.tagName.toLowerCase() + '[' + (b.getAttribute('aria-label') || '') + ']').slice(0, 20);
+      relatorio.componentes = [...new Set([...tile.querySelectorAll('*')].map(e => e.tagName.toLowerCase()).filter(t => t.startsWith('flow-') || t.startsWith('mat-')))];
+      relatorio.htmlDoTile = tile.outerHTML.slice(0, 700);
+      relatorio.overlaysNoDoc = [...document.querySelectorAll('.cdk-overlay-pane')].map(o => (o.textContent || '').trim().slice(0, 120));
+      return relatorio;
+    };
+
+    // Autoteste: cole __flowCheck() no console para ver o que esta carregado.
+    root.__flowCheck = function () {
+      const i = root.__flowInstance;
+      const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas'];
+      const tiles = i ? i.getTiles() : [];
+      return {
+        versao: 'Flow NOVO v7.1',
+        instancia: !!i,
+        abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
+        abas: [...document.querySelectorAll('.flow-tab')].map(t => t.textContent.trim()),
+        metodos: i ? metodos.filter(m => typeof i[m] === 'function') : 'sem instancia',
+        faltando: i ? metodos.filter(m => typeof i[m] !== 'function') : metodos,
+        editor: !!document.querySelector('.ProseMirror[contenteditable="true"]'),
+        rolagem: i && i.getScroller() ? i.getScroller().tagName.toLowerCase() : null,
+        midiasNaTela: tiles.length,
+        exemplo: tiles.length && i ? i.tileEntry(tiles[0]) : null
+      };
+    };
+
+    // ── Encolher para o canto inferior direito ──────────────────────────────
+    // O painel de atribuir nascia colado no alto e ocupava a largura da galeria.
+    // Minimizado ele agora vira uma barrinha no canto de baixo, do lado direito.
+    const CHAVE_CANTO = 'flow_assign_canto';
+    function estiloDoCanto() {
+      if (document.getElementById('flow-estilo-canto')) return;
+      const st = document.createElement('style');
+      st.id = 'flow-estilo-canto';
+      st.textContent = [
+        '#flow-assign-panel.canto{top:auto!important;left:auto!important;right:16px!important;',
+        'bottom:16px!important;width:auto!important;max-width:340px;min-width:190px;',
+        'border-radius:14px;box-shadow:0 12px 32px rgba(0,0,0,.28);}',
+        '#flow-assign-panel.canto .flow-assign-header{padding:8px 12px;}',
+        '#flow-assign-panel.canto .flow-assign-header h3{font-size:12px;}',
+        '#flow-assign-panel.canto .flow-assign-items,',
+        '#flow-assign-panel.canto .flow-assign-prompt-preview,',
+        '#flow-assign-panel.canto .flow-assign-reload-bar{display:none;}'
+      ].join('');
+      document.head.appendChild(st);
+    }
+
+    // Painel de atribuir e cartao do painel principal disputam o mesmo canto.
+    // Quando os dois estao na tela, o de atribuir sobe e fica em cima do cartao.
+    function ajustarCanto() {
+      const painel = document.getElementById('flow-assign-panel');
+      if (!painel) return;
+      // O painel reescreve o simbolo do botao quando reabre; aqui garantimos
+      // que ele sempre diga a acao certa: — para minimizar, ⤢ para maximizar.
+      const b = document.getElementById('flow-assign-toggle');
+      const noCanto = painel.classList.contains('canto');
+      if (b) {
+        const certo = noCanto ? '⤢' : '—';
+        if (b.textContent !== certo) {
+          b.textContent = certo;
+          b.title = noCanto ? 'Maximizar (voltar ao tamanho cheio)' : 'Minimizar para o canto';
+        }
+      }
+      if (!noCanto) { painel.style.removeProperty('bottom'); return; }
+      const mini = document.getElementById('flow-mini');
+      let embaixo = 16;
+      try {
+        if (mini && getComputedStyle(mini).display !== 'none') {
+          const h = mini.getBoundingClientRect().height;
+          if (h > 0) embaixo = Math.round(h) + 26;
+        }
+      } catch (_) {}
+      painel.style.setProperty('bottom', embaixo + 'px', 'important');
+    }
+    setInterval(ajustarCanto, 1200);
+
+    // ── Numeros mais legiveis ───────────────────────────────────────────────
+    // As contagens nasciam em cinza claro sobre fundo branco e quase nao se liam.
+    // Aqui elas ficam pretas e em negrito, sem mexer no resto do visual.
+    function estiloDosNumeros() {
+      if (document.getElementById('flow-estilo-numeros')) return;
+      const st = document.createElement('style');
+      st.id = 'flow-estilo-numeros';
+      st.textContent = [
+        /* contagem do painel de atribuir: "3/10 concluidas" */
+        '.flow-assign-count{color:#0f172a!important;font-weight:800!important;font-size:13px!important;}',
+        /* nome e situacao de cada item do seletor */
+        '.flow-assign-item{color:#0f172a!important;}',
+        '.flow-assign-item .assign-name{color:#0f172a!important;font-weight:600!important;}',
+        '.flow-assign-item .assign-status{font-weight:800!important;color:#0f172a!important;}',
+        '.flow-assign-item.assigned{opacity:.95!important;}',
+        '.flow-assign-item.assigned .assign-name{color:#334155!important;}',
+        '.flow-assign-item.complete .assign-name{color:#14532d!important;font-weight:800!important;}',
+        '.flow-assign-item.missing{opacity:.8!important;}',
+        /* quantos prompts foram lidos, nas duas abas */
+        '#flow-prompt-count,#fv-prompt-count{color:#0f172a!important;font-weight:700!important;font-size:12px!important;}',
+        /* resumo dos tempos */
+        '#flow-t-info,#fv-t-info{color:#334155!important;font-weight:600!important;}',
+        /* aba Renomear: situacao, previa e a lista de nomes */
+        '#rn-status{font-weight:600!important;}',
+        '#rn-status b{color:#0f172a!important;font-weight:800!important;}',
+        '#rn-preview{color:#0f172a!important;}',
+        '#rn-preview b{color:#0f172a!important;font-weight:800!important;}',
+        '#rn-resultado{color:#0f172a!important;}',
+        '#rn-resultado b{color:#0f172a!important;font-weight:800!important;}',
+        '#rn-resultado span[style*="opacity"]{opacity:.8!important;color:#334155!important;}',
+        '#rn-aplicar{font-weight:800!important;}'
+      ].join('');
+      document.head.appendChild(st);
+    }
+    estiloDosNumeros();
+    for (const ms of [400, 1200, 2500]) setTimeout(estiloDosNumeros, ms);
+
+    proto.toggleAssignPanel = function () {
+      const painel = document.getElementById('flow-assign-panel');
+      const botao = document.getElementById('flow-assign-toggle');
+      if (!painel) return;
+      estiloDoCanto();
+      const encolher = !painel.classList.contains('minimized');
+      painel.classList.toggle('minimized', encolher);
+      painel.classList.toggle('canto', encolher);
+      if (botao) {
+        // Duas acoes claras, no mesmo lugar: encolher e voltar ao tamanho cheio.
+        botao.textContent = encolher ? '⤢' : '—';
+        botao.title = encolher ? 'Maximizar (voltar ao tamanho cheio)' : 'Minimizar para o canto';
+        botao.classList.toggle('collapsed', encolher);
+      }
+      // Encolhido, o cabecalho inteiro vira o botao de maximizar.
+      const cabecalho = painel.querySelector('.flow-assign-header');
+      if (cabecalho && !cabecalho._voltaLigada) {
+        cabecalho._voltaLigada = true;
+        cabecalho.addEventListener('click', (ev) => {
+          if (!painel.classList.contains('canto')) return;
+          if (ev.target.closest('button')) return;   // os botoes proprios seguem valendo
+          this.toggleAssignPanel();
+        });
+      }
+      if (cabecalho) cabecalho.style.cursor = encolher ? 'pointer' : '';
+      if (cabecalho) cabecalho.title = encolher ? 'Clique para maximizar' : '';
+      try { localStorage.setItem(CHAVE_CANTO, encolher ? '1' : '0'); } catch (_) {}
+      if (!encolher) painel.style.removeProperty('bottom'); else ajustarCanto();
+      this.updateScrollerPadding();
+    };
+
+    // A galeria nao precisa de espaco reservado quando o painel esta no canto.
+    const padraoPadding = proto.updateScrollerPadding;
+    proto.updateScrollerPadding = function () {
+      const painel = document.getElementById('flow-assign-panel');
+      if (painel && painel.classList.contains('canto')) {
+        const scroller = this.getScroller();
+        if (scroller) scroller.style.paddingTop = '';
+        return;
+      }
+      return padraoPadding.call(this);
+    };
+
+    proto.initUI = function () {
+      old.initUI.call(this);
+      root.__flowInstance = this;   // a aba Renomear precisa da instância
+      // Lembra se voce deixou o painel de atribuir encolhido no canto.
+      const aplicarCantoSalvo = () => {
+        try {
+          if (localStorage.getItem(CHAVE_CANTO) !== '1') return;
+          const painel = document.getElementById('flow-assign-panel');
+          if (!painel || painel.classList.contains('canto')) return;
+          if (!painel.classList.contains('active')) return;
+          this.toggleAssignPanel();
+        } catch (_) {}
+      };
+      for (const ms of [400, 1200, 2500]) setTimeout(aplicarCantoSalvo, ms);
+      const abrir = ['showAssignPanel', 'showVideoAssignPanel'];
+      for (const nome of abrir) {
+        if (typeof this[nome] !== 'function') continue;
+        const original = this[nome].bind(this);
+        this[nome] = (...args) => { const r = original(...args); setTimeout(aplicarCantoSalvo, 60); return r; };
+      }
+
+      // ── Escolha da qualidade do download ───────────────────────────────────
+      // Desmarcada (padrao): um pedido por imagem, rapido, tudo num ZIP, em JPEG.
+      // Marcada: pega o arquivo ORIGINAL pelo menu do Flow. Bem maior, e mais
+      // lento, porque o Flow monta o arquivo de cada midia na hora.
+      const criarCaixaQualidade = () => {
+        for (const secao of ['flow-download-section', 'fv-download-section']) {
+          const alvo = document.getElementById(secao);
+          if (!alvo || alvo.querySelector('.flow-caixa-qualidade')) continue;
+          const cx = document.createElement('label');
+          cx.className = 'flow-caixa-qualidade';
+          cx.style.cssText = 'display:flex;gap:8px;align-items:flex-start;margin-top:10px;' +
+            'padding-top:10px;border-top:1px solid var(--cd-border-light);cursor:pointer;font-size:12px;';
+          const marca = document.createElement('input');
+          marca.type = 'checkbox';
+          marca.style.marginTop = '2px';
+          // Nasce MARCADA: o padrao e o arquivo original.
+          try { marca.checked = localStorage.getItem('flow_baixar_original') !== '0'; }
+          catch (_) { marca.checked = true; }
+          // Um id só: as duas abas compartilham a mesma escolha.
+          marca.id = document.getElementById('flow-alta-qualidade') ? '' : 'flow-alta-qualidade';
+          const texto = document.createElement('span');
+          texto.innerHTML = '<b>Baixar o arquivo original</b> (recomendado)<br>' +
+            '<span style="color:var(--cd-text-light);font-size:11px;">' +
+            'Ligado: arquivo original do Flow, em tamanho cheio. Desligado: versão ' +
+            'menor e mais rápida. Os dois modos entregam tudo num ZIP só.</span>';
+          cx.appendChild(marca); cx.appendChild(texto);
+          alvo.appendChild(cx);
+          // A segunda aba espelha a primeira.
+          marca.addEventListener('change', () => {
+            try { localStorage.setItem('flow_baixar_original', marca.checked ? '1' : '0'); } catch (_) {}
+            document.querySelectorAll('.flow-caixa-qualidade input').forEach(o => { o.checked = marca.checked; });
+            const principal = document.getElementById('flow-alta-qualidade');
+            if (principal) principal.checked = marca.checked;
+          });
+        }
+      };
+      for (const ms of [600, 1800, 3500]) setTimeout(criarCaixaQualidade, ms);
+      setInterval(criarCaixaQualidade, 5000);
+
+      // ── Botao "Aplicar renomeação" ─────────────────────────────────────────
+      // Voce marca tudo arrastando, clica UMA vez aqui, e os nomes valem na
+      // hora. Sem precisar atualizar a pagina. Depois disso as midias seguem
+      // marcadas, entao o download em lote (Baixar Cenas) pega todas de uma vez,
+      // com os nomes certos — do jeito que voce ja usava.
+      const criarBotaoAplicar = () => {
+        const barra = document.getElementById('flow-assign-reload-bar');
+        if (!barra || document.getElementById('flow-aplicar-nomes')) return;
+        const b = document.createElement('button');
+        b.id = 'flow-aplicar-nomes';
+        b.textContent = '✅ Aplicar renomeação';
+        b.style.cssText = 'padding:8px 20px;font-size:13px;font-weight:800;border:none;' +
+          'border-radius:8px;cursor:pointer;margin-right:8px;color:#fff;' +
+          'background:linear-gradient(135deg,#10b981,#059669);';
+        b.addEventListener('click', async () => {
+          if (b.disabled) return;
+          b.disabled = true;
+          const antes = b.textContent;
+          b.textContent = '⏳ Aplicando...';
+          try { await this.aplicarMarcas(); }
+          finally { b.disabled = false; b.textContent = antes; this.mostrarBarraDeAtualizar(); }
+        });
+        barra.insertBefore(b, barra.firstChild);
+      };
+      for (const ms of [500, 1500, 3000]) setTimeout(criarBotaoAplicar, ms);
+      setInterval(criarBotaoAplicar, 4000);
+
+      // Ao abrir a pagina, aplica o que ficou marcado da vez passada.
+      // Espera a galeria aparecer para nao tentar antes da hora.
+      const aplicarAoAbrir = async () => {
+        try {
+          if (!Object.keys(this.lerMarcas()).length) return;
+          this.mostrarBarraDeAtualizar();
+          for (let i = 0; i < 40; i++) {
+            if (this.getTiles().length) break;
+            await this.sleep(500);
+          }
+          if (!this.getTiles().length) {
+            this.logDebug('Há nomes marcados, mas a galeria não abriu; eles continuam guardados.', 'warning');
+            return;
+          }
+          await this.aplicarMarcas();
+        } catch (_) {}
+      };
+      setTimeout(aplicarAoAbrir, 2500);
+
+      // ── O X da etiqueta desfaz a atribuicao NA HORA ──────────────────────
+      // O tratador antigo so mexia na tela DEPOIS de renomear no servidor, e
+      // fazia `return` quando isso falhava — entao em video, cujo id nao serve
+      // para a API, o X simplesmente nao fazia nada. Agora a tela responde
+      // primeiro, o item sai do painel, e o servidor e atualizado em seguida.
+      const tirarDoPainel = (nome) => {
+        for (const item of document.querySelectorAll('.flow-assign-item')) {
+          const dele = item.dataset.name || item.dataset.scene;
+          if (dele === nome) item.remove();
+        }
+      };
+      document.addEventListener('click', (e) => {
+        const xis = e.target && e.target.closest && e.target.closest('.label-x');
+        if (!xis) return;
+        const etiqueta = xis.closest('.flow-tile-label');
+        if (!etiqueta || !etiqueta.dataset.wf) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();   // impede o tratador antigo
+
+        const wf = etiqueta.dataset.wf;
+        const tipo = etiqueta.dataset.type;
+        const nome = etiqueta.dataset.name;
+        const cena = etiqueta.dataset.scene;
+
+        etiqueta.remove();
+        this.tileAssignments.delete(wf);
+
+        // Se ainda era so uma MARCACAO, some sem tocar no servidor e a midia
+        // fica com o nome original dela. Se ja tinha sido aplicada, devolvemos
+        // o nome que ela tinha antes — nunca mais "Imagem gerada" no lugar.
+        const marca = this.desmarcar(wf);
+        const original = (marca && marca.original) || '';
+        const jaAplicada = !marca;
+        this.pintarNomeNoTile(wf, original || 'Imagem gerada');
+
+        if (tipo === 'ref') {
+          if (nome) { this.refAssignments.delete(nome); tirarDoPainel(nome); }
+        } else if (tipo === 'scene' && cena) {
+          const mapa = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
+          const lista = mapa.get(cena) || [];
+          const i = lista.findIndex(a => a && a.workflowId === wf);
+          if (i >= 0) lista.splice(i, 1);
+          if (!lista.length) { mapa.delete(cena); tirarDoPainel(cena); }
+          else { mapa.set(cena, lista); this.updateAssignItemUI(cena, true); }
+        }
+        try { this.updateAssignCount(); } catch (_) {}
+        this.logDebug(jaAplicada
+          ? '✕ atribuição desfeita; devolvendo o nome ' + JSON.stringify(original || 'Imagem gerada') + '.'
+          : '✕ marcação removida antes de aplicar; a mídia manteve o nome dela.', 'info');
+
+        // Servidor so quando a renomeacao JA tinha sido aplicada.
+        if (jaAplicada) {
+          (async () => {
+            try { await this.apiRename(wf, original || 'Imagem gerada'); } catch (_) {}
+            try { await this.apiFavorite(wf, false); } catch (_) {}
+          })();
+        }
+      }, true);
+
+
+      // Fechar o painel principal passa a deixar o cartao no canto inferior
+      // direito, e nao so durante uma execucao. O X do proprio cartao dispensa.
+      const fechar = document.getElementById('flow-close');
+      if (fechar) fechar.addEventListener('click', () => {
+        const mini = document.getElementById('flow-mini');
+        if (!mini) return;
+        mini.style.display = 'flex';
+        if (!this.isRunning && !this.videoIsRunning) {
+          const st = document.getElementById('flow-mini-status');
+          const sub = document.getElementById('flow-mini-sub');
+          if (st) st.textContent = 'Criadores Dark';
+          if (sub) sub.textContent = 'Clique para abrir o painel';
+        }
+      });
+
+      // Hover replaces a video's thumbnail with a signed playback URL. Preserve
+      // its observed identity before that change, including virtualized rows.
+      const rememberVideos = () => this.getTiles().filter(tile => $('flow-video-tile', tile)).forEach(tile => this.getUuidFromTile(tile));
+      rememberVideos();
+      this._modernIdentityObserver = new MutationObserver(rememberVideos);
+      this._modernIdentityObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] });
+      for (const prefix of ['flow', 'fv']) {
+      const test = document.createElement('button');
+      test.id = `${prefix}-test-input`; test.className = 'flow-btn flow-btn-secondary';
+      test.textContent = 'Testar preenchimento (sem gerar)';
+      test.style.cssText = 'width:100%;margin-top:8px';
+      document.getElementById(`${prefix}-start-btn`).parentElement.after(test);
+      test.addEventListener('click', async () => {
+        if (this.isRunning || this.videoIsRunning || this._modernTaskRunning) return;
+        test.disabled = true; this._modernTaskRunning = true; this.shouldStop = false; this.videoShouldStop = false;
+        this._modernTestVideo = prefix === 'fv';
+        const status = (type, message) => (prefix === 'fv' ? this.setVideoStatus : this.setStatus).call(this, type, message);
+        try {
+          const prompt = parsePromptsText(document.getElementById(`${prefix}-prompts-input`).value)[0];
+          if (!prompt) throw new Error('Insira um prompt para testar.');
+          await this.clearEditor();
+          for (const seg of parsePrompt(prompt.text)) {
+            if (seg.type === 'text') await this.insertText(seg.content);
+            else if (seg.type === 'ref') await this.searchAndSelect(seg.name);
+            else if (seg.type === 'voice') await this.searchAndSelectVoice(seg.name);
+          }
+          status('success', '✅ Texto e referências preenchidos. Nenhuma geração foi enviada.');
+        } catch (error) { status('error', `Teste: ${error.message}`); }
+        finally { test.disabled = false; this._modernTaskRunning = false; this._modernTestVideo = false; }
+      });
+      }
+    };
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │  PARTE 2 de 2 — PROGRAMA PRINCIPAL                                       │
+// └──────────────────────────────────────────────────────────────────────────┘
 // ==========================================
 // FLOW IMAGE AUTOMATION - CRIADORES DARK
 // Versão 4.1 - Drag & Drop + API Rename (Flow Voz)
@@ -139,8 +2861,15 @@
             _timerWaiters.set(id, resolve);
             // rede de segurança: se o worker não responder, destrava assim mesmo
             setTimeout(() => {
-                if (_timerWaiters.has(id)) { _timerWaiters.delete(id); resolve(); }
-            }, ms + 2500);
+                if (!_timerWaiters.has(id)) return;
+                _timerWaiters.delete(id);
+                if (_timerWorker) {
+                    try { _timerWorker.terminate(); } catch (_) {}
+                    _timerWorker = false;
+                    console.warn('[Flow] O Flow bloqueou o timer em Worker; usando setTimeout.');
+                }
+                resolve();
+            }, ms + 250);
             w.postMessage({ id, ms });
         });
     }
@@ -2654,7 +5383,15 @@ clearReferencesForUI(source = 'images') {
                     for (let pi = 0; pi < batch.length; pi++) {
                         if (this.shouldStop) break;
                         const ok = await this.prepareAndSubmit(batch[pi]);
-                        if (!ok) break;
+                        // Um prompt que falha NAO derruba o resto do lote: marca falha e segue.
+                        if (!ok) {
+                            const gi = (this.videoIsRunning ? this.videoPrompts : this.prompts)
+                                .findIndex(x => x.promptNum === batch[pi].promptNum);
+                            if (this.videoIsRunning) this.updateVideoPromptItemStatus(gi, 'error', 'pulado');
+                            else this.updatePromptItemStatus(gi, 'error', 'pulado');
+                            (this.videoIsRunning ? this.logVideoDebug : this.logDebug)
+                                .call(this, '⏭️ Prompt ' + batch[pi].promptNum + ' pulado; a fila SEGUE.', 'warning');
+                        }
                         if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
                     }
                     if (this.shouldStop) break;
@@ -4589,7 +7326,15 @@ this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
                     for (let pi = 0; pi < batch.length; pi++) {
                         if (this.videoShouldStop) break;
                         const ok = await this.prepareAndSubmit(batch[pi]);
-                        if (!ok) break;
+                        // Um prompt que falha NAO derruba o resto do lote: marca falha e segue.
+                        if (!ok) {
+                            const gi = (this.videoIsRunning ? this.videoPrompts : this.prompts)
+                                .findIndex(x => x.promptNum === batch[pi].promptNum);
+                            if (this.videoIsRunning) this.updateVideoPromptItemStatus(gi, 'error', 'pulado');
+                            else this.updatePromptItemStatus(gi, 'error', 'pulado');
+                            (this.videoIsRunning ? this.logVideoDebug : this.logDebug)
+                                .call(this, '⏭️ Prompt ' + batch[pi].promptNum + ' pulado; a fila SEGUE.', 'warning');
+                        }
                         if (pi < batch.length - 1) await this.dynamicSleep(CONFIG.DELAY_BETWEEN_SUBMITS);
                     }
                     if (this.videoShouldStop) break;
