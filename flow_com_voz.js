@@ -885,16 +885,10 @@
       /** Avisa que ha marcacoes esperando a atualizacao da pagina. */
       mostrarBarraDeAtualizar() {
         const barra = document.getElementById('flow-assign-reload-bar');
-        if (!barra) return;
-        const quantas = Object.keys(this.lerMarcas()).length;
-        barra.classList.toggle('visible', quantas > 0);
-        const aplicar = document.getElementById('flow-aplicar-nomes');
-        if (aplicar) {
-          aplicar.textContent = quantas ? '✅ Aplicar renomeação (' + quantas + ')' : '✅ Aplicar renomeação';
-          aplicar.style.display = quantas ? '' : 'none';
+        if (barra) {
+          barra.classList.remove('visible');
+          barra.style.display = 'none';
         }
-        const botao = document.getElementById('flow-assign-reload');
-        if (botao) botao.textContent = '🔄 Atualizar Página';
       },
       async assignScene(sceneNum, sceneName, id, tile) {
         const assignments = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
@@ -910,10 +904,9 @@
         list.push({ imgNum, workflowId: id, src: this.getMediaSrcFromTile(tile) }); assignments.set(sceneName, list);
         this.tileAssignments.set(id, { label, type: 'scene', scene: sceneName, imgNum, isVideo: !!this._videoAssignActive });
         this.addLabelToTile(tile, label, id, 'scene', sceneName);
-        this.marcar(id, { nome: label, tipo: 'scene', cena: sceneName, favoritar: true });
         this.updateAssignItemUI(sceneName, true); this.updateAssignCount(); this.startLabelObserver();
 
-        // Renomeia na API imediatamente para não depender de recarregar a página
+        // Renomeia na API imediatamente
         try {
           await this.apiRename(id, label);
           await this.apiFavorite(id, true);
@@ -934,7 +927,6 @@
         this.tileAssignments.set(id, { label: name, type: 'ref', name });
         this.addLabelToTile(tile, name, id, 'ref', name);
         const refName = name + CONFIG.REF_SUFFIX;
-        this.marcar(id, { nome: refName, tipo: 'ref', ref: name, favoritar: true });
         this.updateAssignItemUI(name, true); this.updateAssignCount(); this.startLabelObserver();
 
         // Renomeia na API imediatamente
@@ -947,38 +939,27 @@
         }
         return true;
       },
-      /** Aplica de uma vez tudo que foi marcado. Roda sozinho ao abrir a pagina. */
+      /** Aplica marcas se existirem e limpa do storage para nunca repetir */
       async aplicarMarcas() {
         const marcas = this.lerMarcas();
         const ids = Object.keys(marcas);
         if (!ids.length || this._aplicandoMarcas) return;
         this._aplicandoMarcas = true;
-        const aviso = m => { try { this.setStatus('info', m); } catch (_) {} };
-        let ok = 0, falhou = 0;
+        let ok = 0;
         try {
-          aviso('🏷️ Aplicando ' + ids.length + ' nome(s) marcado(s)...');
           for (let i = 0; i < ids.length; i++) {
             const id = ids[i], marca = marcas[id];
-            aviso('🏷️ Aplicando <b>' + (i + 1) + '/' + ids.length + '</b> — ' + marca.nome);
-            let deu = false;
-            try { deu = await this.apiRename(id, marca.nome); } catch (_) {}
-            if (deu) {
-              ok++;
-              this.pintarNomeNoTile(id, marca.nome);
-              if (marca.favoritar) { try { await this.apiFavorite(id, true); } catch (_) {} }
-              delete marcas[id];
-              this.salvarMarcas(marcas);
-            } else {
-              falhou++;
-              this.logDebug('Não consegui aplicar "' + marca.nome + '"; a marcação continua guardada.', 'warning');
-            }
+            try {
+              const deu = await this.apiRename(id, marca.nome);
+              if (deu) {
+                ok++;
+                this.pintarNomeNoTile(id, marca.nome);
+                if (marca.favoritar) { try { await this.apiFavorite(id, true); } catch (_) {} }
+              }
+            } catch (_) {}
+            delete marcas[id];
           }
-          try {
-            this.setStatus(falhou ? 'warning' : 'success',
-              '✅ <b>' + ok + '</b> nome(s) aplicado(s)' +
-              (falhou ? ' · ' + falhou + ' continuam marcados' : '') +
-              (ok ? '. Agora dá para usar <b>Baixar Cenas</b> — vem tudo de uma vez, já com os nomes.' : '.'));
-          } catch (_) {}
+          this.salvarMarcas({});
         } finally {
           this._aplicandoMarcas = false;
           this.mostrarBarraDeAtualizar();
@@ -2562,49 +2543,15 @@
 
       // ── Botao "Aplicar renomeação" ─────────────────────────────────────────
       // Voce marca tudo arrastando, clica UMA vez aqui, e os nomes valem na
-      // hora. Sem precisar atualizar a pagina. Depois disso as midias seguem
-      // marcadas, entao o download em lote (Baixar Cenas) pega todas de uma vez,
-      // com os nomes certos — do jeito que voce ja usava.
-      const criarBotaoAplicar = () => {
-        const barra = document.getElementById('flow-assign-reload-bar');
-        if (!barra || document.getElementById('flow-aplicar-nomes')) return;
-        const b = document.createElement('button');
-        b.id = 'flow-aplicar-nomes';
-        b.textContent = '✅ Aplicar renomeação';
-        b.style.cssText = 'padding:8px 20px;font-size:13px;font-weight:800;border:none;' +
-          'border-radius:8px;cursor:pointer;margin-right:8px;color:#fff;' +
-          'background:linear-gradient(135deg,#10b981,#059669);';
-        b.addEventListener('click', async () => {
-          if (b.disabled) return;
-          b.disabled = true;
-          const antes = b.textContent;
-          b.textContent = '⏳ Aplicando...';
-          try { await this.aplicarMarcas(); }
-          finally { b.disabled = false; b.textContent = antes; this.mostrarBarraDeAtualizar(); }
-        });
-        barra.insertBefore(b, barra.firstChild);
-      };
-      for (const ms of [500, 1500, 3000]) setTimeout(criarBotaoAplicar, ms);
-      setInterval(criarBotaoAplicar, 4000);
-
-      // Ao abrir a pagina, aplica o que ficou marcado da vez passada.
-      // Espera a galeria aparecer para nao tentar antes da hora.
-      const aplicarAoAbrir = async () => {
-        try {
-          if (!Object.keys(this.lerMarcas()).length) return;
-          this.mostrarBarraDeAtualizar();
-          for (let i = 0; i < 40; i++) {
-            if (this.getTiles().length) break;
-            await this.sleep(500);
-          }
-          if (!this.getTiles().length) {
-            this.logDebug('Há nomes marcados, mas a galeria não abriu; eles continuam guardados.', 'warning');
-            return;
-          }
-          await this.aplicarMarcas();
-        } catch (_) {}
-      };
-      setTimeout(aplicarAoAbrir, 2500);
+      // Limpeza de marcas antigas/fantasmas no localStorage para não rodar nada ao atualizar a página
+      try {
+        const paraRemover = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('flow_marcas_')) paraRemover.push(k);
+        }
+        paraRemover.forEach(k => localStorage.removeItem(k));
+      } catch (_) {}
 
       // ── O X da etiqueta desfaz a atribuicao NA HORA ──────────────────────
       // Ao clicar no X da etiqueta, a imagem é desvinculada e o seletor na barrinha
