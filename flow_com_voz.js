@@ -693,38 +693,104 @@
         }
         return false;
       },
+      extractTileError(tile) {
+        if (!tile) return null;
+        if (this.tileHasProgress(tile)) return null;
+
+        const text = (tile.textContent || '').trim().toLowerCase();
+
+        // 1. Erro específico de Áudio (ex: "Audio generation failed")
+        if (text.includes('audio generation failed') || text.includes('falha no áudio') ||
+            text.includes('não foi possível gerar áudio') || text.includes('return silent')) {
+          return '🎵 Falha no áudio';
+        }
+
+        // 2. Erro específico de Alta Demanda (ex: "Flow is experiencing high demand")
+        if (text.includes('high demand') || text.includes('alta demanda') ||
+            text.includes('experiencing high demand') || text.includes('not been charged') ||
+            text.includes('não foi cobrado') || text.includes('overloaded') ||
+            text.includes('muitas solicitações') || text.includes('too many requests')) {
+          return '⚡ Alta demanda no Flow';
+        }
+
+        // 3. Violação de Políticas / Diretrizes de Segurança
+        if (text.includes('policy') || text.includes('política') ||
+            text.includes('safety') || text.includes('guidelines') ||
+            text.includes('diretrizes') || text.includes('não permitido') ||
+            text.includes('blocked') || text.includes('bloqueado')) {
+          return '🛡️ Diretrizes / Políticas';
+        }
+
+        // 4. Tags explícitas de erro do Flow
+        if ($('flow-error-tile, flow-failed-tile, [data-status="error"], [data-status="failed"]', tile)) {
+          return '❌ Falha no card';
+        }
+
+        // 5. Palavras genéricas de falha
+        const failureWords = [
+          'falha ao gerar', 'generation failed', 'failed to generate',
+          'não foi possível gerar', 'could not generate', 'algo deu errado',
+          'something went wrong', 'try a different prompt'
+        ];
+        if (failureWords.some(w => text.includes(w))) {
+          return '❌ Falha ao gerar';
+        }
+
+        // 6. Cabeçalho "Failed" isolado (conforme print do Flow)
+        if (/(?:^|\s)failed(?:\s|$)/i.test(text) || /(?:^|\s)falhou(?:\s|$)/i.test(text)) {
+          const hasPlay = $$('mat-icon, i', tile).some(el => ['play_arrow', 'play_circle'].includes(norm(el.textContent)));
+          if (!hasPlay) return '❌ Geração falhou';
+        }
+
+        // 7. Ícone de erro/alerta sem botão de play
+        const hasWarnIcon = $$('mat-icon, i', tile).some(el => ['warning', 'error', 'report_problem', 'highlight_off'].includes(norm(el.textContent)));
+        if (hasWarnIcon) {
+          const hasPlay = $$('mat-icon, i', tile).some(el => ['play_arrow', 'play_circle'].includes(norm(el.textContent)));
+          if (!hasPlay) return '⚠️ Alerta de erro';
+        }
+
+        return null;
+      },
       isTileError(tile) {
         if (!tile) return false;
         if (this.tileHasProgress(tile)) return false;
-        // Se tem imagem ou vídeo válido e renderizado, NUNCA é erro
-        const img = $('flow-image-tile img, img.thumbnail, img[src]:not([src^="data:image/svg"])', tile);
-        if (img && img.src && (img.naturalWidth > 0 || img.complete)) return false;
-        const vid = $('flow-video-tile video, video[src], video[poster]', tile);
-        if (vid && (vid.src || vid.getAttribute('poster'))) return false;
-
-        // Tags explícitas de erro do Flow
-        if ($('flow-error-tile, flow-failed-tile, [data-status="error"], [data-status="failed"]', tile)) return true;
-        const text = (tile.textContent || '').toLowerCase();
-        const failureWords = ['falha ao gerar', 'generation failed', 'failed to generate', 'não foi possível gerar', 'could not generate', 'algo deu errado', 'something went wrong', 'try again', 'tentar novamente'];
-        if (failureWords.some(w => text.includes(w))) return true;
-
-        // Ícone de erro estrito apenas se não há mídia válida
-        return $$('mat-icon, i', tile).some(el => ['error', 'report_problem', 'highlight_off'].includes(norm(el.textContent)));
+        return this.extractTileError(tile) !== null;
       },
       isTileLoaded(tile) {
         if (!tile) return false;
         if (this.tileHasProgress(tile)) return false;
         if (this.isTileError(tile)) return false;
         const uuid = this.getUuidFromTile(tile);
-        const hasImg = !!$('flow-image-tile img[src], img[src]:not([src^="data:image/svg"]), flow-video-tile img.thumbnail', tile);
-        const hasVid = !!$('flow-video-tile, video', tile);
-        return !!uuid && (hasImg || hasVid);
+        if (!uuid) return false;
+
+        // Para vídeo: precisa de elemento de vídeo com src ou botão de reprodução/play
+        if (this.isVideoTile(tile)) {
+          const hasPlay = $$('mat-icon, i', tile).some(el => ['play_arrow', 'play_circle'].includes(norm(el.textContent))) ||
+                          !!$('button[aria-label*="play" i], .play-button', tile);
+          const vid = $('flow-video-tile video, video[src]', tile);
+          const hasVidSrc = vid && vid.src && !vid.src.startsWith('data:image/svg') && vid.src.length > 10;
+          return hasPlay || !!hasVidSrc;
+        }
+
+        // Para imagem: precisa de imagem real renderizada
+        const img = $('flow-image-tile img, img.thumbnail, img[src]:not([src^="data:image/svg"])', tile);
+        return !!(img && img.src && (img.naturalWidth > 0 || img.complete));
       },
       isTilePending(tile) { return !this.isTileLoaded(tile) && !this.isTileError(tile); },
       snapshotImageUuids() { return new Set(this.getTiles().map(t => this.getUuidFromTile(t)).filter(Boolean)); },
       tileEntry(tile) {
         const uuid = this.getUuidFromTile(tile);
-        return { uuid, workflowId: uuid, name: this.getTileName(tile), src: this.getMediaSrcFromTile(tile), isVideo: this.isVideoTile(tile), loaded: this.isTileLoaded(tile), error: this.isTileError(tile) };
+        const errReason = this.extractTileError ? this.extractTileError(tile) : null;
+        return {
+          uuid,
+          workflowId: uuid,
+          name: this.getTileName(tile),
+          src: this.getMediaSrcFromTile(tile),
+          isVideo: this.isVideoTile(tile),
+          loaded: this.isTileLoaded(tile),
+          error: !!errReason || this.isTileError(tile),
+          errorReason: errReason
+        };
       },
       async scanGallery(visit, { restore = true, completo = false, aoAndar = null, maxMs = 0 } = {}) {
         const scroller = this.getScroller();
@@ -1402,7 +1468,7 @@
               if (entry.loaded && !record.beforeIds.has(entry.uuid)) {
                 record.results.set(index, entry);
               } else if (entry.error) {
-                record.results.set(index, { error: true });
+                record.results.set(index, { error: true, errorReason: entry.errorReason || 'Falha na geração' });
               }
             });
           }
@@ -1425,11 +1491,16 @@
           let pending = 0;
           for (const slot of matrix) {
             if (slot.state !== 'pending') continue;
-            if (!slot.record) { slot.state = 'error'; continue; }
+            if (!slot.record) { slot.state = 'error'; slot.errorReason = 'Envio não confirmado'; continue; }
             const result = slot.record.results.get(slot.index);
-            if (result?.error) slot.state = 'error';
-            else if (result?.loaded) Object.assign(slot, result, { state: 'loaded' });
-            else pending++;
+            if (result?.error) {
+              slot.state = 'error';
+              slot.errorReason = result.errorReason || 'Falha na geração';
+            } else if (result?.loaded) {
+              Object.assign(slot, result, { state: 'loaded' });
+            } else {
+              pending++;
+            }
           }
           if (!pending) {
             if (!confirmar) break;
@@ -1460,6 +1531,7 @@
             if (u) {
               const entry = this.tileEntry(t);
               Object.assign(s, entry, { state: 'loaded' });
+              delete s.errorReason;
               usedUuids.add(u);
               this.logDebug(`🎯 Recuperado com precisão na conferência: prompt ${s.promptNum} (mídia ${s.imgNum})`, 'success');
             }
@@ -1469,7 +1541,7 @@
         if (motivoParada) {
           this._modernUncertain = true;
           const aindaFaltam = matrix.filter(s => s.state === 'pending');
-          for (const s of aindaFaltam) s.state = 'error';
+          for (const s of aindaFaltam) { s.state = 'error'; s.errorReason = motivoParada; }
           const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
           try { reg.call(this, '⚠️ ' + motivoParada + ' ' + aindaFaltam.length + ' contam como falha real — a fila SEGUE.', 'warning'); } catch (_) {}
         }
@@ -2194,6 +2266,258 @@
           if (b2) b2.disabled = true;
         }
       },
+
+      /**
+       * Gera o relatório completo da última execução, mapeando quais prompts
+       * foram concluídos (100%), quais foram parciais (ex: 1 de 2) e quais falharam (0 de 2).
+       */
+      gerarRelatorioDeExecucao(tipo = 'videos') {
+        const isVideo = tipo === 'videos';
+        const prompts = isVideo ? (this.videoPrompts || []) : (this.prompts || []);
+        const expected = isVideo ? (Number(this.videoResultsPerPrompt) || 2) : (Number(this.imagesPerPrompt) || 2);
+        const matrices = this._lastMatrices || [];
+
+        const relatorio = {
+          timestamp: Date.now(),
+          dataHora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          tipo: isVideo ? 'videos' : 'imagens',
+          expectedPerPrompt: expected,
+          totalPrompts: prompts.length,
+          resumo: { completos: 0, parciais: 0, falhas: 0 },
+          prompts: []
+        };
+
+        prompts.forEach((p, idx) => {
+          const slots = matrices.flatMap(m => m).filter(s => s.promptNum === p.promptNum);
+          const loadedSlots = slots.filter(s => s.state === 'loaded');
+          const errorSlots = slots.filter(s => s.state === 'error');
+          const loadedCount = loadedSlots.length;
+
+          let status = 'error';
+          let motivo = null;
+
+          if (loadedCount >= expected) {
+            status = 'done';
+            relatorio.resumo.completos++;
+          } else if (loadedCount > 0) {
+            status = 'partial';
+            relatorio.resumo.parciais++;
+            const err = errorSlots.find(s => s.errorReason);
+            motivo = err?.errorReason || `Gerou ${loadedCount} de ${expected} (falta ${expected - loadedCount})`;
+          } else {
+            status = 'error';
+            relatorio.resumo.falhas++;
+            const err = errorSlots.find(s => s.errorReason);
+            motivo = err?.errorReason || (p.lastError || 'Nenhuma mídia gerada');
+          }
+
+          if (isVideo) {
+            if (status === 'done') this.updateVideoPromptItemStatus(idx, 'done');
+            else if (status === 'partial') this.updateVideoPromptItemStatus(idx, 'partial', `${loadedCount}/${expected}`);
+            else this.updateVideoPromptItemStatus(idx, 'error', motivo ? motivo.slice(0, 15) : 'falhou');
+          } else {
+            if (status === 'done') this.updatePromptItemStatus(idx, 'done');
+            else if (status === 'partial') this.updatePromptItemStatus(idx, 'partial', `${loadedCount}/${expected}`);
+            else this.updatePromptItemStatus(idx, 'error', motivo ? motivo.slice(0, 15) : 'falhou');
+          }
+
+          relatorio.prompts.push({
+            index: idx,
+            promptNum: p.promptNum,
+            text: p.text,
+            expected,
+            loadedCount,
+            status,
+            motivo,
+            midias: loadedSlots.map(s => ({ uuid: s.uuid, name: s.name, src: s.src }))
+          });
+        });
+
+        this._generationReport = relatorio;
+        try {
+          localStorage.setItem('flow_last_generation_report', JSON.stringify(relatorio));
+        } catch (_) {}
+
+        if (typeof this.renderizarRelatorioUI === 'function') {
+          this.renderizarRelatorioUI(relatorio);
+        }
+
+        const pendentes = relatorio.resumo.falhas + relatorio.resumo.parciais;
+        const badge = document.getElementById('rn-rel-badge');
+        if (badge) {
+          if (pendentes > 0) {
+            badge.style.display = 'inline-block';
+            badge.style.background = relatorio.resumo.falhas > 0 ? '#ef4444' : '#f59e0b';
+            badge.style.color = '#fff';
+            badge.textContent = pendentes;
+          } else if (relatorio.totalPrompts > 0) {
+            badge.style.display = 'inline-block';
+            badge.style.background = '#10b981';
+            badge.style.color = '#fff';
+            badge.textContent = '✓';
+          }
+        }
+
+        return relatorio;
+      },
+
+      /**
+       * Executa uma lista filtrada de prompts (ex: só as falhas, ou só os parciais).
+       */
+      executarPromptsDoRelatorio(listaPrompts, tipo) {
+        if (!listaPrompts || !listaPrompts.length) return;
+        const isVideo = tipo === 'videos';
+        const prefix = isVideo ? 'fv' : 'flow';
+        const input = document.getElementById(`${prefix}-prompts-input`);
+        if (!input) return;
+
+        const textoFormatado = listaPrompts.map(p => {
+          const t = norm(p.text);
+          if (/^\s*[{[(]\s*(?:cena|prompt|scene)\s*\d/i.test(t) || /^\s*\d{1,4}(?:[.,]\d+)?\s*[-–—.):]\s+/.test(t)) {
+            return t;
+          }
+          return `{cena ${p.promptNum}} ${t}`;
+        }).join('\n\n');
+
+        input.value = textoFormatado;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+
+        const startFrom = document.getElementById(`${prefix}-start-from`);
+        if (startFrom) {
+          startFrom.value = '1';
+          startFrom.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        const tabBtn = document.querySelector(`.flow-tab[data-tab="${isVideo ? 'videos' : 'images'}"]`);
+        if (tabBtn) tabBtn.click();
+
+        setTimeout(() => {
+          const startBtn = document.getElementById(`${prefix}-start-btn`);
+          if (startBtn && !startBtn.disabled) {
+            startBtn.click();
+          }
+        }, 350);
+      },
+
+      /**
+       * Renderiza o conteúdo da aba Relatório com as métricas e a lista interativa de prompts.
+       */
+      renderizarRelatorioUI(relatorio) {
+        const r = relatorio || this._generationReport;
+        if (!r) return;
+
+        const subtitulo = document.getElementById('rel-subtitulo');
+        if (subtitulo) {
+          const rotuloTipo = r.tipo === 'videos' ? 'Vídeos' : 'Imagens';
+          subtitulo.textContent = `${rotuloTipo} (${r.expectedPerPrompt || 2} por prompt) · Executado às ${r.dataHora || 'recente'}`;
+        }
+
+        const cTotal = document.getElementById('rel-count-total');
+        const cComp = document.getElementById('rel-count-completos');
+        const cParc = document.getElementById('rel-count-parciais');
+        const cFalhas = document.getElementById('rel-count-falhas');
+        if (cTotal) cTotal.textContent = r.totalPrompts || 0;
+        if (cComp) cComp.textContent = r.resumo?.completos || 0;
+        if (cParc) cParc.textContent = r.resumo?.parciais || 0;
+        if (cFalhas) cFalhas.textContent = r.resumo?.falhas || 0;
+
+        const falhas = (r.prompts || []).filter(p => p.status === 'error');
+        const parciais = (r.prompts || []).filter(p => p.status === 'partial');
+        const pendencias = (r.prompts || []).filter(p => p.status !== 'done');
+
+        const btnFalhas = document.getElementById('rel-act-falhas');
+        const txtFalhas = document.getElementById('rel-txt-falhas');
+        if (btnFalhas && txtFalhas) {
+          txtFalhas.textContent = falhas.length;
+          btnFalhas.style.display = falhas.length ? 'block' : 'none';
+          btnFalhas.onclick = () => this.executarPromptsDoRelatorio(falhas, r.tipo);
+        }
+
+        const btnParciais = document.getElementById('rel-act-parciais');
+        const txtParciais = document.getElementById('rel-txt-parciais');
+        if (btnParciais && txtParciais) {
+          txtParciais.textContent = parciais.length;
+          btnParciais.style.display = parciais.length ? 'block' : 'none';
+          btnParciais.onclick = () => this.executarPromptsDoRelatorio(parciais, r.tipo);
+        }
+
+        const btnPendencias = document.getElementById('rel-act-todos-erros');
+        const txtPendencias = document.getElementById('rel-txt-pendencias');
+        if (btnPendencias && txtPendencias) {
+          txtPendencias.textContent = pendencias.length;
+          btnPendencias.style.display = pendencias.length ? 'block' : 'none';
+          btnPendencias.onclick = () => this.executarPromptsDoRelatorio(pendencias, r.tipo);
+        }
+
+        const btnCopiar = document.getElementById('rel-btn-copiar');
+        if (btnCopiar) {
+          btnCopiar.style.display = pendencias.length ? 'block' : 'none';
+          btnCopiar.onclick = () => {
+            const texto = pendencias.map(p => `{cena ${p.promptNum}} ${norm(p.text)}`).join('\n\n');
+            navigator.clipboard.writeText(texto).then(() => {
+              const orig = btnCopiar.textContent;
+              btnCopiar.textContent = '✅ Copiado com sucesso!';
+              setTimeout(() => { btnCopiar.textContent = orig; }, 2000);
+            }).catch(() => {});
+          };
+        }
+
+        const listaContainer = document.getElementById('rel-lista-prompts');
+        if (!listaContainer) return;
+
+        if (!r.prompts || !r.prompts.length) {
+          listaContainer.innerHTML = '<div style="text-align:center;padding:24px 12px;color:var(--cd-text-muted);font-size:12px;">Nenhum prompt registrado nesta execução.</div>';
+          return;
+        }
+
+        const filtroAtivo = listaContainer.getAttribute('data-filtro') || 'todos';
+
+        listaContainer.innerHTML = '';
+        r.prompts.forEach(p => {
+          let visivel = true;
+          if (filtroAtivo === 'falhas' && p.status !== 'error') visivel = false;
+          if (filtroAtivo === 'parciais' && p.status !== 'partial') visivel = false;
+          if (filtroAtivo === 'completos' && p.status !== 'done') visivel = false;
+
+          let borda = '#cbd5e1', fundo = '#f8fafc', badgeBg = '#ecfdf5', badgeFg = '#065f46', badgeTexto = `[${p.loadedCount}/${p.expected}] Concluído`, motivoCor = '#dc2626';
+          if (p.status === 'partial') {
+            borda = '#fde68a'; fundo = '#fffbeb'; badgeBg = '#fef3c7'; badgeFg = '#92400e'; badgeTexto = `[${p.loadedCount}/${p.expected}] Parcial`; motivoCor = '#b45309';
+          } else if (p.status === 'error') {
+            borda = '#fecaca'; fundo = '#fef2f2'; badgeBg = '#fee2e2'; badgeFg = '#991b1b'; badgeTexto = `[${p.loadedCount}/${p.expected}] Falhou`; motivoCor = '#b91c1c';
+          }
+
+          const card = document.createElement('div');
+          card.className = `rel-item rel-item-${p.status}`;
+          card.style.cssText = `border:1px solid ${borda};background:${fundo};border-radius:8px;padding:8px 10px;display:${visivel ? 'flex' : 'none'};flex-direction:column;gap:4px;`;
+          card.setAttribute('data-status', p.status);
+          card.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="font-weight:800;font-size:12px;color:var(--cd-text);">#${p.promptNum}</span>
+                <span style="font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;background:${badgeBg};color:${badgeFg};">${badgeTexto}</span>
+              </div>
+              <button class="flow-btn flow-btn-secondary rel-btn-gerar-um" style="font-size:11px;padding:2px 8px;height:auto;line-height:1.4;">
+                ▶️ Gerar
+              </button>
+            </div>
+            <div style="font-size:11px;color:var(--cd-text-light);line-height:1.4;max-height:36px;overflow:hidden;text-overflow:ellipsis;" title="${this.esc(p.text)}">
+              ${this.esc(p.text)}
+            </div>
+            ${p.motivo ? `<div style="font-size:11px;font-weight:600;color:${motivoCor};margin-top:2px;">⚠️ Motivo: ${this.esc(p.motivo)}</div>` : ''}
+          `;
+
+          const btnUm = card.querySelector('.rel-btn-gerar-um');
+          if (btnUm) {
+            btnUm.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.executarPromptsDoRelatorio([p], r.tipo);
+            });
+          }
+
+          listaContainer.appendChild(card);
+        });
+      },
     });
 
     // ── A ABA em si ──
@@ -2350,9 +2674,169 @@
       atualizar(false);
     }
 
+    // ── A ABA DE RELATÓRIO ──
+    function montarAbaRelatorio() {
+      const abas = document.querySelector('.flow-tabs');
+      const scroll = document.querySelector('.flow-scroll');
+      if (!abas || !scroll || document.querySelector('.flow-tab[data-tab="relatorio"]')) return;
+
+      const botao = document.createElement('button');
+      botao.className = 'flow-tab';
+      botao.setAttribute('data-tab', 'relatorio');
+      botao.innerHTML = '📊 Relatório <span id="rn-rel-badge" style="display:none;padding:1px 6px;border-radius:10px;font-size:10px;font-weight:700;margin-left:4px;"></span>';
+      abas.appendChild(botao);
+
+      const conteudo = document.createElement('div');
+      conteudo.className = 'flow-tab-content';
+      conteudo.setAttribute('data-tab', 'relatorio');
+      conteudo.innerHTML =
+        '<div class="flow-tab-body">' +
+          '<div class="flow-card">' +
+            '<div class="flow-card-header" style="display:flex;justify-content:space-between;align-items:flex-start;">' +
+              '<div>' +
+                '<h3 class="flow-card-title">📊 Relatório de Geração</h3>' +
+                '<p id="rel-subtitulo" class="flow-card-description">Nenhuma geração registrada ainda.</p>' +
+              '</div>' +
+              '<button id="rel-btn-limpar" class="flow-btn flow-btn-secondary" style="font-size:11px;padding:4px 8px;height:auto;" title="Limpar relatório">🧹 Limpar</button>' +
+            '</div>' +
+            '<div class="flow-card-content">' +
+              // Métricas
+              '<div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;margin-bottom:12px;">' +
+                '<div style="background:var(--cd-bg-secondary);border:1px solid var(--cd-border-light);border-radius:8px;padding:8px 4px;text-align:center;">' +
+                  '<div style="font-size:11px;color:var(--cd-text-muted);">Total</div>' +
+                  '<div id="rel-count-total" style="font-size:18px;font-weight:800;color:var(--cd-text);">0</div>' +
+                '</div>' +
+                '<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:8px 4px;text-align:center;">' +
+                  '<div style="font-size:11px;color:#065f46;font-weight:600;">Completos</div>' +
+                  '<div id="rel-count-completos" style="font-size:18px;font-weight:800;color:#059669;">0</div>' +
+                '</div>' +
+                '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 4px;text-align:center;">' +
+                  '<div style="font-size:11px;color:#92400e;font-weight:600;">Parciais</div>' +
+                  '<div id="rel-count-parciais" style="font-size:18px;font-weight:800;color:#d97706;">0</div>' +
+                '</div>' +
+                '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 4px;text-align:center;">' +
+                  '<div style="font-size:11px;color:#991b1b;font-weight:600;">Falhas</div>' +
+                  '<div id="rel-count-falhas" style="font-size:18px;font-weight:800;color:#dc2626;">0</div>' +
+                '</div>' +
+              '</div>' +
+
+              // Botões de Ação Imediata
+              '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">' +
+                '<button id="rel-act-falhas" class="flow-btn flow-btn-primary" style="background:#dc2626;border-color:#dc2626;font-size:12px;display:none;">' +
+                  '▶️ Gerar prompts que falharam (<span id="rel-txt-falhas">0</span>)' +
+                '</button>' +
+                '<button id="rel-act-parciais" class="flow-btn flow-btn-primary" style="background:#d97706;border-color:#d97706;font-size:12px;display:none;">' +
+                  '▶️ Completar parciais que só geraram 1 (<span id="rel-txt-parciais">0</span>)' +
+                '</button>' +
+                '<button id="rel-act-todos-erros" class="flow-btn flow-btn-primary" style="font-size:12px;display:none;">' +
+                  '▶️ Retentar todas as pendências (<span id="rel-txt-pendencias">0</span>)' +
+                '</button>' +
+                '<button id="rel-btn-copiar" class="flow-btn flow-btn-secondary" style="font-size:12px;display:none;">' +
+                  '📋 Copiar prompts com pendência' +
+                '</button>' +
+              '</div>' +
+
+              // Filtros rápidos
+              '<div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;">' +
+                '<button class="flow-filter-btn active" data-relfiltro="todos" style="font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--cd-border-light);background:var(--cd-bg-secondary);cursor:pointer;">Todos</button>' +
+                '<button class="flow-filter-btn" data-relfiltro="falhas" style="font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--cd-border-light);background:var(--cd-bg-secondary);cursor:pointer;color:#dc2626;">🔴 Só Falhas</button>' +
+                '<button class="flow-filter-btn" data-relfiltro="parciais" style="font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--cd-border-light);background:var(--cd-bg-secondary);cursor:pointer;color:#d97706;">🟡 Só Parciais</button>' +
+                '<button class="flow-filter-btn" data-relfiltro="completos" style="font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--cd-border-light);background:var(--cd-bg-secondary);cursor:pointer;color:#059669;">🟢 Só Completos</button>' +
+              '</div>' +
+
+              // Lista dos prompts
+              '<div id="rel-lista-prompts" data-filtro="todos" style="max-height:380px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;">' +
+                '<div style="text-align:center;padding:24px 12px;color:var(--cd-text-muted);font-size:12px;">' +
+                  'Os detalhes de cada prompt aparecerão aqui após a execução.' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      scroll.appendChild(conteudo);
+      console.info('%c[Flow] aba 📊 Relatório montada', 'color:#3b82f6;font-weight:bold');
+
+      // Troca de abas com suporte a todas as abas
+      abas.querySelectorAll('.flow-tab').forEach(t => {
+        t.onclick = () => {
+          abas.querySelectorAll('.flow-tab').forEach(x => x.classList.remove('active'));
+          scroll.querySelectorAll('.flow-tab-content').forEach(x => x.classList.remove('active'));
+          t.classList.add('active');
+          const alvo = scroll.querySelector('.flow-tab-content[data-tab="' + t.getAttribute('data-tab') + '"]');
+          if (alvo) alvo.classList.add('active');
+        };
+      });
+
+      // Filtros da lista
+      conteudo.querySelectorAll('[data-relfiltro]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          conteudo.querySelectorAll('[data-relfiltro]').forEach(b => {
+            b.classList.remove('active');
+            b.style.fontWeight = 'normal';
+          });
+          btn.classList.add('active');
+          btn.style.fontWeight = 'bold';
+          const filtro = btn.getAttribute('data-relfiltro');
+          const lista = document.getElementById('rel-lista-prompts');
+          if (lista) {
+            lista.setAttribute('data-filtro', filtro);
+            lista.querySelectorAll('.rel-item').forEach(item => {
+              const st = item.getAttribute('data-status');
+              let show = true;
+              if (filtro === 'falhas' && st !== 'error') show = false;
+              if (filtro === 'parciais' && st !== 'partial') show = false;
+              if (filtro === 'completos' && st !== 'done') show = false;
+              item.style.display = show ? 'flex' : 'none';
+            });
+          }
+        });
+      });
+
+      // Botão Limpar
+      const btnLimpar = document.getElementById('rel-btn-limpar');
+      if (btnLimpar) {
+        btnLimpar.addEventListener('click', () => {
+          try { localStorage.removeItem('flow_last_generation_report'); } catch (_) {}
+          const inst = root.__flowInstance;
+          if (inst) inst._generationReport = null;
+          const b = document.getElementById('rn-rel-badge');
+          if (b) b.style.display = 'none';
+          const lista = document.getElementById('rel-lista-prompts');
+          if (lista) lista.innerHTML = '<div style="text-align:center;padding:24px 12px;color:var(--cd-text-muted);font-size:12px;">Relatório limpo.</div>';
+          ['rel-count-total', 'rel-count-completos', 'rel-count-parciais', 'rel-count-falhas'].forEach(id => {
+            const el = document.getElementById(id); if (el) el.textContent = '0';
+          });
+          ['rel-act-falhas', 'rel-act-parciais', 'rel-act-todos-erros', 'rel-btn-copiar'].forEach(id => {
+            const el = document.getElementById(id); if (el) el.style.display = 'none';
+          });
+          const sub = document.getElementById('rel-subtitulo');
+          if (sub) sub.textContent = 'Nenhuma geração registrada.';
+        });
+      }
+
+      // Restaura dados salvos do localStorage se houver
+      try {
+        const salvoRaw = localStorage.getItem('flow_last_generation_report');
+        if (salvoRaw) {
+          const salvo = JSON.parse(salvoRaw);
+          const inst = root.__flowInstance;
+          if (inst) {
+            inst._generationReport = salvo;
+            inst.renderizarRelatorioUI(salvo);
+          }
+        }
+      } catch (_) {}
+    }
+
     // Tenta cedo e insiste: o painel do Flow demora a montar em máquina lenta.
-    [300, 800, 1500, 2500, 4000].forEach(ms => setTimeout(montarAbaRenomear, ms));
-    setInterval(montarAbaRenomear, 4000);
+    [300, 800, 1500, 2500, 4000].forEach(ms => {
+      setTimeout(montarAbaRenomear, ms);
+      setTimeout(montarAbaRelatorio, ms);
+    });
+    setInterval(() => {
+      montarAbaRenomear();
+      montarAbaRelatorio();
+    }, 4000);
 
     // Diagnostico do hover: descobre O QUE abre o painel de prompt.
     root.__flowDiag = async function (indice) {
@@ -2409,12 +2893,13 @@
     // Autoteste: cole __flowCheck() no console para ver o que esta carregado.
     root.__flowCheck = function () {
       const i = root.__flowInstance;
-      const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto'];
+      const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.1',
+        versao: 'Flow NOVO v7.2 (com Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
+        abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
         abas: [...document.querySelectorAll('.flow-tab')].map(t => t.textContent.trim()),
         metodos: i ? metodos.filter(m => typeof i[m] === 'function') : 'sem instancia',
         faltando: i ? metodos.filter(m => typeof i[m] !== 'function') : metodos,
@@ -4470,16 +4955,70 @@ clearReferencesForUI(source = 'images') {
         // Alias para compatibilidade
         getImgSrcFromTile(tile) { return this.getMediaSrcFromTile(tile); }
 
+        extractTileError(tile) {
+            if (!tile) return null;
+            if (this.tileHasProgress(tile)) return null;
+            const norm = (t) => (t || '').trim().toLowerCase();
+            const text = norm(tile.textContent);
+
+            if (text.includes('audio generation failed') || text.includes('falha no áudio') ||
+                text.includes('não foi possível gerar áudio') || text.includes('return silent')) {
+                return '🎵 Falha no áudio';
+            }
+            if (text.includes('high demand') || text.includes('alta demanda') ||
+                text.includes('experiencing high demand') || text.includes('not been charged') ||
+                text.includes('não foi cobrado') || text.includes('overloaded') ||
+                text.includes('muitas solicitações') || text.includes('too many requests')) {
+                return '⚡ Alta demanda no Flow';
+            }
+            if (text.includes('policy') || text.includes('política') ||
+                text.includes('safety') || text.includes('guidelines') ||
+                text.includes('diretrizes') || text.includes('não permitido') ||
+                text.includes('blocked') || text.includes('bloqueado')) {
+                return '🛡️ Diretrizes / Políticas';
+            }
+            if (tile.querySelector('flow-error-tile, flow-failed-tile, [data-status="error"], [data-status="failed"]')) {
+                return '❌ Falha no card';
+            }
+            const failureWords = [
+                'falha ao gerar', 'generation failed', 'failed to generate',
+                'não foi possível gerar', 'could not generate', 'algo deu errado',
+                'something went wrong', 'try a different prompt'
+            ];
+            if (failureWords.some(w => text.includes(w))) return '❌ Falha ao gerar';
+            if (/(?:^|\s)failed(?:\s|$)/i.test(text) || /(?:^|\s)falhou(?:\s|$)/i.test(text)) {
+                const hasPlay = [...tile.querySelectorAll('mat-icon, i')].some(el => ['play_arrow', 'play_circle'].includes(norm(el.textContent)));
+                if (!hasPlay) return '❌ Geração falhou';
+            }
+            const hasErrorIcon = [...tile.querySelectorAll('mat-icon, i')].some(i => {
+                const iconName = norm(i.textContent);
+                return iconName === 'warning' || iconName === 'error' || iconName === 'report_problem' || iconName === 'highlight_off';
+            });
+            if (hasErrorIcon) {
+                const hasPlay = [...tile.querySelectorAll('mat-icon, i')].some(el => ['play_arrow', 'play_circle'].includes(norm(el.textContent)));
+                if (!hasPlay) return '⚠️ Alerta de erro';
+            }
+            return null;
+        }
+
         isTileLoaded(tile) {
             if (!tile) return false;
             if (this.tileHasProgress(tile)) return false;
             if (this.isTileError(tile)) return false;
             const uuid = this.getUuidFromTile(tile);
+            if (!uuid) return false;
+
+            const norm = (t) => (t || '').trim().toLowerCase();
+            if (this.isVideoTile(tile)) {
+                const hasPlay = [...tile.querySelectorAll('mat-icon, i')].some(el => ['play_arrow', 'play_circle'].includes(norm(el.textContent))) ||
+                                !!tile.querySelector('button[aria-label*="play" i], .play-button');
+                const video = tile.querySelector('flow-video-tile video, video[src]');
+                const hasVidSrc = video && video.src && !video.src.startsWith('data:image/svg') && video.src.length > 10;
+                return hasPlay || !!hasVidSrc;
+            }
+
             const img = tile.querySelector('flow-image-tile img, img.thumbnail, img[src]:not([src^="data:image/svg"])');
-            if (img && img.src && (img.naturalWidth > 0 || img.complete)) return true;
-            const video = tile.querySelector('flow-video-tile video, video[src], video[poster]');
-            if (video && (video.src || video.getAttribute('poster'))) return true;
-            return !!uuid && !!(img || video);
+            return !!(img && img.src && (img.naturalWidth > 0 || img.complete));
         }
 
         isTilePending(tile) {
@@ -4491,22 +5030,7 @@ clearReferencesForUI(source = 'images') {
         isTileError(tile) {
             if (!tile) return false;
             if (this.tileHasProgress(tile)) return false;
-            // Se tem mídia válida e renderizada, NUNCA é erro
-            const img = tile.querySelector('flow-image-tile img, img.thumbnail, img[src]:not([src^="data:image/svg"])');
-            if (img && img.src && (img.naturalWidth > 0 || img.complete)) return false;
-            const video = tile.querySelector('flow-video-tile video, video[src], video[poster]');
-            if (video && (video.src || video.getAttribute('poster'))) return false;
-
-            if (tile.querySelector('flow-error-tile, flow-failed-tile, [data-status="error"], [data-status="failed"]')) return true;
-            const text = (tile.textContent || '').toLowerCase();
-            const failureWords = ['falha ao gerar', 'generation failed', 'failed to generate', 'não foi possível gerar', 'could not generate', 'algo deu errado', 'something went wrong', 'try again', 'tentar novamente'];
-            if (failureWords.some(w => text.includes(w))) return true;
-
-            const hasErrorIcon = [...tile.querySelectorAll('mat-icon, i')].some(i => {
-                const iconName = (i.textContent || '').trim().toLowerCase();
-                return iconName === 'error' || iconName === 'report_problem' || iconName === 'highlight_off';
-            });
-            return hasErrorIcon;
+            return this.extractTileError(tile) !== null;
         }
 
         tileHasProgress(tile) {
@@ -5520,11 +6044,19 @@ while (retryCount[key] < maxRetries && !this.shouldStop) {
                         if (!recovered) this.updatePromptItemStatus(gi, 'error', `falhou`);
                     }
 
-                    // Marca prompts do lote como done
+                    // Marca prompts do lote com status real (done, partial ou error)
                     batch.forEach(p => {
                         const gi = this.prompts.findIndex(x => x.promptNum === p.promptNum);
                         const slots = matrix.filter(s => s.promptNum === p.promptNum);
-                        if (slots.filter(s => s.state === 'loaded').length >= N) this.updatePromptItemStatus(gi, 'done');
+                        const loadedCount = slots.filter(s => s.state === 'loaded').length;
+                        if (loadedCount >= N) {
+                            this.updatePromptItemStatus(gi, 'done');
+                        } else if (loadedCount > 0) {
+                            this.updatePromptItemStatus(gi, 'partial', `${loadedCount}/${N}`);
+                        } else {
+                            const errSlot = slots.find(s => s.errorReason);
+                            this.updatePromptItemStatus(gi, 'error', errSlot?.errorReason ? errSlot.errorReason.slice(0, 15) : 'falhou');
+                        }
                     });
 
                     allMatrices.push(matrix);
@@ -5630,6 +6162,10 @@ if (this.genMode === 'refs') {
                         }))
                     );
                     this.showCompletionPopup(popupMsg, failedList.length > 0 ? failedList : null);
+                    this._lastMatrices = allMatrices;
+                    if (typeof this.gerarRelatorioDeExecucao === 'function') {
+                        try { this.gerarRelatorioDeExecucao('imagens'); } catch (_) {}
+                    }
                 } else {
                     this.setStatus('warning', '⏹ Automação interrompida.');
                 }
@@ -7482,11 +8018,19 @@ while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
                         if (!recovered) this.updateVideoPromptItemStatus(gi, 'error', `falhou`);
                     }
 
-                    // Marca prompts do lote como done
+                    // Marca prompts do lote com status real (done, partial ou error)
                     batch.forEach(p => {
                         const gi = this.videoPrompts.findIndex(x => x.promptNum === p.promptNum);
                         const slots = matrix.filter(s => s.promptNum === p.promptNum);
-                        if (slots.filter(s => s.state === 'loaded').length >= N) this.updateVideoPromptItemStatus(gi, 'done');
+                        const loadedCount = slots.filter(s => s.state === 'loaded').length;
+                        if (loadedCount >= N) {
+                            this.updateVideoPromptItemStatus(gi, 'done');
+                        } else if (loadedCount > 0) {
+                            this.updateVideoPromptItemStatus(gi, 'partial', `${loadedCount}/${N}`);
+                        } else {
+                            const errSlot = slots.find(s => s.errorReason);
+                            this.updateVideoPromptItemStatus(gi, 'error', errSlot?.errorReason ? errSlot.errorReason.slice(0, 15) : 'falhou');
+                        }
                     });
 
                     allMatrices.push(matrix);
@@ -7590,6 +8134,10 @@ if (this.videoGenMode === 'scenes') {
                         }))
                     );
                     this.showCompletionPopup(popupMsg, failedList.length > 0 ? failedList : null);
+                    this._lastMatrices = allMatrices;
+                    if (typeof this.gerarRelatorioDeExecucao === 'function') {
+                        try { this.gerarRelatorioDeExecucao('videos'); } catch (_) {}
+                    }
                 } else {
                     this.setVideoStatus('warning', '⏹ Automação de vídeos interrompida.');
                 }
@@ -8635,11 +9183,12 @@ async scrollToWorkflow(wfId) {
             if (!item) return;
             item.className = `flow-prompt-item ${status}`;
             let badge = item.querySelector('.status-badge');
-            const icons  = { active:'⚡', done:'✅', error:'❌', retrying:'🔄' };
-            const labels = { active:'Gerando', done:'Concluído', error:'Falhou', retrying:'Retentando' };
+            const icons  = { active:'⚡', done:'✅', partial:'🟡', error:'❌', retrying:'🔄' };
+            const labels = { active:'Gerando', done:'Concluído', partial:'Parcial', error:'Falhou', retrying:'Retentando' };
             const colors = {
                 active:   { bg:'#e0f2fe', fg:'#0369a1' },
                 done:     { bg:'#d1fae5', fg:'#065f46' },
+                partial:  { bg:'#fef3c7', fg:'#92400e' },
                 error:    { bg:'#fee2e2', fg:'#991b1b' },
                 retrying: { bg:'#fef9c3', fg:'#78350f' },
             };
@@ -8733,11 +9282,12 @@ async scrollToWorkflow(wfId) {
             if (!item) return;
             item.className = `flow-prompt-item ${status}`;
             let badge = item.querySelector('.status-badge');
-            const icons  = { active:'⚡', done:'✅', error:'❌', retrying:'🔄' };
-            const labels = { active:'Gerando', done:'Concluído', error:'Falhou', retrying:'Retentando' };
+            const icons  = { active:'⚡', done:'✅', partial:'🟡', error:'❌', retrying:'🔄' };
+            const labels = { active:'Gerando', done:'Concluído', partial:'Parcial', error:'Falhou', retrying:'Retentando' };
             const colors = {
                 active:   { bg:'#e0f2fe', fg:'#0369a1' },
                 done:     { bg:'#d1fae5', fg:'#065f46' },
+                partial:  { bg:'#fef3c7', fg:'#92400e' },
                 error:    { bg:'#fee2e2', fg:'#991b1b' },
                 retrying: { bg:'#fef9c3', fg:'#78350f' },
             };
