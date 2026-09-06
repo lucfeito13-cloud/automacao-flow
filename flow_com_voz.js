@@ -2412,13 +2412,15 @@
         /* contagem do painel de atribuir: "3/10 concluidas" */
         '.flow-assign-count{color:#0f172a!important;font-weight:800!important;font-size:13px!important;}',
         /* nome e situacao de cada item do seletor */
-        '.flow-assign-item{color:#0f172a!important;}',
-        '.flow-assign-item .assign-name{color:#0f172a!important;font-weight:600!important;}',
-        '.flow-assign-item .assign-status{font-weight:800!important;color:#0f172a!important;}',
-        '.flow-assign-item.assigned{opacity:.95!important;}',
-        '.flow-assign-item.assigned .assign-name{color:#334155!important;}',
-        '.flow-assign-item.complete .assign-name{color:#14532d!important;font-weight:800!important;}',
-        '.flow-assign-item.missing{opacity:.8!important;}',
+        '.flow-assign-item{color:#334155!important;background:#f8fafc!important;border:1.5px solid #cbd5e1!important;border-radius:9999px!important;user-select:none!important;-webkit-user-select:none!important;-webkit-user-drag:element!important;opacity:1!important;text-decoration:none!important;}',
+        '.flow-assign-item .assign-name{color:#334155!important;font-weight:600!important;text-decoration:none!important;}',
+        '.flow-assign-item .assign-status{font-weight:800!important;color:#64748b!important;}',
+        '.flow-assign-item.assigned{background:#dcfce7!important;border-color:#22c55e!important;color:#15803d!important;opacity:1!important;}',
+        '.flow-assign-item.assigned .assign-name{color:#15803d!important;font-weight:700!important;text-decoration:none!important;}',
+        '.flow-assign-item.assigned .assign-status{color:#15803d!important;}',
+        '.flow-assign-item.assigned .drag-icon{color:#16a34a!important;}',
+        '.flow-assign-item.complete .assign-name{color:#14532d!important;font-weight:800!important;text-decoration:none!important;}',
+        '.flow-assign-item.missing{opacity:.85!important;}',
         /* quantos prompts foram lidos, nas duas abas */
         '#flow-prompt-count,#fv-prompt-count{color:#0f172a!important;font-weight:700!important;font-size:12px!important;}',
         /* resumo dos tempos */
@@ -2591,13 +2593,8 @@
           const lista = mapa.get(cena) || [];
           const i = lista.findIndex(a => a && a.workflowId === wf);
           if (i >= 0) lista.splice(i, 1);
-          if (!lista.length) {
-            mapa.delete(cena);
-            this.updateAssignItemUI(cena, false);
-          } else {
-            mapa.set(cena, lista);
-            this.updateAssignItemUI(cena, true);
-          }
+          mapa.set(cena, lista);
+          this.updateAssignItemUI(cena, lista.length > 0);
         }
         try { this.updateAssignCount(); } catch (_) {}
         this.logDebug(jaAplicada
@@ -3146,18 +3143,20 @@ function triggerTrustedClick(el) {
 .flow-assign-items{padding:8px 12px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:6px;max-height:130px;}
 .flow-assign-items::-webkit-scrollbar{width:4px;}
 .flow-assign-items::-webkit-scrollbar-thumb{background:var(--cd-border);border-radius:4px;}
-.flow-assign-item{display:flex;align-items:center;gap:6px;padding:6px 12px;border:2px solid var(--cd-border);border-radius:9999px;cursor:grab;font-size:12px;font-weight:500;color:var(--cd-text);transition:border-color .15s,background .15s;background:var(--cd-bg);white-space:nowrap;flex-shrink:0;position:relative;box-sizing:border-box;}
-.flow-assign-item:hover{border-color:var(--cd-primary);background:rgba(16,185,129,.04);}
+.flow-assign-item{display:flex;align-items:center;gap:6px;padding:6px 12px;border:1.5px solid #cbd5e1;border-radius:9999px;cursor:grab;font-size:12px;font-weight:600;color:#334155;transition:border-color .15s,background .15s;background:#f8fafc;white-space:nowrap;flex-shrink:0;position:relative;box-sizing:border-box;user-select:none;-webkit-user-select:none;-webkit-user-drag:element;opacity:1;text-decoration:none;}
+.flow-assign-item:hover{border-color:var(--cd-primary);background:#f0fdf4;}
 .flow-assign-item:active{cursor:grabbing;}
-.flow-assign-item .drag-icon{color:var(--cd-text-light);font-size:14px;flex-shrink:0;}
-.flow-assign-item .assign-name{white-space:nowrap;}
-.flow-assign-item .assign-status{font-size:12px;flex-shrink:0;}
-.flow-assign-item.assigned{background:#ecfdf5;border-color:#a7f3d0;opacity:.65;}
-.flow-assign-item.assigned .assign-name{text-decoration:line-through;color:var(--cd-text-muted);}
+.flow-assign-item .drag-icon{color:#94a3b8;font-size:14px;flex-shrink:0;user-select:none;}
+.flow-assign-item .assign-name{white-space:nowrap;user-select:none;text-decoration:none;}
+.flow-assign-item .assign-status{font-size:12px;flex-shrink:0;font-weight:800;user-select:none;}
+.flow-assign-item.assigned{background:#dcfce7;border-color:#22c55e;color:#15803d;opacity:1;}
+.flow-assign-item.assigned .assign-name{color:#15803d;text-decoration:none;font-weight:700;}
+.flow-assign-item.assigned .assign-status{color:#15803d;}
+.flow-assign-item.assigned .drag-icon{color:#16a34a;}
 /* ADD-ON Auto-Enumerador: conclusão (verde) e faltante (apagado) */
-.flow-assign-item.complete{background:#dcfce7;border-color:#4ade80;opacity:1;}
-.flow-assign-item.complete .assign-name{color:#166534;font-weight:600;text-decoration:none;}
-.flow-assign-item.missing{opacity:.5;border-style:dashed;}
+.flow-assign-item.complete{background:#dcfce7;border-color:#22c55e;opacity:1;}
+.flow-assign-item.complete .assign-name{color:#15803d;font-weight:700;text-decoration:none;}
+.flow-assign-item.missing{opacity:.75;border-style:dashed;}
 #flow-assign-auto{font-weight:700;color:var(--cd-primary);}
 #flow-assign-auto:hover{color:var(--cd-primary-dark);background:var(--cd-bg-secondary);}
 .flow-assign-prompt-preview{padding:0 16px 10px;font-size:11px;color:var(--cd-text-muted);line-height:1.5;min-height:20px;border-top:1px solid var(--cd-border-light);margin-top:4px;flex-shrink:0;overflow:hidden;}
@@ -6180,10 +6179,19 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     item.draggable = true;
                     item.dataset.type = 'ref';
                     item.dataset.name = name;
-                    item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(name)}</span><span class="assign-status">⏳</span>`;
+                    const isAssigned = !!this.refAssignments.get(name);
+                    if (isAssigned) item.classList.add('assigned');
+                    item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(name)}</span><span class="assign-status">${isAssigned ? '✓' : '○'}</span>`;
                     item.addEventListener('dragstart', e => {
+                        e.stopPropagation();
                         e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'ref', name }));
                         e.dataTransfer.effectAllowed = 'copy';
+                    });
+                    item.addEventListener('dragend', e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const c = document.getElementById('flow-assign-items');
+                        if (c && !c.contains(item)) c.appendChild(item);
                     });
                     items.appendChild(item);
                 }
@@ -6207,16 +6215,11 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     item.dataset.scene = sceneName;
                     item.dataset.sceneNum = sceneNum;
                     const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, variationCounts);
-                    // ADD-ON: cor por meta variável (verde = atingiu "Imagens por prompt"; apagado = nenhuma)
-                    {
-                        const _gen = variationCounts.get(sceneNum) || 0;
-                        const _target = parseInt(document.getElementById('flow-imgs-per-prompt')?.value, 10) || 0;
-                        if (_target > 0 && _gen >= _target) item.classList.add('complete');
-                        else if (_gen === 0) item.classList.add('missing');
-                    }
+                    const isAssigned = (this.sceneAssignments.get(sceneName) || []).length > 0;
+                    if (isAssigned) item.classList.add('assigned');
 
-item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">⏳</span>`;
-item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;
+                    item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">${isAssigned ? '✓' : '○'}</span>`;
+                    item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;
                     item.addEventListener('mouseenter', () => {
                         const preview = document.getElementById('flow-assign-preview');
                         if (preview) {
@@ -6230,8 +6233,15 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
                         if (preview) preview.style.display = 'none';
                     });
                     item.addEventListener('dragstart', e => {
+                        e.stopPropagation();
                         e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum, sceneName }));
                         e.dataTransfer.effectAllowed = 'copy';
+                    });
+                    item.addEventListener('dragend', e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const c = document.getElementById('flow-assign-items');
+                        if (c && !c.contains(item)) c.appendChild(item);
                     });
                     items.appendChild(item);
                 }
@@ -6362,10 +6372,11 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
         setupDragDrop() {
             // Usa delegação global — tiles são virtualizados
             document.addEventListener('dragover', e => {
-                const tile = e.target.closest('flow-grid-tile-container, [data-tile-id]');
+                e.dataTransfer.dropEffect = 'copy';
+                const tile = e.target.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
                 if (tile) {
                     e.preventDefault();
-                    e.dataTransfer.dropEffect = 'copy';
+                    e.stopPropagation();
                     // Highlight só no tile que tem imagem
                     const inner = tile.querySelector('flow-grid-tile-container, [data-tile-id]') || tile;
                     document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
@@ -6375,16 +6386,18 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
 
             document.addEventListener('dragleave', e => {
                 // Só remove se saiu do tile completamente
-                const related = e.relatedTarget?.closest('flow-grid-tile-container, [data-tile-id]');
-                const current = e.target.closest('flow-grid-tile-container, [data-tile-id]');
+                const related = e.relatedTarget?.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
+                const current = e.target.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
                 if (current && current !== related) current.classList.remove('drop-hover');
             });
 
             document.addEventListener('drop', async e => {
-                const tile = e.target.closest('flow-grid-tile-container, [data-tile-id]');
+                const tile = e.target.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
                 if (tile) tile.classList.remove('drop-hover');
+                document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
                 if (!tile) return;
                 e.preventDefault();
+                e.stopPropagation();
 
                 let data;
                 try { data = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
@@ -6392,9 +6405,8 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
 
                 // Encontra inner tile (com imagem) e outer tile (para label)
                 const innerTile = tile.querySelector('flow-grid-tile-container, [data-tile-id]') || tile;
-                const workflowId = this.getWorkflowIdFromTile(innerTile);
+                const workflowId = this.getWorkflowIdFromTile(innerTile) || (typeof this.getUuidFromTile === 'function' ? this.getUuidFromTile(tile) : null);
                 const outerTile = tile;
-                document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
                 if (!workflowId) { this.logDebug('Drop: workflowId não encontrado', 'error'); return; }
 
                 if (data.type === 'ref') {
@@ -6752,9 +6764,9 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
             for (const item of items) {
                 const itemName = item.dataset.name || item.dataset.scene;
                 if (itemName === name) {
-                    item.classList.toggle('assigned', assigned);
+                    item.classList.toggle('assigned', !!assigned);
                     const status = item.querySelector('.assign-status');
-                    if (status) status.textContent = assigned ? '✅' : '⏳';
+                    if (status) status.textContent = assigned ? '✓' : '○';
                 }
             }
         }
@@ -7516,9 +7528,12 @@ if (this.videoGenMode === 'scenes') {
                 item.dataset.scene = sceneName;
                 item.dataset.sceneNum = sceneNum;
 const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, variationCounts);
+                const isAssigned = (this.videoSceneAssignments.get(sceneName) || []).length > 0;
+                if (isAssigned) item.classList.add('assigned');
 
-item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">⏳</span>`;
-item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;                item.addEventListener('mouseenter', () => {
+                item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(displaySceneName)}</span><span class="assign-status">${isAssigned ? '✓' : '○'}</span>`;
+                item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(ões) encontrada(s)`;
+                item.addEventListener('mouseenter', () => {
                     const preview = document.getElementById('flow-assign-preview');
                     if (preview) {
                         preview.style.display = '';
@@ -7531,8 +7546,15 @@ item.title = `${sceneName}: ${variationCounts.get(sceneNum) || 0} variação(õe
                     if (preview) preview.style.display = 'none';
                 });
                 item.addEventListener('dragstart', e => {
+                    e.stopPropagation();
                     e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum, sceneName }));
                     e.dataTransfer.effectAllowed = 'copy';
+                });
+                item.addEventListener('dragend', e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const c = document.getElementById('flow-assign-items');
+                    if (c && !c.contains(item)) c.appendChild(item);
                 });
                 items.appendChild(item);
             }
