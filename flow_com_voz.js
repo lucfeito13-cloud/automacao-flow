@@ -1793,46 +1793,56 @@
        * está lá dentro — inteiro, não cortado como no rótulo.
        */
       promptDoContexto(tile) {
-        if (!tile) return null;
-        const pareceprompt = (chave, valor) =>
-          typeof valor === 'string' && valor.length > 20 && valor.length < 4000 &&
-          (/^\s*\d{1,4}(?:[.,]\d+)?\s*[-–—.):]\s+/.test(valor) ||
-           /^\s*[{[(]\s*(?:cena|prompt|scene)\s*\d/i.test(valor) ||
-           /prompt|subtitle|caption|descri|titulo|title|text/i.test(String(chave)));
+        try {
+          if (!tile) return null;
+          const pareceprompt = (chave, valor) =>
+            typeof valor === 'string' && valor.length > 10 && valor.length < 4000 &&
+            (/^\s*\d{1,4}(?:[.,]\d+)?\s*[-–—.):]\s+/.test(valor) ||
+             /^\s*[{[(]\s*(?:cena|prompt|scene)\s*\d/i.test(valor) ||
+             /prompt|subtitle|caption|descri|titulo|title|text/i.test(String(chave)));
 
-        const vistos = new Set();
-        let passos = 0;
-        const procurar = (obj, prof) => {
-          if (!obj || prof > 5 || passos > 4000) return null;
-          if (typeof obj !== 'object') return null;
-          if (vistos.has(obj)) return null;
-          vistos.add(obj);
-          let chaves;
-          try { chaves = Object.keys(obj); } catch (_) { return null; }
-          for (const k of chaves) {
-            passos++;
-            if (passos > 4000) return null;
-            let v;
-            try { v = obj[k]; } catch (_) { continue; }
-            if (pareceprompt(k, v)) return v;
-            if (v && typeof v === 'object' && !(v instanceof Node) && !(v instanceof Window)) {
-              const achou = procurar(v, prof + 1);
-              if (achou) return achou;
+          const vistos = new Set();
+          let passos = 0;
+          const procurar = (obj, prof) => {
+            if (!obj || prof > 5 || passos > 4000) return null;
+            if (typeof obj !== 'object') return null;
+            if (vistos.has(obj)) return null;
+            vistos.add(obj);
+            let chaves;
+            try { chaves = Object.keys(obj); } catch (_) { return null; }
+            for (const k of chaves) {
+              passos++;
+              if (passos > 4000) return null;
+              let v;
+              try { v = obj[k]; } catch (_) { continue; }
+              if (pareceprompt(k, v)) return v;
+              if (v && typeof v === 'object' && !(v instanceof Node) && !(v instanceof Window)) {
+                const achou = procurar(v, prof + 1);
+                if (achou) return achou;
+              }
+            }
+            return null;
+          };
+
+          const candidatos = [tile, ...tile.querySelectorAll('*')].slice(0, 25);
+          for (let p = tile.parentElement, i = 0; p && i < 5; p = p.parentElement, i++) candidatos.push(p);
+
+          for (const el of candidatos) {
+            const ctx = el && el.__ngContext__;
+            if (ctx) {
+              const achou = procurar(ctx, 0);
+              if (achou) return norm(achou);
             }
           }
-          return null;
-        };
-
-        let el = tile;
-        for (let i = 0; i < 6 && el; i++) {
-          const ctx = el.__ngContext__;
-          if (ctx) {
-            const achou = procurar(ctx, 0);
-            if (achou) return norm(achou);
-          }
-          el = el.parentElement;
-        }
+        } catch (_) {}
         return null;
+      },
+
+      /**
+       * Alias e método dedicado para obter o prompt do componente Angular na memória.
+       */
+      promptDoComponente(tile) {
+        return this.promptDoContexto(tile);
       },
 
       /**
@@ -2053,7 +2063,14 @@
                 origem = 'rótulo';
               } else {
                 // 3. Pelo componente Angular na memória
-                const doAngular = this.promptDoComponente(tile);
+                let doAngular = null;
+                try {
+                  if (typeof this.promptDoComponente === 'function') {
+                    doAngular = this.promptDoComponente(tile);
+                  } else if (typeof this.promptDoContexto === 'function') {
+                    doAngular = this.promptDoContexto(tile);
+                  }
+                } catch (_) {}
                 const cenaAngular = doAngular ? this.numeroDaCenaNoTexto(doAngular) : null;
                 if (cenaAngular != null) {
                   cena = cenaAngular;
@@ -2392,7 +2409,7 @@
     // Autoteste: cole __flowCheck() no console para ver o que esta carregado.
     root.__flowCheck = function () {
       const i = root.__flowInstance;
-      const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas'];
+      const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto'];
       const tiles = i ? i.getTiles() : [];
       return {
         versao: 'Flow NOVO v7.1',
