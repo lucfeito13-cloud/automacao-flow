@@ -668,11 +668,58 @@
       getTileName(tile) { return tile ? norm(tile.getAttribute('aria-label') || $('.footer-title', tile)?.textContent) : ''; },
       getPromptSubtitleFromTile(tile) { return this.getTileName(tile); },
       isVideoTile(tile) { return !!$('flow-video-tile,video', tile); },
-      getMediaSrcFromTile(tile) { return $('video[src],img[data-media-id],flow-video-tile img.thumbnail', tile)?.src || ''; },
+      getMediaSrcFromTile(tile) {
+        if (!tile) return '';
+        const vid = $('flow-video-tile video[src], video[src]', tile);
+        if (vid?.src) return vid.src;
+        const poster = $('flow-video-tile video[poster], video[poster]', tile)?.getAttribute('poster');
+        if (poster) return poster;
+        const thumb = $('flow-video-tile img.thumbnail, img.thumbnail', tile);
+        if (thumb?.src) return thumb.src;
+        const img = $('flow-image-tile img[src], img[data-media-id], img[src]:not([src^="data:image/svg"])', tile);
+        return img?.src || '';
+      },
       getImgSrcFromTile(tile) { return this.getMediaSrcFromTile(tile); },
-      tileHasProgress(tile) { return !!$('flow-pending-tile,[role="progressbar"],mat-progress-spinner,mat-spinner', tile); },
-      isTileError(tile) { return !this.tileHasProgress(tile) && (!!$('flow-error-tile,flow-failed-tile', tile) || $$('mat-icon', tile).some(el => ['error', 'warning', 'error_outline'].includes(norm(el.textContent)))); },
-      isTileLoaded(tile) { return !!this.getUuidFromTile(tile) && !this.tileHasProgress(tile) && !this.isTileError(tile) && !!$('img[src],video[src]', tile); },
+      tileHasProgress(tile) {
+        if (!tile) return false;
+        if ($('flow-pending-tile,[role="progressbar"],mat-progress-spinner,mat-spinner,.flow-spinner', tile)) return true;
+        const els = $$('div, span, p', tile);
+        for (const el of els) {
+          const t = el.textContent?.trim();
+          if (t && /^\d{1,3}%$/.test(t)) {
+            const num = parseInt(t, 10);
+            if (num < 100) return true;
+          }
+        }
+        return false;
+      },
+      isTileError(tile) {
+        if (!tile) return false;
+        if (this.tileHasProgress(tile)) return false;
+        // Se tem imagem ou vídeo válido e renderizado, NUNCA é erro
+        const img = $('flow-image-tile img, img.thumbnail, img[src]:not([src^="data:image/svg"])', tile);
+        if (img && img.src && (img.naturalWidth > 0 || img.complete)) return false;
+        const vid = $('flow-video-tile video, video[src], video[poster]', tile);
+        if (vid && (vid.src || vid.getAttribute('poster'))) return false;
+
+        // Tags explícitas de erro do Flow
+        if ($('flow-error-tile, flow-failed-tile, [data-status="error"], [data-status="failed"]', tile)) return true;
+        const text = (tile.textContent || '').toLowerCase();
+        const failureWords = ['falha ao gerar', 'generation failed', 'failed to generate', 'não foi possível gerar', 'could not generate', 'algo deu errado', 'something went wrong', 'try again', 'tentar novamente'];
+        if (failureWords.some(w => text.includes(w))) return true;
+
+        // Ícone de erro estrito apenas se não há mídia válida
+        return $$('mat-icon, i', tile).some(el => ['error', 'report_problem', 'highlight_off'].includes(norm(el.textContent)));
+      },
+      isTileLoaded(tile) {
+        if (!tile) return false;
+        if (this.tileHasProgress(tile)) return false;
+        if (this.isTileError(tile)) return false;
+        const uuid = this.getUuidFromTile(tile);
+        const hasImg = !!$('flow-image-tile img[src], img[src]:not([src^="data:image/svg"]), flow-video-tile img.thumbnail', tile);
+        const hasVid = !!$('flow-video-tile, video', tile);
+        return !!uuid && (hasImg || hasVid);
+      },
       isTilePending(tile) { return !this.isTileLoaded(tile) && !this.isTileError(tile); },
       snapshotImageUuids() { return new Set(this.getTiles().map(t => this.getUuidFromTile(t)).filter(Boolean)); },
       tileEntry(tile) {
@@ -1336,34 +1383,29 @@
       },
       captureModernResults() {
         const records = this._modernActiveRecords || [];
-        const total = records.reduce((sum, rec) => sum + rec.expected, 0);
-        const ignoredErrors = new Map(this._modernIgnoredErrors || []);
-        const fresh = this.getTiles().filter(tile => !this._modernBaseline?.has(this.getUuidFromTile(tile))).reverse().filter(tile => {
-          if (!this.isTileError(tile)) return true;
-          const key = norm(tile.textContent), remaining = ignoredErrors.get(key) || 0;
-          if (!remaining) return true;
-          ignoredErrors.set(key, remaining - 1); return false;
-        }).reverse();
-        // CDK rebuilds entire rows on insertion. Associate fresh slots by creation
-        // order, not DOM object identity, and validate pending text when available.
-        if (!total || fresh.length !== total) return;
+        if (!records.length) return;
+        const fresh = this.getTiles().filter(tile => !this._modernBaseline?.has(this.getUuidFromTile(tile)));
+        
         let offset = 0;
-        for (const record of [...records].reverse()) {
-          const nodes = fresh.slice(offset, offset + record.expected);
+        for (const record of records) {
+          // Se nodes não estão associados ou foram desconectados pelo CDK, associa da lista de fresh
+          if (!record.nodes || record.nodes.some(n => !n.isConnected)) {
+            const available = fresh.slice(offset, offset + record.expected);
+            if (available.length) record.nodes = available;
+          }
           offset += record.expected;
-          if (nodes.some(tile => {
-            const pendingText = norm($('flow-pending-tile .subtitle', tile)?.textContent);
-            return pendingText && pendingText !== record.signature;
-          })) { this._modernCaptureError = 'A ordem dos resultados mudou ou há uma geração externa ao lote.'; return; }
-          record.nodes = nodes;
-          nodes.forEach((tile, index) => {
-            const entry = this.tileEntry(tile), previous = record.results.get(index);
-            if (previous?.uuid && entry.uuid && previous.uuid !== entry.uuid) {
-              this._modernCaptureError = 'A ordem da galeria mudou durante o acompanhamento.'; return;
-            }
-            if (entry.loaded && !record.beforeIds.has(entry.uuid)) record.results.set(index, entry);
-            else if (entry.error) record.results.set(index, { error: true });
-          });
+
+          if (record.nodes) {
+            record.nodes.forEach((tile, index) => {
+              if (record.results.has(index) && record.results.get(index).loaded) return;
+              const entry = this.tileEntry(tile);
+              if (entry.loaded && !record.beforeIds.has(entry.uuid)) {
+                record.results.set(index, entry);
+              } else if (entry.error) {
+                record.results.set(index, { error: true });
+              }
+            });
+          }
         }
       },
       buildPositionMatrix(batch, count) {
@@ -1373,11 +1415,7 @@
         const noProgressLimit = Math.max(60000, Number(document.getElementById('flow-t-semprog')?.value || 2) * 60000);
         let lastProgress = Date.now(), signature = '';
         let motivoParada = null;   // encerra o lote sem derrubar a fila
-        // Teto do lote derivado do SEU campo "desistir sem progresso": estourou,
-        // o que faltou conta como falha e passamos para o proximo lote.
         const hardDeadline = Date.now() + Math.max(noProgressLimit * 5, 5 * 60000);
-        // "Confirmar por" do painel: espera esse tempinho depois que tudo chegou,
-        // para nao cortar um resultado que ainda esta assentando.
         const confirmar = Math.max(0, Number(CONFIG.STABILIZE_TIME) || 0);
         let zeradoEm = null;
         while (true) {
@@ -1398,23 +1436,42 @@
             if (zeradoEm == null) zeradoEm = Date.now();
             if (Date.now() - zeradoEm >= confirmar) break;
           } else zeradoEm = null;
-          const nextSignature = matrix.map(slot => `${slot.state}:${norm(slot.record?.nodes[slot.index]?.querySelector('.loading-percentage')?.textContent)}`).join('|');
+          const nextSignature = matrix.map(slot => `${slot.state}:${norm(slot.record?.nodes?.[slot.index]?.querySelector('.loading-percentage')?.textContent)}`).join('|');
           if (signature !== nextSignature) { signature = nextSignature; lastProgress = Date.now(); }
           if (Date.now() - lastProgress > noProgressLimit || Date.now() > hardDeadline) {
             motivoParada = 'A geração não terminou em ' + Math.round(noProgressLimit / 60000) + ' min sem progresso (seu limite).'; break;
           }
-          if (matrix.some(slot => slot.state === 'pending' && !slot.record?.nodes[slot.index]?.isConnected)) {
-            motivoParada = 'A galeria mudou durante o lote.'; break;
-          }
           const passo = Math.max(300, Number(document.getElementById('flow-t-poll')?.value || 0.5) * 1000);
           await this.sleep(Math.round(passo * this.fatorVelocidade()));
         }
+
+        // ── CONFERÊNCIA FINAL DA GALERIA (precisão de mídias concluídas) ──
+        const faltaram = matrix.filter(s => s.state === 'pending' || s.state === 'error');
+        if (faltaram.length > 0) {
+          const usedUuids = new Set(matrix.filter(s => s.state === 'loaded' && s.uuid).map(s => s.uuid));
+          const allFreshTiles = this.getTiles().filter(t => {
+            const u = this.getUuidFromTile(t);
+            return u && !this._modernBaseline?.has(u) && !usedUuids.has(u) && this.isTileLoaded(t);
+          });
+          for (const s of faltaram) {
+            if (!allFreshTiles.length) break;
+            const t = allFreshTiles.shift();
+            const u = this.getUuidFromTile(t);
+            if (u) {
+              const entry = this.tileEntry(t);
+              Object.assign(s, entry, { state: 'loaded' });
+              usedUuids.add(u);
+              this.logDebug(`🎯 Recuperado com precisão na conferência: prompt ${s.promptNum} (mídia ${s.imgNum})`, 'success');
+            }
+          }
+        }
+
         if (motivoParada) {
           this._modernUncertain = true;
-          const faltaram = matrix.filter(s => s.state === 'pending');
-          for (const s of faltaram) s.state = 'error';
+          const aindaFaltam = matrix.filter(s => s.state === 'pending');
+          for (const s of aindaFaltam) s.state = 'error';
           const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
-          try { reg.call(this, '⚠️ ' + motivoParada + ' ' + faltaram.length + ' contam como falha — a fila SEGUE.', 'warning'); } catch (_) {}
+          try { reg.call(this, '⚠️ ' + motivoParada + ' ' + aindaFaltam.length + ' contam como falha real — a fila SEGUE.', 'warning'); } catch (_) {}
         }
         for (const record of new Set(matrix.map(slot => slot.record).filter(Boolean))) record.observer.disconnect();
         for (const slot of matrix) if (slot.uuid) this._modernBaseline?.add(slot.uuid);
@@ -4383,11 +4440,13 @@ clearReferencesForUI(source = 'images') {
          */
         getMediaSrcFromTile(tile) {
             if (!tile) return '';
-            // Vídeos: prioriza <video src>
-            const video = tile.querySelector('video[src*="getMediaUrlRedirect"]');
-            if (video?.src) return video.src;
-            // Imagens: <img src>
-            const img = tile.querySelector('img[src*="getMediaUrlRedirect"]');
+            const vid = tile.querySelector('flow-video-tile video[src], video[src]');
+            if (vid?.src) return vid.src;
+            const poster = tile.querySelector('flow-video-tile video[poster], video[poster]')?.getAttribute('poster');
+            if (poster) return poster;
+            const thumb = tile.querySelector('flow-video-tile img.thumbnail, img.thumbnail');
+            if (thumb?.src) return thumb.src;
+            const img = tile.querySelector('flow-image-tile img[src], img[data-media-id], img[src]:not([src^="data:image/svg"])');
             return img?.src || '';
         }
 
@@ -4396,18 +4455,14 @@ clearReferencesForUI(source = 'images') {
 
         isTileLoaded(tile) {
             if (!tile) return false;
-            // Verifica thumbnail (existe em imagens e vídeos carregados)
-            const img = tile.querySelector('img[src*="getMediaUrlRedirect"]');
-            if (img && img.complete && parseFloat(getComputedStyle(img).opacity) >= 0.9) return true;
-            // Vídeo sem thumbnail mas com src pode estar carregado
-            // (verifica se o video tem src e NÃO tem indicador de progresso)
-            const video = tile.querySelector('video[src*="getMediaUrlRedirect"]');
-            if (video?.src && !this.tileHasProgress(tile)) {
-                // Checa se não é um tile "vazio" — deve ter pelo menos o play_circle icon
-                const playIcon = [...tile.querySelectorAll('i')].some(i => i.textContent?.trim() === 'play_circle');
-                if (playIcon) return true;
-            }
-            return false;
+            if (this.tileHasProgress(tile)) return false;
+            if (this.isTileError(tile)) return false;
+            const uuid = this.getUuidFromTile(tile);
+            const img = tile.querySelector('flow-image-tile img, img.thumbnail, img[src]:not([src^="data:image/svg"])');
+            if (img && img.src && (img.naturalWidth > 0 || img.complete)) return true;
+            const video = tile.querySelector('flow-video-tile video, video[src], video[poster]');
+            if (video && (video.src || video.getAttribute('poster'))) return true;
+            return !!uuid && !!(img || video);
         }
 
         isTilePending(tile) {
@@ -4418,27 +4473,47 @@ clearReferencesForUI(source = 'images') {
 
         isTileError(tile) {
             if (!tile) return false;
-            if (this.isTileLoaded(tile)) return false;
-            if (this.isTilePending(tile)) return false;
-            return [...tile.querySelectorAll('i')].some(i => i.textContent?.trim() === 'warning');
+            if (this.tileHasProgress(tile)) return false;
+            // Se tem mídia válida e renderizada, NUNCA é erro
+            const img = tile.querySelector('flow-image-tile img, img.thumbnail, img[src]:not([src^="data:image/svg"])');
+            if (img && img.src && (img.naturalWidth > 0 || img.complete)) return false;
+            const video = tile.querySelector('flow-video-tile video, video[src], video[poster]');
+            if (video && (video.src || video.getAttribute('poster'))) return false;
+
+            if (tile.querySelector('flow-error-tile, flow-failed-tile, [data-status="error"], [data-status="failed"]')) return true;
+            const text = (tile.textContent || '').toLowerCase();
+            const failureWords = ['falha ao gerar', 'generation failed', 'failed to generate', 'não foi possível gerar', 'could not generate', 'algo deu errado', 'something went wrong', 'try again', 'tentar novamente'];
+            if (failureWords.some(w => text.includes(w))) return true;
+
+            const hasErrorIcon = [...tile.querySelectorAll('mat-icon, i')].some(i => {
+                const iconName = (i.textContent || '').trim().toLowerCase();
+                return iconName === 'error' || iconName === 'report_problem' || iconName === 'highlight_off';
+            });
+            return hasErrorIcon;
         }
 
         tileHasProgress(tile) {
-            const els = tile.querySelectorAll('div, span');
+            if (!tile) return false;
+            if (tile.querySelector('flow-pending-tile, [role="progressbar"], mat-progress-spinner, mat-spinner, .flow-spinner')) return true;
+            const els = tile.querySelectorAll('div, span, p');
             for (const el of els) {
                 const t = el.textContent?.trim();
-                if (t && /^\d+%$/.test(t)) return true;
+                if (t && /^\d{1,3}%$/.test(t)) {
+                    const num = parseInt(t, 10);
+                    if (num < 100) return true;
+                }
             }
             return false;
         }
 
         snapshotImageUuids() {
+            if (typeof this.getTiles === 'function') {
+                return new Set(this.getTiles().map(t => this.getUuidFromTile(t)).filter(Boolean));
+            }
             const uuids = new Set();
-            document.querySelectorAll('[data-tile-id] img[src*="getMediaUrlRedirect"]').forEach(el => {
-                try { const u = new URL(el.src).searchParams.get('name'); if (u) uuids.add(u); } catch(e) {}
-            });
-            document.querySelectorAll('[data-tile-id] video[src*="getMediaUrlRedirect"]').forEach(el => {
-                try { const u = new URL(el.src).searchParams.get('name'); if (u) uuids.add(u); } catch(e) {}
+            document.querySelectorAll('[data-tile-id], flow-grid-tile-container').forEach(tile => {
+                const u = this.getUuidFromTile(tile);
+                if (u) uuids.add(u);
             });
             return uuids;
         }
@@ -4756,6 +4831,32 @@ clearReferencesForUI(source = 'images') {
                         slot.workflowId = this.getWorkflowIdFromTile(tile);
                     } else { slot.state = 'error'; }
                 } else { slot.state = 'error'; }
+            }
+
+            // Fase 4: Conferência na galeria — resgata itens que foram gerados mas não bateram na posição exata da grade
+            const pendingOrErrorSlots = matrix.filter(s => s.state !== 'loaded');
+            if (pendingOrErrorSlots.length > 0) {
+                this.logDebug(`🔍 Conferindo galeria para ${pendingOrErrorSlots.length} slot(s)...`, 'info');
+                const usedUuids = new Set(matrix.filter(s => s.state === 'loaded' && s.uuid).map(s => s.uuid));
+                const allFreshTiles = (typeof this.getTiles === 'function' ? this.getTiles() : [...document.querySelectorAll('flow-grid-tile-container, [data-tile-id]')])
+                    .filter(t => {
+                        const u = this.getUuidFromTile(t);
+                        return u && !beforeUuids.has(u) && !usedUuids.has(u) && this.isTileLoaded(t);
+                    });
+
+                for (const slot of pendingOrErrorSlots) {
+                    if (allFreshTiles.length === 0) break;
+                    const freshTile = allFreshTiles.shift();
+                    const uuid = this.getUuidFromTile(freshTile);
+                    if (uuid) {
+                        slot.state = 'loaded';
+                        slot.uuid = uuid;
+                        slot.src = this.getImgSrcFromTile(freshTile);
+                        slot.workflowId = this.getWorkflowIdFromTile(freshTile) || uuid;
+                        usedUuids.add(uuid);
+                        this.logDebug(`🎯 Recuperado com precisão na conferência: prompt ${slot.promptNum} (mídia ${slot.imgNum})`, 'success');
+                    }
+                }
             }
             if (scroller) { scroller.scrollTop = 0; await this.sleep(300); }
         }
