@@ -912,13 +912,13 @@
           window.dispatchEvent(escEvent());
           document.body?.dispatchEvent(escEvent());
 
-          const backdrops = $('.cdk-overlay-backdrop');
+          const backdrops = $$('.cdk-overlay-backdrop');
           backdrops.forEach(el => {
             try { el.click(); } catch (_) {}
           });
 
           // Se ainda houver menu aberto no overlay, fecha ou esconde imediatamente para nunca travar na tela
-          const menus = $('[role="menu"]').filter(visible);
+          const menus = $$('[role="menu"]').filter(visible);
           if (menus.length) {
             document.body?.click();
             await this.sleep(40);
@@ -962,16 +962,49 @@
           const tile = (tileOptional && tileOptional.isConnected) ? tileOptional : (await this.scrollToWorkflow(id));
           if (!tile) throw new Error('Mídia não encontrada para renomear.');
           if (this.getTileName(tile) === name) return true;
+
+          // 1. Abre o menu do card (3 pontinhos)
           await this.openTileMenu(tile);
+
+          // 2. Clica no comando Rename / Renomear
           const rename = menuItem(['Rename', 'Renomear']);
-          if (!rename) throw new Error('Comando Renomear não encontrado.');
+          if (!rename) throw new Error('Comando Renomear não encontrado no menu.');
           rename.click();
-          const form = await this.modernWait(() => $('.cdk-overlay-pane flow-editable-text, flow-editable-text').find(visible));
-          setInput($('input', form), name);
-          const done = $('button[aria-label="Done"]', form) || $('button', form).find(b => norm($('mat-icon', b)?.textContent) === 'done');
-          if (!done) throw new Error('Confirmação de renomeação não encontrada.');
-          done.click();
-          await this.modernWait(() => this.getTiles().some(t => this.getUuidFromTile(t) === id && this.getTileName(t) === name));
+
+          // 3. Localiza o input de texto (aparece dentro de .cdk-overlay-pane)
+          const input = await this.modernWait(() => {
+            return $$('.cdk-overlay-pane input, flow-editable-text input, input[type="text"]').find(visible);
+          }, 3500);
+          if (!input) throw new Error('Campo de renomeação não encontrado.');
+
+          // 4. Preenche o novo nome
+          setInput(input, name);
+          await this.pausa(60);
+
+          // 5. Confirma via teclado (Enter)
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+
+          // 6. Confirma também pelo botão de Done / Checkmark (✓) se visível
+          const container = input.closest('flow-editable-text, form, .cdk-overlay-pane, div') || input.parentElement;
+          const done = container ? (
+            $('button[aria-label="Done"], button[aria-label*="salv" i], button[aria-label*="confirm" i]', container) ||
+            $$('button', container).find(b => {
+              if (!visible(b)) return false;
+              const text = norm(b.textContent || '');
+              const icon = norm($('mat-icon, i', b)?.textContent || '');
+              return text === 'done' || text === 'check' || text === '✓' || icon === 'done' || icon === 'check';
+            }) ||
+            $$('button', input.parentElement).find(visible)
+          ) : null;
+
+          if (done && visible(done)) {
+            done.click();
+          }
+
+          // 7. Espera o input fechar
+          await this.modernWait(() => !visible(input), 2000);
           return true;
         } catch (error) {
           this.logDebug(`Renomear: ${error.message}`, 'error');
