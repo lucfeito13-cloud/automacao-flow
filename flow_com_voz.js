@@ -265,11 +265,18 @@
         const marcado = s.match(/^\s*[{[(]\s*(?:cena|prompt|scene)?\s*([0-9]+(?:[.,][0-9]+)?)\s*[}\])]/i);
         if (marcado) return Number(String(marcado[1]).replace(',', '.'));
         // "Cena 12 - ...", "Cena 12: ...", "Prompt 12: ...", "Scene 12: ..."
-        const palavraCena = s.match(/^\s*(?:cena|prompt|scene)\s*([0-9]+(?:[.,][0-9]+)?)\b(?:\s*[-–—.:)]|\s+)/i);
+        // "take|tomada|shot" entram aqui porque os prompts do Flow chegam como
+        // "TAKE 10 — DURATION: ...". Sem isso a midia ficava sem numero de cena.
+        const palavraCena = s.match(/^\s*(?:cena|prompt|scene|take|tomada|shot)\s*([0-9]+(?:[.,][0-9]+)?)\b(?:\s*[-–—.:)]|\s+)/i);
         if (palavraCena) return Number(String(palavraCena[1]).replace(',', '.'));
         // "12 - ...", "12. ...", "12) ...", "12: ..."
         const prefixo = s.match(/^\s*([0-9]{1,4}(?:[.,][0-9]+)?)\s*[-–—.):]\s+/);
         if (prefixo) return Number(String(prefixo[1]).replace(',', '.'));
+        // Ultimo recurso: vale QUALQUER numero no inicio do texto, inteiro ou
+        // quebrado (12, 12.1, 12,1), com separador, sem separador e com ou sem
+        // espaco. Cobre "12-x", "12.1x", "12 x" e "12x".
+        const soNumero = s.match(/^\s*([0-9]{1,4}(?:[.,][0-9]+)?)/);
+        if (soNumero) return Number(String(soNumero[1]).replace(',', '.'));
         return null;
       },
 
@@ -2046,11 +2053,21 @@
         // O diagnostico provou que o Flow so abre o painel quando TODOS os
         // filhos do tile recebem o hover. Por isso isso vem de primeira.
         const filhos = () => [tile, ...tile.querySelectorAll('*')];
+        // O painel do prompt e um cdkOverlayOrigin ancorado no RODAPE do card
+        // (div.footer-left), nao no card inteiro. Provado ao vivo no console:
+        // hover no flow-grid-tile-container NAO abre o painel; hover no
+        // .footer-left abre e o div.prompt-text fica legivel. Buscamos a cada
+        // chamada porque o rodape so entra no DOM depois do primeiro hover.
+        const rodape = () => tile.querySelector('.footer-left, flow-tile-hover-footer .footer-left');
         const entrarTudo = () => {
           cadeia.forEach(el => ENTRAR.forEach(t => disparar(el, t)));
           filhos().forEach(el => { disparar(el, 'pointerover'); disparar(el, 'mouseover'); disparar(el, 'mouseenter'); disparar(el, 'mousemove'); });
+          const r = rodape();
+          if (r) ENTRAR.forEach(t => disparar(r, t));
         };
         const sairTudo = () => {
+          const r = rodape();
+          if (r) SAIR.forEach(t => disparar(r, t));
           cadeia.forEach(el => SAIR.forEach(t => disparar(el, t)));
           filhos().forEach(el => { disparar(el, 'pointerout'); disparar(el, 'mouseout'); disparar(el, 'mouseleave'); });
         };
@@ -3403,13 +3420,21 @@
     let _authToken = null;
 
     window.fetch = async function(...args) {
-        const [, config] = args;
+        const [url, config] = args;
         try {
+            const urlStr = String(url || '');
+            const bodyStr = typeof config?.body === 'string' ? config.body : '';
+            if (urlStr.includes('flowWorkflows') || urlStr.includes('rename') || bodyStr.includes('displayName') || (config?.method === 'PATCH' && urlStr.includes('google'))) {
+                console.log('%c[Flow API Spy] 🎯 Requisição capturada:', 'background:#0284c7;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px;', { url: urlStr, method: config?.method, headers: config?.headers, body: bodyStr });
+            }
             const headers = config?.headers || {};
             const auth = headers instanceof Headers
                 ? headers.get('authorization')
                 : headers['authorization'] || headers['Authorization'];
-            if (auth && auth.startsWith('Bearer ')) _authToken = auth;
+            if (auth && auth.startsWith('Bearer ')) {
+                _authToken = auth;
+                window._authToken = auth;
+            }
         } catch(_) {}
         return _origFetch.apply(this, args);
     };
