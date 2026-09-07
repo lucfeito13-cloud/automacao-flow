@@ -288,6 +288,15 @@
        */
       async promptViaReutilizar(tile) {
         if (!tile) return '';
+        // 1. Força hover no tile para o Flow renderizar botões de ação
+        const rect = tile.getBoundingClientRect();
+        const cx = Math.round(rect.left + rect.width / 2);
+        const cy = Math.round(rect.top + rect.height / 2);
+        ['pointerenter', 'mouseenter', 'pointerover', 'mouseover', 'mousemove'].forEach(t => {
+          try { tile.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy })); } catch (_) {}
+        });
+        await this.pausa(80);
+
         const botao = [...tile.querySelectorAll('button')].find(b => {
           const icone = norm(b.querySelector('mat-icon,i')?.textContent);
           const rotulo = norm(b.getAttribute('aria-label') || b.getAttribute('title'));
@@ -904,11 +913,72 @@
       },
       async openTileMenu(tile) {
         if (!tile?.isConnected) throw new Error('Mídia não está visível na galeria.');
-        tile.scrollIntoView({ block: 'center' });
-        const btn = $('button[aria-label="More options"]', tile);
-        if (btn) btn.click();
-        else tile.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }));
-        await this.modernWait(() => $$('[role="menu"]').some(visible));
+        tile.scrollIntoView({ block: 'center', inline: 'center' });
+
+        // Simula hover completo para o Flow renderizar botões e disparar ações
+        const rect = tile.getBoundingClientRect();
+        const cx = Math.round(rect.left + rect.width / 2);
+        const cy = Math.round(rect.top + rect.height / 2);
+        const hoverEvents = ['pointerenter', 'mouseenter', 'pointerover', 'mouseover', 'mousemove'];
+        hoverEvents.forEach(type => {
+          try {
+            tile.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy }));
+          } catch (_) {}
+        });
+        const inner = tile.querySelector('flow-video-tile, flow-image-tile, .mat-context-menu-trigger, [data-tile-id]') || tile;
+        if (inner !== tile) {
+          hoverEvents.forEach(type => {
+            try {
+              inner.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy }));
+            } catch (_) {}
+          });
+        }
+        await this.pausa(100);
+
+        let btn = $('button[aria-label="More options"], button[aria-label*="opções" i], button[aria-label*="options" i]', tile);
+        if (!btn) {
+          const btns = $('button, [role="button"]', tile);
+          btn = btns.find(b => {
+            if (!visible(b)) return false;
+            const text = norm(b.textContent || '');
+            const aria = norm(b.getAttribute('aria-label') || '');
+            const title = norm(b.getAttribute('title') || '');
+            if (/more|mais|opções|options/i.test(text) || /more|mais|opções|options/i.test(aria) || /more|mais|opções|options/i.test(title)) return true;
+            const icon = norm($('mat-icon, i, span', b)?.textContent || '');
+            return icon.includes('more_vert') || icon.includes('more_horiz');
+          });
+        }
+
+        if (btn) {
+          const br = btn.getBoundingClientRect();
+          const bx = Math.round(br.left + br.width / 2);
+          const by = Math.round(br.top + br.height / 2);
+          const bOpts = { bubbles: true, cancelable: true, view: window, clientX: bx, clientY: by };
+          btn.dispatchEvent(new PointerEvent('pointerdown', Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, bOpts)));
+          btn.dispatchEvent(new MouseEvent('mousedown', bOpts));
+          btn.dispatchEvent(new PointerEvent('pointerup', Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, bOpts)));
+          btn.dispatchEvent(new MouseEvent('mouseup', bOpts));
+          btn.dispatchEvent(new MouseEvent('click', bOpts));
+          btn.click();
+        } else {
+          const target = tile.querySelector('.mat-context-menu-trigger') || inner || tile;
+          const tr = target.getBoundingClientRect();
+          const tcx = Math.round(tr.left + tr.width / 2);
+          const tcy = Math.round(tr.top + tr.height / 2);
+          target.dispatchEvent(new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            button: 2,
+            buttons: 2,
+            clientX: tcx,
+            clientY: tcy,
+            screenX: tcx,
+            screenY: tcy
+          }));
+        }
+
+        await this.modernWait(() => $('[role="menu"], .cdk-overlay-pane [role="menuitem"]').some(visible), 3500);
         return true;
       },
       async closeMenus() {
@@ -919,13 +989,12 @@
           window.dispatchEvent(escEvent());
           document.body?.dispatchEvent(escEvent());
 
-          const backdrops = $$('.cdk-overlay-backdrop');
+          const backdrops = $('.cdk-overlay-backdrop');
           backdrops.forEach(el => {
             try { el.click(); } catch (_) {}
           });
 
-          // Se ainda houver menu aberto no overlay, fecha ou esconde imediatamente para nunca travar na tela
-          const menus = $$('[role="menu"]').filter(visible);
+          const menus = $('[role="menu"]').filter(visible);
           if (menus.length) {
             document.body?.click();
             await this.sleep(40);
@@ -935,14 +1004,12 @@
             });
           }
         } catch (_) {}
-        await this.pausa(80);
+        await this.pausa(60);
       },
       /**
-       * Renomeia. Tenta primeiro a API do Flow (um PATCH — era assim antes da
-       * atualização e é MUITO mais rápido que abrir menu). Se a API não
-       * responder, cai no menu da mídia. A decisão é tomada UMA vez.
+       * Renomeia. Tenta primeiro a API do Flow (um PATCH rápido).
+       * Se a API não responder, usa o menu da mídia confirmando sozinho.
        */
-      /** Id sintetico de video (video-xxxx) nao existe na API do Flow. */
       idServeNaApi(id) { return !!id && !/^video-/i.test(String(id)); },
       async apiRename(id, name, tileOptional = null) {
         if (this.idServeNaApi(id) && this._apiRenomearVale !== false && old.apiRename) {
@@ -953,15 +1020,18 @@
                 this._apiRenomearVale = true;
                 this.logDebug('⚡ Renomeando pela API do Flow (rápido).', 'success');
               }
+              this.pintarNomeNoTile(id, name);
               return true;
             }
           } catch (_) {}
           if (this._apiRenomearVale === undefined) {
             this._apiRenomearVale = false;
-            this.logDebug('A API de renomear não respondeu; usando o menu da mídia (mais lento).', 'warning');
+            this.logDebug('A API de renomear não respondeu; usando o menu da mídia.', 'warning');
           }
         }
-        return this.renomearPeloMenu(id, name, tileOptional);
+        const ok = await this.renomearPeloMenu(id, name, tileOptional);
+        if (ok) this.pintarNomeNoTile(id, name);
+        return ok;
       },
 
       async renomearPeloMenu(id, name, tileOptional = null) {
@@ -978,40 +1048,77 @@
           if (!rename) throw new Error('Comando Renomear não encontrado no menu.');
           rename.click();
 
-          // 3. Localiza o input de texto (aparece dentro de .cdk-overlay-pane)
+          // 3. Localiza o input de texto
           const input = await this.modernWait(() => {
-            return $$('.cdk-overlay-pane input, flow-editable-text input, input[type="text"]').find(visible);
+            return $('.cdk-overlay-pane input, flow-editable-text input, input[type="text"]').find(visible);
           }, 3500);
           if (!input) throw new Error('Campo de renomeação não encontrado.');
 
           // 4. Preenche o novo nome
+          input.focus();
+          try { input.select(); } catch (_) {}
+          try { document.execCommand('selectAll', false, null); } catch (_) {}
+          try { document.execCommand('insertText', false, name); } catch (_) {}
           setInput(input, name);
           await this.pausa(60);
 
           // 5. Confirma via teclado (Enter)
-          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-          input.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-          input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+          const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true, view: window };
+          input.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
+          input.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
+          input.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
 
-          // 6. Confirma também pelo botão de Done / Checkmark (✓) se visível
+          // 6. Confirma AUTOMATICAMENTE pelo botão de Done / Checkmark (✓) sem pedir confirmação do usuário
           const container = input.closest('flow-editable-text, form, .cdk-overlay-pane, div') || input.parentElement;
-          const done = container ? (
-            $('button[aria-label="Done"], button[aria-label*="salv" i], button[aria-label*="confirm" i]', container) ||
-            $$('button', container).find(b => {
-              if (!visible(b)) return false;
-              const text = norm(b.textContent || '');
-              const icon = norm($('mat-icon, i', b)?.textContent || '');
-              return text === 'done' || text === 'check' || text === '✓' || icon === 'done' || icon === 'check';
-            }) ||
-            $$('button', input.parentElement).find(visible)
-          ) : null;
+          let done = null;
+          if (container) {
+            const btns = $('button, [role="button"]', container).filter(visible);
+            const nonCancel = btns.filter(b => {
+              const a = (b.getAttribute('aria-label') || '').toLowerCase();
+              const t = (b.textContent || '').toLowerCase();
+              return !/cancel|fechar|close|clear/i.test(a) && !/cancel|fechar|close|clear/i.test(t);
+            });
+            done = nonCancel.find(b => {
+              const a = (b.getAttribute('aria-label') || '').toLowerCase();
+              const t = norm(b.textContent || '').toLowerCase();
+              const icon = norm($('mat-icon, i, span', b)?.textContent || '').toLowerCase();
+              return /done|check|salv|confirm|conclu|ok/i.test(a) ||
+                     /done|check|salv|confirm|conclu|ok|✓/i.test(t) ||
+                     /done|check|check_circle/i.test(icon);
+            }) || nonCancel[0];
+          }
 
           if (done && visible(done)) {
+            const dr = done.getBoundingClientRect();
+            const dx = Math.round(dr.left + dr.width / 2);
+            const dy = Math.round(dr.top + dr.height / 2);
+            const dOpts = { bubbles: true, cancelable: true, view: window, clientX: dx, clientY: dy };
+            done.dispatchEvent(new PointerEvent('pointerdown', Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, dOpts)));
+            done.dispatchEvent(new MouseEvent('mousedown', dOpts));
+            done.dispatchEvent(new PointerEvent('pointerup', Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, dOpts)));
+            done.dispatchEvent(new MouseEvent('mouseup', dOpts));
+            done.dispatchEvent(new MouseEvent('click', dOpts));
             done.click();
           }
 
+          if (input.form) {
+            try { input.form.requestSubmit(); } catch (_) {
+              try { input.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); } catch (_) {}
+            }
+          }
+
           // 7. Espera o input fechar
-          await this.modernWait(() => !visible(input), 2000);
+          try {
+            await this.modernWait(() => !visible(input) || !input.isConnected, 1500);
+          } catch (_) {}
+
+          this.pintarNomeNoTile(id, name);
+          if (tile) {
+            tile.setAttribute('aria-label', name);
+            const tit = $('.footer-title', tile);
+            if (tit) tit.textContent = name;
+          }
+
           return true;
         } catch (error) {
           this.logDebug(`Renomear: ${error.message}`, 'error');
@@ -1089,32 +1196,53 @@
         }
       },
       async assignScene(sceneNum, sceneName, id, tile) {
+        this.tileOriginalNames ||= new Map();
+        if (!this.tileOriginalNames.has(id)) {
+          const orig = this.getTileName(tile) || '';
+          if (orig && !sceneInfo(orig) && !orig.endsWith(CONFIG.REF_SUFFIX)) {
+            this.tileOriginalNames.set(id, orig);
+          }
+        }
+
         const assignments = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
         const existing = assignments.get(sceneName) || [];
         const known = existing.find(item => item.workflowId === id);
         const imgNum = known?.imgNum || Math.max(0, ...existing.map(item => item.imgNum)) + 1;
-        const label = `Cena ${sceneNum} - ${this._videoAssignActive ? 'Vídeo' : 'Imagem'} ${imgNum}`;
+        const isVid = (tile && this.isVideoTile(tile)) || !!this._videoAssignActive;
+        const label = `Cena ${sceneNum} - ${isVid ? 'Vídeo' : 'Imagem'} ${imgNum}`;
         for (const list of assignments.values()) {
           const index = list.findIndex(item => item.workflowId === id);
           if (index >= 0) list.splice(index, 1);
         }
         const list = assignments.get(sceneName) || [];
-        list.push({ imgNum, workflowId: id, src: this.getMediaSrcFromTile(tile) }); assignments.set(sceneName, list);
-        this.tileAssignments.set(id, { label, type: 'scene', scene: sceneName, imgNum, isVideo: !!this._videoAssignActive });
+        list.push({ imgNum, workflowId: id, src: this.getMediaSrcFromTile(tile) });
+        assignments.set(sceneName, list);
+        this.tileAssignments.set(id, { label, type: 'scene', scene: sceneName, imgNum, isVideo: isVid });
         this.addLabelToTile(tile, label, id, 'scene', sceneName);
-        this.updateAssignItemUI(sceneName, true); this.updateAssignCount(); this.startLabelObserver();
+        this.updateAssignItemUI(sceneName, true);
+        this.updateAssignCount();
+        this.startLabelObserver();
 
-        // Renomeia na API imediatamente
+        // Renomeia na hora, passando o tile diretamente
         try {
-          await this.apiRename(id, label);
-          await this.apiFavorite(id, true);
+          await this.apiRename(id, label, tile);
+          this.pintarNomeNoTile(id, label);
+          try { await this.apiFavorite(id, true); } catch (_) {}
           this.logDebug(`✅ ${label} atribuída e renomeada no Flow!`, 'success');
         } catch (_) {
-          this.logDebug(`📌 ${label} atribuída localmente.`, 'info');
+          this.logDebug(`📌 ${label} atribuída.`, 'info');
         }
         return true;
       },
       async assignReference(name, id, tile) {
+        this.tileOriginalNames ||= new Map();
+        if (!this.tileOriginalNames.has(id)) {
+          const orig = this.getTileName(tile) || '';
+          if (orig && !sceneInfo(orig) && !orig.endsWith(CONFIG.REF_SUFFIX)) {
+            this.tileOriginalNames.set(id, orig);
+          }
+        }
+
         const previous = this.refAssignments.get(name);
         if (previous && previous !== id) {
           this.desmarcar(previous);
@@ -1125,15 +1253,18 @@
         this.tileAssignments.set(id, { label: name, type: 'ref', name });
         this.addLabelToTile(tile, name, id, 'ref', name);
         const refName = name + CONFIG.REF_SUFFIX;
-        this.updateAssignItemUI(name, true); this.updateAssignCount(); this.startLabelObserver();
+        this.updateAssignItemUI(name, true);
+        this.updateAssignCount();
+        this.startLabelObserver();
 
-        // Renomeia na API imediatamente
+        // Renomeia na hora, passando o tile diretamente
         try {
-          await this.apiRename(id, refName);
-          await this.apiFavorite(id, true);
+          await this.apiRename(id, refName, tile);
+          this.pintarNomeNoTile(id, refName);
+          try { await this.apiFavorite(id, true); } catch (_) {}
           this.logDebug(`✅ Referência [${name}] atribuída e renomeada no Flow!`, 'success');
         } catch (_) {
-          this.logDebug(`📌 Referência [${name}] atribuída localmente.`, 'info');
+          this.logDebug(`📌 Referência [${name}] atribuída.`, 'info');
         }
         return true;
       },
@@ -3418,6 +3549,28 @@
     // ============================================================
     const _origFetch = window.fetch;
     let _authToken = null;
+
+    function getAuthToken() {
+        if (_authToken) return _authToken;
+        if (window._authToken) return window._authToken;
+        try {
+            for (const storage of [sessionStorage, localStorage]) {
+                for (let i = 0; i < storage.length; i++) {
+                    const key = storage.key(i);
+                    const val = storage.getItem(key);
+                    if (typeof val === 'string' && val.includes('ya29.')) {
+                        const m = val.match(/ya29\.[a-zA-Z0-9_\-]+/);
+                        if (m) {
+                            _authToken = 'Bearer ' + m[0];
+                            window._authToken = _authToken;
+                            return _authToken;
+                        }
+                    }
+                }
+            }
+        } catch (_) {}
+        return null;
+    }
 
     window.fetch = async function(...args) {
         const [url, config] = args;
@@ -5964,13 +6117,14 @@ clearReferencesForUI(source = 'images') {
         // ──────────────────────────────────────────────
 
         async apiRename(workflowId, newName) {
-            if (!_authToken) { this.logDebug('Token não capturado — faça uma ação na página', 'error'); return false; }
+            const token = getAuthToken() || _authToken;
+            if (!token) return false;
             const projectId = this.getProjectId();
             if (!projectId || !workflowId) return false;
             try {
                 const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': _authToken },
+                    headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': token },
                     body: JSON.stringify({
                         workflow: { name: workflowId, projectId, metadata: { displayName: newName } },
                         updateMask: 'metadata.displayName'
@@ -5982,13 +6136,14 @@ clearReferencesForUI(source = 'images') {
         }
 
         async apiFavorite(workflowId, favorited) {
-            if (!_authToken) return false;
+            const token = getAuthToken() || _authToken;
+            if (!token) return false;
             const projectId = this.getProjectId();
             if (!projectId || !workflowId) return false;
             try {
                 const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': _authToken },
+                    headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Authorization': token },
                     body: JSON.stringify({
                         workflow: { name: workflowId, projectId, metadata: { favorited: !!favorited } },
                         updateMask: 'metadata.favorited'
@@ -7267,6 +7422,13 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                 const outerTile = gridTile;
                 if (!workflowId) { this.logDebug('Drop: workflowId não encontrado', 'error'); return; }
 
+                // Guarda o nome anterior da mídia para restauração no ✕
+                this.tileOriginalNames ||= new Map();
+                if (!this.tileOriginalNames.has(workflowId)) {
+                    const orig = (typeof this.getTileName === 'function' ? this.getTileName(outerTile) : '') || outerTile.getAttribute?.('aria-label') || '';
+                    if (orig) this.tileOriginalNames.set(workflowId, orig);
+                }
+
                 if (data.type === 'ref') {
                     await this.assignReference(data.name, workflowId, outerTile);
                 } else if (data.type === 'scene') {
@@ -7274,20 +7436,34 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                 }
             });
 
-            // Click handler para labels X (delegação)
+            // Click handler para labels X (restaura o nome original anterior sem travar e sem pedir confirmação)
             document.addEventListener('click', async e => {
                 const xBtn = e.target.closest('.label-x');
                 if (!xBtn) return;
+                e.preventDefault();
+                e.stopPropagation();
                 const label = xBtn.closest('.flow-tile-label');
                 if (!label) return;
                 const wfId = label.dataset.wf;
                 const type = label.dataset.type;
                 if (!wfId) return;
 
-                // Remove atribuição
-                if (!await this.apiRename(wfId, 'Imagem gerada')) return;
-                await this.apiFavorite(wfId, false);
+                // Recupera o nome original que a mídia tinha antes de ser atribuída
+                const originalName = this.tileOriginalNames?.get(wfId) || 'Imagem gerada';
+
+                // Remove label visual na hora para a interface responder de imediato
                 label.remove();
+                document.querySelectorAll(`.flow-tile-label[data-wf="${wfId}"]`).forEach(l => l.remove());
+
+                // Restaura o nome no Flow passando o tile
+                const tile = (typeof this.getTiles === 'function' ? this.getTiles() : []).find(t => this.getUuidFromTile(t) === wfId);
+                try {
+                    await this.apiRename(wfId, originalName, tile);
+                    this.pintarNomeNoTile(wfId, originalName);
+                    await this.apiFavorite(wfId, false);
+                } catch (_) {}
+
+                this.tileOriginalNames?.delete(wfId);
 
                 if (type === 'ref') {
                     const name = label.dataset.name;
@@ -7307,7 +7483,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                 }
                 this.tileAssignments.delete(wfId);
                 this.updateAssignCount();
-                this.logDebug(`Removida atribuição de ${wfId}`, 'info');
+                this.logDebug(`Atribuição desfeita; mídia restaurada para "${originalName}".`, 'info');
             });
         }
         // ── Pause for block approval ──
@@ -7490,7 +7666,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
 
             // Renomeia com sufixo " _"
             const apiName = name + CONFIG.REF_SUFFIX;
-            const ok1 = await this.apiRename(workflowId, apiName);
+            const ok1 = await this.apiRename(workflowId, apiName, tileEl);
             const ok2 = await this.apiFavorite(workflowId, true);
 
             if (ok1 && ok2) {
@@ -7538,7 +7714,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
 
             logFn(`Atribuindo "${fullName}" → ${workflowId.substring(0,8)}...`, 'info');
 
-            const ok1 = await this.apiRename(workflowId, fullName);
+            const ok1 = await this.apiRename(workflowId, fullName, tileEl);
             const ok2 = await this.apiFavorite(workflowId, true);
 
             if (ok1 && ok2) {
