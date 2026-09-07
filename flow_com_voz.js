@@ -646,21 +646,24 @@
       },
       getTiles() { return $$('flow-grid-tile-container').filter(tile => $('flow-image-tile,flow-video-tile', tile)); },
       getUuidFromTile(tile) {
+        if (!tile) return null;
         // Video tiles expose their persistent thumbnail id instead of data-media-id.
         // This is a gallery identity only; renaming/downloading use native UI actions.
-        if ($('flow-video-tile', tile)) {
+        const grid = tile.closest('flow-grid-tile-container') || tile;
+        const isVid = grid.matches?.('flow-video-tile') || !!$('flow-video-tile', grid) || !!$('video', grid);
+        if (isVid) {
           this._modernVideoIds ||= new WeakMap();
           this._modernVideoAliases ||= new Map();
-          if ($('flow-pending-tile', tile)) { this._modernVideoIds.delete(tile); return null; }
-          const source = $('flow-video-tile img.thumbnail', tile)?.getAttribute('src') || $('flow-video-tile video', tile)?.getAttribute('poster') || $('flow-video-tile video', tile)?.getAttribute('src') || '';
-          const key = videoIdentity(source), name = this.getTileName(tile), previous = this._modernVideoIds.get(tile);
+          if ($('flow-pending-tile', grid)) { this._modernVideoIds.delete(grid); return null; }
+          const source = $('flow-video-tile img.thumbnail, img.thumbnail', grid)?.getAttribute('src') || $('flow-video-tile video, video', grid)?.getAttribute('poster') || $('flow-video-tile video, video', grid)?.getAttribute('src') || '';
+          const key = videoIdentity(source), name = this.getTileName(grid), previous = this._modernVideoIds.get(grid);
           if (!key) return previous?.id || null;
           const sameTile = previous && (previous.key === key || previous.name === name);
           const id = this._modernVideoAliases.get(key) || (sameTile ? previous.id : key);
-          this._modernVideoAliases.set(key, id); this._modernVideoIds.set(tile, { id, key, name });
+          this._modernVideoAliases.set(key, id); this._modernVideoIds.set(grid, { id, key, name });
           return id;
         }
-        return $('[data-media-id]', tile)?.getAttribute('data-media-id') || null;
+        return $('[data-media-id]', grid)?.getAttribute('data-media-id') || grid.getAttribute?.('data-media-id') || null;
       },
       getWorkflowIdFromTile(tile) { return this.getUuidFromTile(tile); },
       // A grade e virtualizada: o tile pode ter saido da tela. Sem esta guarda,
@@ -3703,6 +3706,7 @@ function triggerTrustedClick(el) {
 .flow-assign-items::-webkit-scrollbar{width:4px;}
 .flow-assign-items::-webkit-scrollbar-thumb{background:var(--cd-border);border-radius:4px;}
 .flow-assign-item{display:flex;align-items:center;gap:6px;padding:6px 12px;border:1.5px solid #cbd5e1;border-radius:9999px;cursor:grab;font-size:12px;font-weight:600;color:#334155;transition:border-color .15s,background .15s;background:#f8fafc;white-space:nowrap;flex-shrink:0;position:relative;box-sizing:border-box;user-select:none;-webkit-user-select:none;-webkit-user-drag:element;opacity:1;text-decoration:none;}
+.flow-assign-item *{pointer-events:none;}
 .flow-assign-item:hover{border-color:var(--cd-primary);background:#f0fdf4;}
 .flow-assign-item:active{cursor:grabbing;}
 .flow-assign-item .drag-icon{color:#94a3b8;font-size:14px;flex-shrink:0;user-select:none;}
@@ -3954,6 +3958,7 @@ function triggerTrustedClick(el) {
         <div class="flow-actions">
           <button id="flow-start-btn" class="flow-btn flow-btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="6 3 20 12 6 21 6 3"/></svg> Iniciar</button>
           <button id="flow-stop-btn" class="flow-btn flow-btn-secondary" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg> Parar</button>
+          <button id="flow-assign-btn" class="flow-btn flow-btn-secondary" title="Abrir seletores para renomear mídias existentes sem gerar">🏷️ Atribuir / Renomear</button>
         </div>
         <div id="flow-status" class="flow-status"></div>
         <div class="flow-progress"><div id="flow-progress-bar" class="flow-progress-bar"></div></div>
@@ -4153,6 +4158,7 @@ function triggerTrustedClick(el) {
         <div class="flow-actions">
           <button id="fv-start-btn" class="flow-btn flow-btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="6 3 20 12 6 21 6 3"/></svg> Iniciar</button>
           <button id="fv-stop-btn" class="flow-btn flow-btn-secondary" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg> Parar</button>
+          <button id="fv-assign-btn" class="flow-btn flow-btn-secondary" title="Abrir seletores para renomear mídias existentes sem gerar">🏷️ Atribuir / Renomear</button>
         </div>
         <div id="fv-status" class="flow-status"></div>
         <div class="flow-progress"><div id="fv-progress-bar" class="flow-progress-bar"></div></div>
@@ -4364,6 +4370,8 @@ if (fixUploadRefsBtn) {
 }
             $('flow-show-logs').addEventListener('change', e => $('flow-logs-container').classList.toggle('visible', e.target.checked));
             $('flow-start-btn').addEventListener('click', () => { startKeepAlive(); this.start(); });
+            const flowAssignBtn = $('flow-assign-btn');
+            if (flowAssignBtn) flowAssignBtn.addEventListener('click', () => this.abrirPainelAtribuirSemGerar(false));
             $('flow-stop-btn').addEventListener('click',  () => this.stop());
             $('flow-close-popup').addEventListener('click', () => { $('flow-popup').style.display='none'; $('flow-popup-overlay').style.display='none'; });
             $('flow-popup-download').addEventListener('click', () => this.downloadLastRunMedia());
@@ -4542,6 +4550,8 @@ if (clearVideoRefsBtn) {
 }
             $('fv-show-logs').addEventListener('change', e => $('fv-logs-container').classList.toggle('visible', e.target.checked));
             $('fv-start-btn').addEventListener('click', () => { startKeepAlive(); this.startVideo(); });
+            const fvAssignBtn = $('fv-assign-btn');
+            if (fvAssignBtn) fvAssignBtn.addEventListener('click', () => this.abrirPainelAtribuirSemGerar(true));
             $('fv-stop-btn').addEventListener('click', () => this.stopVideo());
             $('fv-analyze-btn').addEventListener('click', () => this.analyzeProject('video'));
             $('fv-dl-identified').addEventListener('click', () => this.downloadProjectImages('identified'));
@@ -6837,13 +6847,13 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     if (isAssigned) item.classList.add('assigned');
                     item.innerHTML = `<span class="drag-icon">⋮</span><span class="assign-name">${this.esc(name)}</span><span class="assign-status">${isAssigned ? '✓' : '○'}</span>`;
                     item.addEventListener('dragstart', e => {
-                        e.stopPropagation();
-                        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'ref', name }));
+                        const payload = { type: 'ref', name };
+                        window.__flowDraggedData = payload;
+                        e.dataTransfer.setData('text/plain', JSON.stringify(payload));
                         e.dataTransfer.effectAllowed = 'copy';
                     });
                     item.addEventListener('dragend', e => {
-                        e.preventDefault();
-                        e.stopPropagation();
+                        window.__flowDraggedData = null;
                         const c = document.getElementById('flow-assign-items');
                         if (c && !c.contains(item)) c.appendChild(item);
                     });
@@ -6887,13 +6897,13 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                         if (preview) preview.style.display = 'none';
                     });
                     item.addEventListener('dragstart', e => {
-                        e.stopPropagation();
-                        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum, sceneName }));
+                        const payload = { type: 'scene', sceneNum, sceneName };
+                        window.__flowDraggedData = payload;
+                        e.dataTransfer.setData('text/plain', JSON.stringify(payload));
                         e.dataTransfer.effectAllowed = 'copy';
                     });
                     item.addEventListener('dragend', e => {
-                        e.preventDefault();
-                        e.stopPropagation();
+                        window.__flowDraggedData = null;
                         const c = document.getElementById('flow-assign-items');
                         if (c && !c.contains(item)) c.appendChild(item);
                     });
@@ -6961,6 +6971,39 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             this.refAssignments = new Map();
             document.querySelectorAll('[data-vmode]').forEach(b => b.classList.remove('active'));
             this.showAssignPanel([]);
+        }
+
+        /**
+         * Abre o painel de atribuição / renomeação diretamente sem precisar iniciar geração ou usar regra do 0.
+         */
+        abrirPainelAtribuirSemGerar(ehVideo = false) {
+            const prefix = ehVideo ? 'fv' : 'flow';
+            const input = document.getElementById(`${prefix}-prompts-input`);
+            const text = input ? input.value : '';
+            const prompts = parsePromptsText(text);
+            if (!prompts.length) {
+                (ehVideo ? this.setVideoStatus : this.setStatus).call(this, 'warning', 'Insira os prompts na caixa de texto para abrir os seletores de atribuição.');
+                return;
+            }
+            if (ehVideo) {
+                this.videoPrompts = prompts;
+                this.videoSceneAssignments = new Map();
+                for (const p of prompts) {
+                    this.videoSceneAssignments.set(`Cena ${p.promptNum}`, []);
+                }
+                this.videoGenMode = 'scenes';
+                this.showVideoAssignPanel([]);
+                this.setVideoStatus('success', '🏷️ Painel de atribuição de vídeos aberto. Arraste os seletores para as mídias.');
+            } else {
+                this.prompts = prompts;
+                this.sceneAssignments = new Map();
+                for (const p of prompts) {
+                    this.sceneAssignments.set(`Cena ${p.promptNum}`, []);
+                }
+                this.genMode = 'scenes';
+                this.showAssignPanel([]);
+                this.setStatus('success', '🏷️ Painel de atribuição aberto. Arraste os seletores para as mídias.');
+            }
         }
 
         toggleAssignPanel() {
@@ -7054,13 +7097,23 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                 e.stopPropagation();
 
                 let data;
-                try { data = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
+                try {
+                    const raw = e.dataTransfer ? e.dataTransfer.getData('text/plain') : '';
+                    data = raw ? JSON.parse(raw) : null;
+                } catch { data = null; }
+                if (!data?.type && window.__flowDraggedData?.type) {
+                    data = window.__flowDraggedData;
+                }
                 if (!data?.type) return;
 
-                // Encontra inner tile (com imagem) e outer tile (para label)
-                const innerTile = tile.querySelector('flow-grid-tile-container, [data-tile-id]') || tile;
-                const workflowId = this.getWorkflowIdFromTile(innerTile) || (typeof this.getUuidFromTile === 'function' ? this.getUuidFromTile(tile) : null);
-                const outerTile = tile;
+                // Resolve gridTile e outerTile
+                const gridTile = tile.closest('flow-grid-tile-container') || tile;
+                const innerTile = gridTile.querySelector('flow-grid-tile-container, [data-tile-id]') || gridTile;
+                const workflowId = (typeof this.getUuidFromTile === 'function' ? this.getUuidFromTile(gridTile) : null)
+                    || this.getWorkflowIdFromTile(innerTile)
+                    || this.getWorkflowIdFromTile(gridTile)
+                    || (typeof this.getUuidFromTile === 'function' ? this.getUuidFromTile(tile) : null);
+                const outerTile = gridTile;
                 if (!workflowId) { this.logDebug('Drop: workflowId não encontrado', 'error'); return; }
 
                 if (data.type === 'ref') {
@@ -7091,13 +7144,15 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                     this.updateAssignItemUI(name, false);
                 } else if (type === 'scene') {
                     const sceneName = label.dataset.scene;
-                    const arr = this.sceneAssignments.get(sceneName);
+                    const assignments = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
+                    const arr = assignments?.get(sceneName);
                     if (arr) {
                         const idx = arr.findIndex(a => a.workflowId === wfId);
                         if (idx >= 0) arr.splice(idx, 1);
                     }
-                    // Atualiza UI do item no painel
+                    // Atualiza UI do item no painel (volta ao cinza se não tiver mídias atribuídas)
                     this.updateAssignItemUI(sceneName, (arr?.length || 0) > 0);
+                    if (typeof this.repaintCompletion === 'function') this.repaintCompletion();
                 }
                 this.tileAssignments.delete(wfId);
                 this.updateAssignCount();
@@ -8212,13 +8267,13 @@ const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, varia
                     if (preview) preview.style.display = 'none';
                 });
                 item.addEventListener('dragstart', e => {
-                    e.stopPropagation();
-                    e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'scene', sceneNum, sceneName }));
+                    const payload = { type: 'scene', sceneNum, sceneName };
+                    window.__flowDraggedData = payload;
+                    e.dataTransfer.setData('text/plain', JSON.stringify(payload));
                     e.dataTransfer.effectAllowed = 'copy';
                 });
                 item.addEventListener('dragend', e => {
-                    e.preventDefault();
-                    e.stopPropagation();
+                    window.__flowDraggedData = null;
                     const c = document.getElementById('flow-assign-items');
                     if (c && !c.contains(item)) c.appendChild(item);
                 });
