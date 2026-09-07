@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.1   -   2026-09-05
+//  Flow NOVO v7.2   -   2026-09-07
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -8,6 +8,9 @@
 //  Ele tem duas partes, nesta ordem:
 //    PARTE 1 - Compatibilidade com o Flow novo (flow.google.com, Angular)
 //    PARTE 2 - O programa principal (painel, filas, tempos, downloads)
+//
+//  v7.2: renomeacao em duas etapas, caixas persistentes, confirmacao real e
+//        fallback nativo automatico sem exibir os menus do Flow.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -95,7 +98,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.1 (lote silencioso em ZIP)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.2 (caixas antes de renomear)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -288,6 +291,7 @@
        */
       async promptViaReutilizar(tile) {
         if (!tile) return '';
+        document.documentElement.classList.add('flow-rename-silent');
         // 1. Força hover no tile para o Flow renderizar botões de ação
         const rect = tile.getBoundingClientRect();
         const cx = Math.round(rect.left + rect.width / 2);
@@ -332,6 +336,7 @@
           return '';
         } finally {
           await this.closeMenus();
+          document.documentElement.classList.remove('flow-rename-silent');
         }
       },
       async findAsset(name, type = 'image') {
@@ -701,7 +706,7 @@
       getWorkflowIdFromTile(tile) { return this.getUuidFromTile(tile); },
       // A grade e virtualizada: o tile pode ter saido da tela. Sem esta guarda,
       // marcar uma midia que rolou para fora quebrava a atribuicao inteira.
-      getTileName(tile) { return tile ? norm(tile.getAttribute('aria-label') || $('.footer-title', tile)?.textContent) : ''; },
+      getTileName(tile) { return tile ? norm($('.footer-title', tile)?.textContent || tile.getAttribute('aria-label')) : ''; },
       getPromptSubtitleFromTile(tile) { return this.getTileName(tile); },
       isVideoTile(tile) { return !!$('flow-video-tile,video', tile); },
       getMediaSrcFromTile(tile) {
@@ -937,7 +942,7 @@
 
         let btn = $('button[aria-label="More options"], button[aria-label*="opções" i], button[aria-label*="options" i]', tile);
         if (!btn) {
-          const btns = $('button, [role="button"]', tile);
+          const btns = $$('button, [role="button"]', tile);
           btn = btns.find(b => {
             if (!visible(b)) return false;
             const text = norm(b.textContent || '');
@@ -958,7 +963,6 @@
           btn.dispatchEvent(new MouseEvent('mousedown', bOpts));
           btn.dispatchEvent(new PointerEvent('pointerup', Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, bOpts)));
           btn.dispatchEvent(new MouseEvent('mouseup', bOpts));
-          btn.dispatchEvent(new MouseEvent('click', bOpts));
           btn.click();
         } else {
           const target = tile.querySelector('.mat-context-menu-trigger') || inner || tile;
@@ -978,7 +982,7 @@
           }));
         }
 
-        await this.modernWait(() => $('[role="menu"], .cdk-overlay-pane [role="menuitem"]').some(visible), 3500);
+        await this.modernWait(() => $$('[role="menu"], .cdk-overlay-pane [role="menuitem"]').some(visible), 3500);
         return true;
       },
       async closeMenus() {
@@ -989,12 +993,12 @@
           window.dispatchEvent(escEvent());
           document.body?.dispatchEvent(escEvent());
 
-          const backdrops = $('.cdk-overlay-backdrop');
+          const backdrops = $$('.cdk-overlay-backdrop');
           backdrops.forEach(el => {
             try { el.click(); } catch (_) {}
           });
 
-          const menus = $('[role="menu"]').filter(visible);
+          const menus = $$('[role="menu"]').filter(visible);
           if (menus.length) {
             document.body?.click();
             await this.sleep(40);
@@ -1012,10 +1016,13 @@
        */
       idServeNaApi(id) { return !!id && !/^video-/i.test(String(id)); },
       async apiRename(id, name, tileOptional = null) {
-        if (this.idServeNaApi(id) && this._apiRenomearVale !== false && old.apiRename) {
+        const podeRetentarApi = !this._apiRenomearFalhouEm || Date.now() - this._apiRenomearFalhouEm >= 15000;
+        if (this.idServeNaApi(id) && podeRetentarApi && old.apiRename) {
           try {
             const deu = await old.apiRename.call(this, id, name);
             if (deu) {
+              this._apiRenomearFalhouEm = 0;
+              this._apiRenomearAvisada = false;
               if (this._apiRenomearVale === undefined) {
                 this._apiRenomearVale = true;
                 this.logDebug('⚡ Renomeando pela API do Flow (rápido).', 'success');
@@ -1024,9 +1031,10 @@
               return true;
             }
           } catch (_) {}
-          if (this._apiRenomearVale === undefined) {
-            this._apiRenomearVale = false;
-            this.logDebug('A API de renomear não respondeu; usando o menu da mídia.', 'warning');
+          this._apiRenomearFalhouEm = Date.now();
+          if (!this._apiRenomearAvisada) {
+            this._apiRenomearAvisada = true;
+            this.logDebug('A API de renomear não respondeu; usando o menu da mídia e tentando a API novamente depois.', 'warning');
           }
         }
         const ok = await this.renomearPeloMenu(id, name, tileOptional);
@@ -1035,6 +1043,7 @@
       },
 
       async renomearPeloMenu(id, name, tileOptional = null) {
+        document.documentElement.classList.add('flow-rename-silent');
         try {
           const tile = (tileOptional && tileOptional.isConnected) ? tileOptional : (await this.scrollToWorkflow(id));
           if (!tile) throw new Error('Mídia não encontrada para renomear.');
@@ -1050,7 +1059,7 @@
 
           // 3. Localiza o input de texto
           const input = await this.modernWait(() => {
-            return $('.cdk-overlay-pane input, flow-editable-text input, input[type="text"]').find(visible);
+            return $$('.cdk-overlay-pane flow-editable-text input, .cdk-overlay-pane input[type="text"]').find(visible);
           }, 3500);
           if (!input) throw new Error('Campo de renomeação não encontrado.');
 
@@ -1072,7 +1081,7 @@
           const container = input.closest('flow-editable-text, form, .cdk-overlay-pane, div') || input.parentElement;
           let done = null;
           if (container) {
-            const btns = $('button, [role="button"]', container).filter(visible);
+            const btns = $$('button, [role="button"]', container).filter(visible);
             const nonCancel = btns.filter(b => {
               const a = (b.getAttribute('aria-label') || '').toLowerCase();
               const t = (b.textContent || '').toLowerCase();
@@ -1082,10 +1091,10 @@
               const a = (b.getAttribute('aria-label') || '').toLowerCase();
               const t = norm(b.textContent || '').toLowerCase();
               const icon = norm($('mat-icon, i, span', b)?.textContent || '').toLowerCase();
-              return /done|check|salv|confirm|conclu|ok/i.test(a) ||
-                     /done|check|salv|confirm|conclu|ok|✓/i.test(t) ||
+              return /^(done|save|confirm|concluir|salvar|confirmar|ok)$/i.test(a.trim()) ||
+                     /^(done|save|confirm|concluir|salvar|confirmar|ok|✓)$/i.test(t.trim()) ||
                      /done|check|check_circle/i.test(icon);
-            }) || nonCancel[0];
+            }) || null;
           }
 
           if (done && visible(done)) {
@@ -1097,20 +1106,20 @@
             done.dispatchEvent(new MouseEvent('mousedown', dOpts));
             done.dispatchEvent(new PointerEvent('pointerup', Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, dOpts)));
             done.dispatchEvent(new MouseEvent('mouseup', dOpts));
-            done.dispatchEvent(new MouseEvent('click', dOpts));
             done.click();
           }
 
-          if (input.form) {
+          if (!done && input.form) {
             try { input.form.requestSubmit(); } catch (_) {
               try { input.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); } catch (_) {}
             }
           }
 
           // 7. Espera o input fechar
-          try {
-            await this.modernWait(() => !visible(input) || !input.isConnected, 1500);
-          } catch (_) {}
+          const fechou = await this.modernWait(() => !visible(input) || !input.isConnected, 2500);
+          if (!fechou || (input.isConnected && visible(input))) {
+            throw new Error('O Flow não confirmou o novo nome.');
+          }
 
           this.pintarNomeNoTile(id, name);
           if (tile) {
@@ -1125,6 +1134,7 @@
           return false;
         } finally {
           await this.closeMenus();
+          document.documentElement.classList.remove('flow-rename-silent');
         }
       },
       async apiFavorite(id, value) {
@@ -1151,11 +1161,9 @@
           return true;
         } catch (error) { this.logDebug(`Favoritar: ${error.message}`, 'error'); return false; }
       },
-      // ── MARCAR AGORA, RENOMEAR AO ATUALIZAR A PAGINA ────────────────────────
-      // Arrastar um nome nao mexe mais no servidor. A marcacao fica guardada e
-      // so vira renomeacao quando voce atualiza a pagina. Assim, se voce errar,
-      // basta tirar no ✕ e a midia continua com o NOME ORIGINAL dela — antes ela
-      // virava "Imagem gerada" e nao dava para voltar atras.
+      // ── MARCAR AGORA, RENOMEAR PELO BOTAO ────────────────────────────────────
+      // Arrastar um nome nao mexe no servidor. A caixa fica guardada e so vira
+      // renomeacao quando o usuario clicar em "Renomear selecionadas".
       chaveDasMarcas() {
         const proj = (typeof this.getProjectId === 'function' && this.getProjectId()) || location.pathname;
         return 'flow_marcas_' + proj;
@@ -1167,6 +1175,32 @@
       salvarMarcas(marcas) {
         try { localStorage.setItem(this.chaveDasMarcas(), JSON.stringify(marcas || {})); } catch (_) {}
         this.mostrarBarraDeAtualizar();
+        this.atualizarBotaoRenomearMarcadas?.();
+      },
+      atualizarBotaoRenomearMarcadas() {
+        const botao = document.getElementById('flow-assign-rename');
+        if (!botao) return;
+        const marcas = this.lerMarcas();
+        const pendentes = Object.values(marcas);
+        const total = pendentes.length;
+        botao.style.display = total ? '' : 'none';
+        botao.disabled = !!this._aplicandoMarcas || total === 0;
+        botao.textContent = this._aplicandoMarcas
+          ? '⏳ Renomeando...'
+          : `🏷️ Renomear selecionadas (${total})`;
+        document.querySelectorAll('.flow-assign-item').forEach(item => {
+          const chave = item.dataset.name || item.dataset.scene;
+          const temPendente = pendentes.some(m =>
+            (m.tipo === 'ref' && m.referencia === chave) ||
+            (m.tipo === 'scene' && m.cena === chave)
+          );
+          item.classList.toggle('rename-pending', temPendente);
+          if (temPendente) {
+            item.classList.remove('assigned', 'complete');
+            const status = item.querySelector('.assign-status');
+            if (status) status.textContent = '⏳';
+          }
+        });
       },
       marcar(id, dados) {
         const marcas = this.lerMarcas();
@@ -1223,15 +1257,18 @@
         this.updateAssignCount();
         this.startLabelObserver();
 
-        // Renomeia na hora, passando o tile diretamente
-        try {
-          await this.apiRename(id, label, tile);
-          this.pintarNomeNoTile(id, label);
-          try { await this.apiFavorite(id, true); } catch (_) {}
-          this.logDebug(`✅ ${label} atribuída e renomeada no Flow!`, 'success');
-        } catch (_) {
-          this.logDebug(`📌 ${label} atribuída.`, 'info');
-        }
+        // Primeira etapa: apenas guarda a caixa. O servidor só muda quando o
+        // usuário clicar em "Renomear selecionadas".
+        this.marcar(id, {
+          nome: label,
+          favoritar: true,
+          tipo: 'scene',
+          cena: sceneName,
+          imgNum,
+          ordem: Date.now()
+        });
+        tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'pending'));
+        this.logDebug(`📌 ${label} pronta para renomear.`, 'info');
         return true;
       },
       async assignReference(name, id, tile) {
@@ -1257,41 +1294,61 @@
         this.updateAssignCount();
         this.startLabelObserver();
 
-        // Renomeia na hora, passando o tile diretamente
-        try {
-          await this.apiRename(id, refName, tile);
-          this.pintarNomeNoTile(id, refName);
-          try { await this.apiFavorite(id, true); } catch (_) {}
-          this.logDebug(`✅ Referência [${name}] atribuída e renomeada no Flow!`, 'success');
-        } catch (_) {
-          this.logDebug(`📌 Referência [${name}] atribuída.`, 'info');
-        }
+        this.marcar(id, {
+          nome: refName,
+          favoritar: true,
+          tipo: 'ref',
+          referencia: name,
+          ordem: Date.now()
+        });
+        tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'pending'));
+        this.logDebug(`📌 Referência [${name}] pronta para renomear.`, 'info');
         return true;
       },
-      /** Aplica marcas se existirem e limpa do storage para nunca repetir */
+      /** Aplica as caixas salvas; remove apenas as que o Flow confirmou. */
       async aplicarMarcas() {
         const marcas = this.lerMarcas();
-        const ids = Object.keys(marcas);
+        const ids = Object.keys(marcas).sort((a, b) => (marcas[a]?.ordem || 0) - (marcas[b]?.ordem || 0));
         if (!ids.length || this._aplicandoMarcas) return;
         this._aplicandoMarcas = true;
-        let ok = 0;
+        this.atualizarBotaoRenomearMarcadas();
+        let ok = 0, falhou = 0;
         try {
           for (let i = 0; i < ids.length; i++) {
             const id = ids[i], marca = marcas[id];
             try {
-              const deu = await this.apiRename(id, marca.nome);
+              const tile = await this.scrollToWorkflow(id);
+              tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
+              this.logDebug(`🏷️ Renomeando ${i + 1}/${ids.length}: ${marca.nome}`, 'info');
+              const deu = await this.apiRename(id, marca.nome, tile);
               if (deu) {
                 ok++;
                 this.pintarNomeNoTile(id, marca.nome);
                 if (marca.favoritar) { try { await this.apiFavorite(id, true); } catch (_) {} }
+                tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
+                this.updateAssignItemUI(marca.tipo === 'ref' ? marca.referencia : marca.cena, true);
+                delete marcas[id];
+              } else {
+                falhou++;
+                tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'failed'));
               }
-            } catch (_) {}
-            delete marcas[id];
+            } catch (erro) {
+              falhou++;
+              this.logDebug(`❌ ${marca.nome}: ${erro?.message || erro}`, 'error');
+            }
           }
-          this.salvarMarcas({});
+          this.salvarMarcas(marcas);
+          this.updateAssignCount();
+          this.logDebug(
+            falhou
+              ? `Renomeação concluída: ${ok} confirmada(s), ${falhou} pendente(s) para tentar novamente.`
+              : `✅ ${ok} mídia(s) renomeada(s) e confirmada(s).`,
+            falhou ? 'warning' : 'success'
+          );
         } finally {
           this._aplicandoMarcas = false;
           this.mostrarBarraDeAtualizar();
+          this.atualizarBotaoRenomearMarcadas();
         }
       },
       async validateReferences(source = 'images') {
@@ -1358,12 +1415,31 @@
       },
       startLabelObserver() {
         const render = () => {
+          const marcas = this.lerMarcas();
           for (const tile of this.getTiles()) {
-            const id = this.getUuidFromTile(tile), data = this.tileAssignments.get(id);
+            const id = this.getUuidFromTile(tile);
+            const pendente = id && marcas[id];
+            let data = this.tileAssignments.get(id);
+            if (!data && pendente) {
+              if (pendente.tipo === 'ref') {
+                data = { label: pendente.referencia || pendente.nome, type: 'ref', name: pendente.referencia || pendente.nome, isVideo: this.isVideoTile(tile) };
+                this.refAssignments.set(data.name, id);
+              } else {
+                data = { label: pendente.nome, type: 'scene', scene: pendente.cena, imgNum: pendente.imgNum, isVideo: this.isVideoTile(tile) };
+                const mapa = data.isVideo ? this.videoSceneAssignments : this.sceneAssignments;
+                if (!mapa.has(data.scene)) mapa.set(data.scene, []);
+                if (!mapa.get(data.scene).some(x => x.workflowId === id)) {
+                  mapa.get(data.scene).push({ imgNum: data.imgNum, workflowId: id, src: this.getMediaSrcFromTile(tile) });
+                }
+              }
+              this.tileAssignments.set(id, data);
+            }
             const previous = $('.flow-tile-label', tile);
             if (previous && (previous.dataset.wf !== id || !data)) previous.remove();
             if (data && !$('.flow-tile-label', tile)) this.addLabelToTile(tile, data.label, id, data.type, data.type === 'ref' ? data.name : data.scene);
+            if (pendente) $('.flow-tile-label', tile)?.setAttribute('data-rename-state', 'pending');
           }
+          this.atualizarBotaoRenomearMarcadas();
         };
         render();
         if (!this._labelObserverId) this._labelObserverId = setInterval(render, 800);
@@ -1862,7 +1938,6 @@
           if (!entry.uuid || !entry.loaded) return;
           if (entry.isVideo !== !!this._videoAssignActive) return;
           if (sceneInfo(entry.name)) return;
-          if (this.numeroDaCenaNoTexto(entry.name) != null) return;
           const texto = await this.promptViaReutilizar(tile);
           if (this.numeroDaCenaNoTexto(texto) != null) { promptsLidos.set(entry.uuid, texto); lidos++; }
           aviso('🔎 Lendo os prompts... ' + lidos + ' lido(s)');
@@ -1877,10 +1952,8 @@
           // Já nomeada: usa o número do próprio nome.
           if (known) { results.push({ ...entry, promptNum: known.sceneNum, imgNum: known.imgNum || 1, state: 'loaded' }); continue; }
 
-          // Número que veio do prompt (rótulo ou botão Reutilizar).
-          const doPrompt = this.numeroDaCenaNoTexto(entry.name) != null
-            ? this.numeroDaCenaNoTexto(entry.name)
-            : this.numeroDaCenaNoTexto(promptsLidos.get(entry.uuid));
+          // Número vindo do prompt real. O título automático do card não decide a cena.
+          const doPrompt = this.numeroDaCenaNoTexto(promptsLidos.get(entry.uuid));
           if (doPrompt != null) { results.push({ ...entry, promptNum: doPrompt, imgNum: 1, state: 'loaded' }); continue; }
           const exact = prompts.filter(p => norm(p.text).toLowerCase() === norm(entry.name).toLowerCase());
           const prompt = known ? prompts.find(p => p.promptNum === known.sceneNum) : exact.length === 1 ? exact[0] : null;
@@ -2237,7 +2310,7 @@
        * aquela midia antes de aplicar.
        */
       mostrarPlanoRenomear(plano) {
-        this._planoRenomear = plano.slice();
+        this._planoRenomear = plano.map(p => ({ ...p, selecionado: p.selecionado !== false }));
         const painel = document.getElementById('rn-resultado');
         const botao = document.getElementById('rn-aplicar');
         if (!painel) return;
@@ -2245,25 +2318,46 @@
           painel.innerHTML = '';
           for (const p of this._planoRenomear) {
             const linha = document.createElement('div');
+            const estado = p.estado || 'pending';
+            const cores = {
+              pending: 'background:#fffbeb;border-color:#f59e0b;',
+              renaming: 'background:#eff6ff;border-color:#3b82f6;',
+              failed: 'background:#fef2f2;border-color:#ef4444;'
+            };
             linha.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 8px;' +
-              'border-radius:6px;margin-bottom:3px;background:var(--cd-bg-secondary);border:1px solid var(--cd-border-light);';
+              'border-radius:6px;margin-bottom:3px;border:1px solid;' + (cores[estado] || cores.pending);
+            linha.dataset.renameState = estado;
+            const caixa = document.createElement('input');
+            caixa.type = 'checkbox';
+            caixa.checked = p.selecionado !== false;
+            caixa.disabled = !!this._renomeando;
+            caixa.title = 'Incluir esta mídia na renomeação';
+            caixa.addEventListener('change', () => { p.selecionado = caixa.checked; desenhar(); });
             const texto = document.createElement('span');
             texto.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-            texto.innerHTML = '<span style="opacity:.55">' + (p.name || 'sem nome').slice(0, 30) + '</span> → <b>' + p.novo + '</b>';
+            const icone = estado === 'renaming' ? '⏳ ' : estado === 'failed' ? '❌ ' : '📌 ';
+            const atual = document.createElement('span');
+            atual.style.opacity = '.55';
+            atual.textContent = (p.name || 'sem nome').slice(0, 30);
+            const destino = document.createElement('b');
+            destino.textContent = p.novo;
+            texto.append(document.createTextNode(icone), atual, document.createTextNode(' → '), destino);
             texto.title = p.prompt ? String(p.prompt).slice(0, 400) : '';
             const x = document.createElement('button');
             x.textContent = '✕';
+            x.disabled = !!this._renomeando;
             x.title = 'Tirar esta mídia da lista';
             x.style.cssText = 'border:0;background:transparent;cursor:pointer;color:#dc2626;font-size:13px;line-height:1;padding:2px 5px;';
             x.addEventListener('click', () => { this._planoRenomear = this._planoRenomear.filter(o => o !== p); desenhar(); });
-            linha.appendChild(texto); linha.appendChild(x);
+            linha.appendChild(caixa); linha.appendChild(texto); linha.appendChild(x);
             painel.appendChild(linha);
           }
           if (botao) {
-            const n = this._planoRenomear.length;
-            botao.style.display = n ? '' : 'none';
-            botao.disabled = !n;
-            botao.textContent = '✅ Aplicar em ' + n + ' mídia(s)';
+            const total = this._planoRenomear.length;
+            const n = this._planoRenomear.filter(p => p.selecionado !== false).length;
+            botao.style.display = total ? '' : 'none';
+            botao.disabled = !!this._renomeando || !n;
+            botao.textContent = '🏷️ Renomear selecionadas (' + n + ')';
           }
         };
         desenhar();
@@ -2271,7 +2365,7 @@
 
       /** Aplica o que sobrou na lista depois das suas remocoes. */
       async aplicarPlanoRenomear() {
-        const plano = (this._planoRenomear || []).slice();
+        const plano = (this._planoRenomear || []).filter(p => p.selecionado !== false);
         if (!plano.length || this._renomeando) return;
         this._renomeando = true;
         this.renomearParar = false;
@@ -2287,9 +2381,16 @@
           for (let i = 0; i < plano.length; i++) {
             if (this.renomearParar) { aviso('⏹ Parado por você. ' + ok + ' renomeada(s).', 'warning'); return; }
             const p = plano[i];
+            const atual = this._planoRenomear.find(o => o.uuid === p.uuid);
+            if (atual) atual.estado = 'renaming';
+            this.mostrarPlanoRenomear(this._planoRenomear);
             aviso('🏷️ Renomeando <b>' + (i + 1) + '/' + plano.length + '</b> — ' + p.novo);
             if (barra) barra.style.width = Math.round((i / plano.length) * 100) + '%';
-            if (norm(p.name) === norm(p.novo)) { ok++; continue; }
+            if (norm(p.name) === norm(p.novo)) {
+              ok++;
+              this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
+              continue;
+            }
             if (await this.apiRename(p.uuid, p.novo)) {
               ok++;
               this.tileAssignments.set(p.uuid, { label: p.novo, type: 'scene', scene: 'Cena ' + p.cena, imgNum: p.g });
@@ -2297,10 +2398,14 @@
               this.startLabelObserver();
               try { await this.apiFavorite(p.uuid, true); } catch (_) {}
               this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
-            } else falhou++;
+            } else {
+              falhou++;
+              const pendente = this._planoRenomear.find(o => o.uuid === p.uuid);
+              if (pendente) pendente.estado = 'failed';
+            }
           }
           if (barra) barra.style.width = '100%';
-          aviso('✅ <b>' + ok + '</b> mídia(s) renomeada(s)' + (falhou ? ' · ' + falhou + ' falha(s)' : '') + '.', 'success');
+          aviso((falhou ? '⚠️ ' : '✅ ') + '<b>' + ok + '</b> mídia(s) renomeada(s)' + (falhou ? ' · ' + falhou + ' continuaram marcadas para tentar novamente' : '') + '.', falhou ? 'warning' : 'success');
         } catch (erro) {
           aviso('❌ ' + erro.message, 'error');
         } finally {
@@ -2375,8 +2480,11 @@
               imgNumExistente = jaNomeada.imgNum;
               origem = 'nome';
             } else {
-              // 2. Número da cena no rótulo visível do card (ex: "1 - Homem...", "{cena 1}...")
-              const doRotulo = this.numeroDaCenaNoTexto(entry.name);
+              // O título automático do Flow não é o prompt e pode começar com
+              // números sem relação com a cena. Só confiamos no nome quando ele
+              // já está no formato oficial (tratado acima). Para os demais cards,
+              // a cena precisa vir do prompt real.
+              const doRotulo = null;
               if (doRotulo != null) {
                 cena = doRotulo;
                 origem = 'rótulo';
@@ -2814,7 +2922,7 @@
           '<div class="flow-card">' +
             '<div class="flow-card-header">' +
               '<h3 class="flow-card-title">Formato do nome</h3>' +
-              '<p class="flow-card-description">Ele lê o número da cena no prompt de cada geração e renomeia na ordem.</p>' +
+              '<p class="flow-card-description">Primeiro ele lê os prompts e monta as caixas. Nada é renomeado antes da sua confirmação.</p>' +
             '</div>' +
             '<div class="flow-card-content">' +
               '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
@@ -2847,14 +2955,14 @@
           '</div>' +
 
           '<div class="flow-actions" style="display:flex;gap:6px;flex-wrap:wrap;">' +
-            '<button id="rn-start" class="flow-btn flow-btn-primary" style="flex:1;min-width:140px;" title="Varre a galeria e já vai identificando e renomeando cada vídeo/imagem">🏷️ Renomear Galeria</button>' +
-            '<button id="rn-analisar" class="flow-btn flow-btn-secondary" style="flex:1;min-width:110px;" title="Apenas varre e mostra a lista sem renomear">🔎 Analisar</button>' +
+            '<button id="rn-start" class="flow-btn flow-btn-primary" style="flex:1;min-width:140px;" title="Varre a galeria, lê os prompts e monta as caixas para revisão">🔎 Ler e montar caixas</button>' +
+            '<button id="rn-analisar" class="flow-btn flow-btn-secondary" style="flex:1;min-width:110px;" title="Faz novamente a leitura sem renomear">↻ Atualizar leitura</button>' +
             '<button id="rn-stop" class="flow-btn flow-btn-secondary" style="width:70px;" disabled>⏹ Parar</button>' +
           '</div>' +
           '<button class="flow-validate-btn" id="rn-testar" style="display:none;">analisar</button>' +
           '<button class="flow-btn flow-btn-primary" id="rn-aplicar" style="width:100%;margin-top:6px;display:none;" disabled>✅ Aplicar renomeação</button>' +
           '<div style="font-size:11px;color:var(--cd-text-muted);margin:2px 0 8px;line-height:1.5;">' +
-            'Clique em <b>🏷️ Renomear Galeria</b> para varrer, identificar e renomear diretamente, ou <b>🔎 Analisar</b> para apenas listar.' +
+            '1) Clique em <b>🔎 Ler e montar caixas</b>. 2) Confira ou retire itens. 3) Clique em <b>🏷️ Renomear selecionadas</b>.' +
           '</div>' +
           '<div id="rn-status" class="flow-status"></div>' +
           '<div class="flow-progress"><div id="rn-barra" class="flow-progress-bar"></div></div>' +
@@ -2933,8 +3041,8 @@
         document.getElementById('rn-stop').disabled = false;
         alvo.renomearGaleria({ escopo, apenasAnalisar });
       };
-      // Renomear Galeria já vai identificando e renomeando diretamente!
-      document.getElementById('rn-start').addEventListener('click', () => rodar(false));
+      // Fluxo seguro em duas etapas: primeiro monta o plano; depois o usuário confirma.
+      document.getElementById('rn-start').addEventListener('click', () => rodar(true));
       const btnAnalisarEl = document.getElementById('rn-analisar');
       if (btnAnalisarEl) btnAnalisarEl.addEventListener('click', () => rodar(true));
       document.getElementById('rn-testar').addEventListener('click', () => rodar(true));
@@ -3255,6 +3363,12 @@
         '.flow-assign-item.assigned .assign-name{color:#15803d!important;font-weight:700!important;text-decoration:none!important;}',
         '.flow-assign-item.assigned .assign-status{color:#15803d!important;}',
         '.flow-assign-item.assigned .drag-icon{color:#16a34a!important;}',
+        '.flow-assign-item.rename-pending{background:#fef3c7!important;border-color:#f59e0b!important;color:#92400e!important;}',
+        '.flow-assign-item.rename-pending .assign-name,.flow-assign-item.rename-pending .assign-status{color:#92400e!important;font-weight:800!important;}',
+        '.flow-tile-label[data-rename-state="pending"]{background:#fef3c7!important;color:#92400e!important;border-color:#f59e0b!important;}',
+        '.flow-tile-label[data-rename-state="renaming"]{background:#dbeafe!important;color:#1d4ed8!important;border-color:#3b82f6!important;}',
+        '.flow-tile-label[data-rename-state="confirmed"]{background:#dcfce7!important;color:#166534!important;border-color:#22c55e!important;}',
+        '.flow-tile-label[data-rename-state="failed"]{background:#fee2e2!important;color:#991b1b!important;border-color:#ef4444!important;}',
         '.flow-assign-item.complete .assign-name{color:#14532d!important;font-weight:800!important;text-decoration:none!important;}',
         '.flow-assign-item.missing{opacity:.85!important;}',
         /* quantos prompts foram lidos, nas duas abas */
@@ -3269,7 +3383,9 @@
         '#rn-resultado{color:#0f172a!important;}',
         '#rn-resultado b{color:#0f172a!important;font-weight:800!important;}',
         '#rn-resultado span[style*="opacity"]{opacity:.8!important;color:#334155!important;}',
-        '#rn-aplicar{font-weight:800!important;}'
+        '#rn-aplicar{font-weight:800!important;}',
+        /* O fallback nativo continua renderizado e clicavel, mas nao pisca na tela. */
+        'html.flow-rename-silent .cdk-overlay-pane,html.flow-rename-silent .cdk-overlay-backdrop{opacity:0!important;transition:none!important;}'
       ].join('');
       document.head.appendChild(st);
     }
@@ -3379,17 +3495,17 @@
       for (const ms of [600, 1800, 3500]) setTimeout(criarCaixaQualidade, ms);
       setInterval(criarCaixaQualidade, 5000);
 
-      // ── Botao "Aplicar renomeação" ─────────────────────────────────────────
-      // Voce marca tudo arrastando, clica UMA vez aqui, e os nomes valem na
-      // Limpeza de marcas antigas/fantasmas no localStorage para não rodar nada ao atualizar a página
-      try {
-        const paraRemover = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && k.startsWith('flow_marcas_')) paraRemover.push(k);
-        }
-        paraRemover.forEach(k => localStorage.removeItem(k));
-      } catch (_) {}
+      const ligarBotaoRenomearMarcadas = () => {
+        const botao = document.getElementById('flow-assign-rename');
+        if (!botao || botao._flowLigado) return;
+        botao._flowLigado = true;
+        botao.addEventListener('click', () => this.aplicarMarcas());
+        this.atualizarBotaoRenomearMarcadas();
+      };
+      for (const ms of [100, 500, 1500]) setTimeout(ligarBotaoRenomearMarcadas, ms);
+      setTimeout(() => this.startLabelObserver(), 700);
+
+      // As caixas ficam salvas por projeto até serem confirmadas ou removidas no X.
 
       // ── O X da etiqueta desfaz a atribuicao NA HORA ──────────────────────
       // Ao clicar no X da etiqueta, a imagem é desvinculada e o seletor na barrinha
@@ -4535,8 +4651,9 @@ function triggerTrustedClick(el) {
     <h3 id="flow-assign-title">Atribuir</h3>
     <span class="flow-assign-count" id="flow-assign-count"></span>
     <div class="flow-assign-header-btns">
+      <button class="flow-assign-dl-btn" id="flow-assign-rename" style="display:none;background:#2563eb;color:#fff;border-color:#2563eb;">🏷️ Renomear selecionadas (0)</button>
       <button class="flow-assign-dl-btn" id="flow-assign-download" style="display:none;">⬇️ Baixar Cenas</button>
-      <button class="flow-assign-hbtn" id="flow-assign-auto" title="Enumerar automático: renomeia cada imagem gerada pelo início do prompt">⚡ Auto</button>
+      <button class="flow-assign-hbtn" id="flow-assign-auto" title="Lê os prompts e monta automaticamente as caixas de renomeação">⚡ Auto</button>
       <button class="flow-assign-hbtn" id="flow-assign-layout" title="Alternar Horizontal/Vertical">↔</button>
       <button class="flow-assign-hbtn" id="flow-assign-toggle" title="Minimizar">▲</button>
       <button class="flow-assign-hbtn close-btn" id="flow-assign-close" title="Fechar">✕</button>
@@ -7593,7 +7710,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
     const used = new Set();
 
     try {
-        logFn(`Iniciando nomeação automática de ${slots.length} ${mediaLabel}(s).`, 'info');
+        logFn(`Preparando caixas para ${slots.length} ${mediaLabel}(s).`, 'info');
 
         for (const slot of slots) {
             if ((isVideo && this.videoShouldStop) || (!isVideo && this.shouldStop)) break;
@@ -7623,7 +7740,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
 
             statusFn(
                 'info',
-                `🏷️ Nomeando ${mediaLabel}s automaticamente: ${assigned}/${slots.length}`
+                `📌 Montando caixas de ${mediaLabel}: ${assigned}/${slots.length}`
             );
 
             await this.sleep(500);
@@ -7631,10 +7748,10 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
 
         statusFn(
             'success',
-            `✅ ${assigned} ${mediaLabel}(s) nomeada(s) automaticamente.${failed ? ` Falhas: ${failed}.` : ''}`
+            `✅ ${assigned} caixa(s) de ${mediaLabel} preparada(s). Clique em “Renomear selecionadas”.${failed ? ` Não identificadas: ${failed}.` : ''}`
         );
 
-        logFn(`✅ Nomeação automática concluída: ${assigned} sucesso(s), ${failed} falha(s).`, 'success');
+        logFn(`✅ Leitura concluída: ${assigned} caixa(s) preparada(s), ${failed} não identificada(s).`, failed ? 'warning' : 'success');
 
     } finally {
         this._videoAssignActive = previousVideoAssignState;
