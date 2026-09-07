@@ -261,8 +261,13 @@
       numeroDaCenaNoTexto(texto) {
         const s = norm(texto);
         if (!s) return null;
-        const marcado = s.match(/^\s*[{[(]\s*(?:cena|prompt|scene)\s*([0-9]+(?:[.,][0-9]+)?)\s*[}\])]/i);
+        // {cena 12}, [cena 12], (cena 12), [12], {12}, (12)
+        const marcado = s.match(/^\s*[{[(]\s*(?:cena|prompt|scene)?\s*([0-9]+(?:[.,][0-9]+)?)\s*[}\])]/i);
         if (marcado) return Number(String(marcado[1]).replace(',', '.'));
+        // "Cena 12 - ...", "Cena 12: ...", "Prompt 12: ...", "Scene 12: ..."
+        const palavraCena = s.match(/^\s*(?:cena|prompt|scene)\s*([0-9]+(?:[.,][0-9]+)?)\b(?:\s*[-–—.:)]|\s+)/i);
+        if (palavraCena) return Number(String(palavraCena[1]).replace(',', '.'));
+        // "12 - ...", "12. ...", "12) ...", "12: ..."
         const prefixo = s.match(/^\s*([0-9]{1,4}(?:[.,][0-9]+)?)\s*[-–—.):]\s+/);
         if (prefixo) return Number(String(prefixo[1]).replace(',', '.'));
         return null;
@@ -281,10 +286,20 @@
           const rotulo = norm(b.getAttribute('aria-label') || b.getAttribute('title'));
           return icone === 'redo' || /reutilizar|reuse|usar novamente/i.test(rotulo);
         });
-        if (!botao) return '';
 
         try {
-          botao.click();
+          if (botao) {
+            botao.click();
+          } else {
+            // Se não tem botão direto no card, abre o menu da mídia e clica em Reuse prompt
+            await this.openTileMenu(tile);
+            const item = menuItem(['Reuse prompt', 'Reutilizar comando', 'Reutilizar', 'Reuse']);
+            if (!item) {
+              await this.closeMenus();
+              return '';
+            }
+            item.click();
+          }
           const editor = await this.modernWait(() => this.getEditor(), 3000);
           // MEDIDO AO VIVO: o prompt cai na caixa em ~210ms. Conferimos a cada
           // 40ms para nao perder tempo, com 2s de teto por seguranca.
@@ -299,6 +314,8 @@
         } catch (_) {
           try { await this.clearEditor(); } catch (__) {}
           return '';
+        } finally {
+          await this.closeMenus();
         }
       },
       async findAsset(name, type = 'image') {
@@ -888,10 +905,30 @@
         return true;
       },
       async closeMenus() {
-        const active = document.activeElement;
-        active?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
-        $$('.cdk-overlay-backdrop').filter(visible).forEach(el => el.click());
-        await this.pausa(150);
+        try {
+          const escEvent = () => new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true });
+          document.activeElement?.dispatchEvent(escEvent());
+          document.dispatchEvent(escEvent());
+          window.dispatchEvent(escEvent());
+          document.body?.dispatchEvent(escEvent());
+
+          const backdrops = $('.cdk-overlay-backdrop');
+          backdrops.forEach(el => {
+            try { el.click(); } catch (_) {}
+          });
+
+          // Se ainda houver menu aberto no overlay, fecha ou esconde imediatamente para nunca travar na tela
+          const menus = $('[role="menu"]').filter(visible);
+          if (menus.length) {
+            document.body?.click();
+            await this.sleep(40);
+            menus.forEach(m => {
+              const pane = m.closest('.cdk-overlay-pane') || m;
+              if (pane && pane.style) pane.style.display = 'none';
+            });
+          }
+        } catch (_) {}
+        await this.pausa(80);
       },
       /**
        * Renomeia. Tenta primeiro a API do Flow (um PATCH — era assim antes da
@@ -900,7 +937,7 @@
        */
       /** Id sintetico de video (video-xxxx) nao existe na API do Flow. */
       idServeNaApi(id) { return !!id && !/^video-/i.test(String(id)); },
-      async apiRename(id, name) {
+      async apiRename(id, name, tileOptional = null) {
         if (this.idServeNaApi(id) && this._apiRenomearVale !== false && old.apiRename) {
           try {
             const deu = await old.apiRename.call(this, id, name);
@@ -917,26 +954,31 @@
             this.logDebug('A API de renomear não respondeu; usando o menu da mídia (mais lento).', 'warning');
           }
         }
-        return this.renomearPeloMenu(id, name);
+        return this.renomearPeloMenu(id, name, tileOptional);
       },
 
-      async renomearPeloMenu(id, name) {
+      async renomearPeloMenu(id, name, tileOptional = null) {
         try {
-          const tile = await this.scrollToWorkflow(id);
+          const tile = (tileOptional && tileOptional.isConnected) ? tileOptional : (await this.scrollToWorkflow(id));
           if (!tile) throw new Error('Mídia não encontrada para renomear.');
           if (this.getTileName(tile) === name) return true;
           await this.openTileMenu(tile);
           const rename = menuItem(['Rename', 'Renomear']);
           if (!rename) throw new Error('Comando Renomear não encontrado.');
           rename.click();
-          const form = await this.modernWait(() => $$('.cdk-overlay-pane flow-editable-text').find(visible));
+          const form = await this.modernWait(() => $('.cdk-overlay-pane flow-editable-text, flow-editable-text').find(visible));
           setInput($('input', form), name);
-          const done = $('button[aria-label="Done"]', form) || $$('button', form).find(b => norm($('mat-icon', b)?.textContent) === 'done');
+          const done = $('button[aria-label="Done"]', form) || $('button', form).find(b => norm($('mat-icon', b)?.textContent) === 'done');
           if (!done) throw new Error('Confirmação de renomeação não encontrada.');
           done.click();
           await this.modernWait(() => this.getTiles().some(t => this.getUuidFromTile(t) === id && this.getTileName(t) === name));
           return true;
-        } catch (error) { this.logDebug(`Renomear: ${error.message}`, 'error'); await this.closeMenus(); return false; }
+        } catch (error) {
+          this.logDebug(`Renomear: ${error.message}`, 'error');
+          return false;
+        } finally {
+          await this.closeMenus();
+        }
       },
       async apiFavorite(id, value) {
         if (this.idServeNaApi(id) && this._apiFavoritarVale !== false && old.apiFavorite) {
@@ -2102,7 +2144,7 @@
           const d = document.createElement('div');
           d.style.cssText = 'font-size:12px;padding:3px 8px;border-radius:6px;margin-bottom:3px;' +
             'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' +
-            (cor === 'erro' ? 'background:#fef2f2;color:#991b1b;' : 'background:#dcfce7;color:#166534;');
+            (cor === 'erro' ? 'background:#fef2f2;color:#991b1b;' : (cor === 'aviso' ? 'background:#fef3c7;color:#92400e;' : 'background:#dcfce7;color:#166534;'));
           d.textContent = texto;
           painel.appendChild(d);
           painel.scrollTop = painel.scrollHeight;
@@ -2112,26 +2154,47 @@
         if (painel) painel.innerHTML = '';
         progresso(0);
 
+        const btnStart = document.getElementById('rn-start');
+        const btnAnalisar = document.getElementById('rn-analisar');
+        const btnStop = document.getElementById('rn-stop');
+        if (btnStart) btnStart.disabled = true;
+        if (btnAnalisar) btnAnalisar.disabled = true;
+        if (btnStop) btnStop.disabled = false;
+
+        // Pré-carrega todos os prompts digitados em ambas as abas (Vídeos e Imagens)
+        const fvInput = document.getElementById('fv-prompts-input')?.value || '';
+        const flowInput = document.getElementById('flow-prompts-input')?.value || '';
+        const parsedPrompts = [
+          ...parsePromptsText(fvInput),
+          ...parsePromptsText(flowInput)
+        ];
+
+        const contador = new Map();
+        const plano = [];
+        const vistos = new Set();
+        let ok = 0, falhou = 0, semCena = 0, totalProcessados = 0;
+
+        aviso(apenasAnalisar ? '🔎 Analisando galeria...' : '🏷️ Varrendo e renomeando vídeos e imagens...');
+
         try {
-          // ── 1. VARREDURA: coleta na ORDEM em que aparecem, de cima para baixo
-          aviso('🔎 Varrendo a galeria...');
-          const coletadas = [];
-          const vistos = new Set();
           await this.scanGallery(async (entry, tile) => {
             if (this.renomearParar) return false;
             if (!entry.uuid || !entry.loaded || vistos.has(entry.uuid)) return;
             if (escopo === 'imagens' && entry.isVideo) return;
             if (escopo === 'videos' && !entry.isVideo) return;
             vistos.add(entry.uuid);
+            totalProcessados++;
 
-            let cena = null, origem = null;
-            // 1. Já está nomeada? (ex: "Cena 1 - Imagem 1")
+            let cena = null, origem = null, imgNumExistente = null;
+
+            // 1. Já está nomeada? (ex: "Cena 1 - Vídeo 1" ou "Cena 1 - Imagem 2")
             const jaNomeada = lerNomeModelo(entry.name) || sceneInfo(entry.name);
             if (jaNomeada) {
               cena = jaNomeada.sceneNum;
+              imgNumExistente = jaNomeada.imgNum;
               origem = 'nome';
             } else {
-              // 2. Número da cena no rótulo/título visível do card (ex: "1 - Homem...", "{cena 1}...")
+              // 2. Número da cena no rótulo visível do card (ex: "1 - Homem...", "{cena 1}...")
               const doRotulo = this.numeroDaCenaNoTexto(entry.name);
               if (doRotulo != null) {
                 cena = doRotulo;
@@ -2151,9 +2214,9 @@
                   cena = cenaAngular;
                   origem = 'angular';
                 } else {
-                  // 4. Hover rápido (1.2s máx)
+                  // 4. Hover rápido
                   try {
-                    const promptHover = await this.promptPorHover(tile, 1200);
+                    const promptHover = await this.promptPorHover(tile, 800);
                     const doHover = this.numeroDaCenaNoTexto(promptHover);
                     if (doHover != null) {
                       cena = doHover;
@@ -2164,109 +2227,136 @@
               }
             }
 
-            coletadas.push({ uuid: entry.uuid, name: entry.name, isVideo: entry.isVideo, cena, origem });
-            aviso('🔎 Varrendo a galeria... <b>' + coletadas.length + '</b> mídia(s)');
-          }, { completo: true });
-
-          if (this.renomearParar) { aviso('⏹ Parado por você.', 'warning'); return; }
-          if (!coletadas.length) { aviso('Nenhuma mídia encontrada nesta tela.', 'warning'); return; }
-
-          // ── 2. NÚMERO DA CENA: caso ainda haja mídias sem número, tenta casar com os prompts digitados
-          aviso('🔎 Identificando cenas de ' + coletadas.length + ' mídia(s)...');
-          const promptsInput = document.getElementById('flow-prompts-input')?.value || document.getElementById('fv-prompts-input')?.value || '';
-          const parsedPrompts = parsePromptsText(promptsInput);
-          if (parsedPrompts.length > 0) {
-            for (const item of coletadas) {
-              if (item.cena != null) continue;
-              const match = parsedPrompts.find(p => norm(p.text).toLowerCase() === norm(item.name).toLowerCase());
-              if (match && match.promptNum) {
-                item.cena = match.promptNum;
-                item.origem = 'prompt_digitado';
+            // 5. Se ainda não achou a cena e temos o tile na tela: USAR REUTILIZAR COMANDO (redo)
+            if (cena == null && tile) {
+              try {
+                aviso('🔎 Identificando cena do ' + (entry.isVideo ? 'vídeo' : 'card') + ' ' + totalProcessados + '...');
+                const textoReutilizar = await this.promptViaReutilizar(tile);
+                await this.closeMenus();
+                if (textoReutilizar) {
+                  const doReut = this.numeroDaCenaNoTexto(textoReutilizar);
+                  if (doReut != null) {
+                    cena = doReut;
+                    origem = 'reutilizar';
+                  } else if (parsedPrompts.length > 0) {
+                    // Tenta casar o texto lido do editor com os prompts digitados
+                    const limpoReut = norm(textoReutilizar).toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (limpoReut.length >= 10) {
+                      const match = parsedPrompts.find(p => {
+                        const limpoP = norm(p.text).toLowerCase().replace(/[^a-z0-9]/g, '');
+                        return limpoP === limpoReut ||
+                          (limpoP.length >= 15 && limpoReut.includes(limpoP.slice(0, 30))) ||
+                          (limpoReut.length >= 15 && limpoP.includes(limpoReut.slice(0, 30)));
+                      });
+                      if (match) {
+                        const n = this.numeroDaCenaNoTexto(match.text);
+                        cena = n != null ? n : match.promptNum;
+                        origem = 'reutilizar_match';
+                      }
+                    }
+                  }
+                }
+              } catch (_) {
+                await this.closeMenus();
               }
             }
-          }
 
-          const semNumero = coletadas.filter(x => x.cena == null);
-          const porOrigem = {};
-          coletadas.forEach(x => { if (x.origem) porOrigem[x.origem] = (porOrigem[x.origem] || 0) + 1; });
-          this.logDebug('🔎 Números encontrados por: ' +
-            (Object.entries(porOrigem).map(([k, v]) => k + '=' + v).join(' · ') || 'nenhum'), 'info');
+            // 6. Se ainda não achou, tenta casar entry.name contra parsedPrompts
+            if (cena == null && parsedPrompts.length > 0 && entry.name) {
+              const limpoName = norm(entry.name).toLowerCase().replace(/[^a-z0-9]/g, '');
+              if (limpoName.length >= 10) {
+                const match = parsedPrompts.find(p => {
+                  const limpoP = norm(p.text).toLowerCase().replace(/[^a-z0-9]/g, '');
+                  return limpoP === limpoName ||
+                    (limpoP.length >= 15 && limpoName.includes(limpoP.slice(0, 25))) ||
+                    (limpoName.length >= 15 && limpoP.includes(limpoName.slice(0, 25)));
+                });
+                if (match) {
+                  const n = this.numeroDaCenaNoTexto(match.text);
+                  cena = n != null ? n : match.promptNum;
+                  origem = 'nome_match';
+                }
+              }
+            }
 
-          if (semNumero.length) {
-            this.logDebug('🔎 ' + semNumero.length + ' mídia(s) sem número de cena identificado.', 'warning');
-          }
-          progresso(0.4);
+            // Se identificou a cena:
+            if (cena != null) {
+              const chave = cena + '|' + (entry.isVideo ? 'v' : 'i');
+              const g = imgNumExistente || ((contador.get(chave) || 0) + 1);
+              contador.set(chave, Math.max(g, contador.get(chave) || 0));
+              const novo = montarNome(cena, g, entry.isVideo);
 
-          // ── 3. PLANO: agrupa por cena e numera as variações na ordem de aparição
-          const contador = new Map();
-          const plano = [];
-          let semCena = 0;
-          for (const item of coletadas) {
-            if (item.cena == null) { semCena++; continue; }
-            const chave = item.cena + '|' + (item.isVideo ? 'v' : 'i');
-            const g = (contador.get(chave) || 0) + 1;
-            contador.set(chave, g);
-            plano.push({ ...item, g, novo: montarNome(item.cena, g, item.isVideo) });
-          }
+              plano.push({ ...entry, cena, g, novo, origem });
 
-          const cenas = new Set(plano.map(p => p.cena)).size;
-          if (!plano.length) {
-            aviso('Não consegui ler o número da cena de nenhuma mídia. ' +
-                  'Confira se os prompts começam com o número (ex: <b>12 - ...</b> ou <b>{cena 12}</b>).', 'warning');
+              if (apenasAnalisar) {
+                linha((entry.name || 'sem nome').slice(0, 30) + ' → ' + novo);
+                aviso('🔎 Analisando: <b>' + plano.length + '</b> identificada(s)...');
+              } else {
+                // JÁ VAI RENOMEANDO PROGRESSIVAMENTE!
+                if (norm(entry.name) === norm(novo)) {
+                  ok++;
+                  linha('já estava: ' + novo);
+                } else {
+                  aviso('🏷️ Renomeando <b>' + (ok + 1) + '</b>: ' + novo);
+                  const deu = await this.apiRename(entry.uuid, novo, tile);
+                  await this.closeMenus();
+                  if (deu) {
+                    ok++;
+                    linha('✅ ' + novo);
+                    this.tileAssignments.set(entry.uuid, { label: novo, type: 'scene', scene: 'Cena ' + cena, imgNum: g });
+                    this.pintarNomeNoTile(entry.uuid, novo);
+                    this.startLabelObserver();
+                    try { await this.apiFavorite(entry.uuid, true); } catch (_) {}
+
+                    const assignments = entry.isVideo ? this.videoSceneAssignments : this.sceneAssignments;
+                    const sceneName = 'Cena ' + cena;
+                    if (!assignments.has(sceneName)) assignments.set(sceneName, []);
+                    const list = assignments.get(sceneName);
+                    const idx = list.findIndex(item => item.workflowId === entry.uuid);
+                    if (idx >= 0) list.splice(idx, 1);
+                    list.push({ imgNum: g, workflowId: entry.uuid, src: entry.src || '' });
+                  } else {
+                    falhou++;
+                    linha('❌ falhou: ' + (entry.name || entry.uuid).slice(0, 30), 'erro');
+                  }
+                }
+              }
+            } else {
+              semCena++;
+              linha('⚠️ Sem cena: ' + (entry.name || 'sem nome').slice(0, 35), 'aviso');
+            }
+
+            progresso(Math.min(0.95, totalProcessados / Math.max(10, totalProcessados + 5)));
+          }, { completo: true });
+
+          progresso(1);
+          await this.closeMenus();
+
+          if (this.renomearParar) {
+            aviso('⏹ Parado por você.' + (ok ? ' ' + ok + ' renomeada(s).' : ''), 'warning');
             return;
           }
 
           if (apenasAnalisar) {
-            aviso('🔎 <b>' + plano.length + '</b> mídia(s) em <b>' + cenas + '</b> cena(s) prontas para renomear' +
-                  (semCena ? ' · ' + semCena + ' sem número (ficam de fora)' : '') + '.', 'success');
+            const cenas = new Set(plano.map(p => p.cena)).size;
+            aviso('🔎 <b>' + plano.length + '</b> mídia(s) em <b>' + cenas + '</b> cena(s) identificadas' +
+                  (semCena ? ' · ' + semCena + ' sem número' : '') + '.', 'success');
             this.mostrarPlanoRenomear(plano);
-            progresso(1);
-            return;
+          } else {
+            const cenas = new Set(plano.map(p => p.cena)).size;
+            aviso('✅ <b>' + ok + '</b> mídia(s) renomeada(s) em <b>' + cenas + '</b> cena(s)' +
+                  (falhou ? ' · ' + falhou + ' falha(s)' : '') +
+                  (semCena ? ' · ' + semCena + ' sem número' : '') + '.', ok > 0 ? 'success' : 'warning');
           }
-
-          // ── 4. RENOMEIA
-          let ok = 0, falhou = 0;
-          for (let i = 0; i < plano.length; i++) {
-            if (this.renomearParar) { aviso('⏹ Parado por você. ' + ok + ' renomeada(s).', 'warning'); return; }
-            const p = plano[i];
-            aviso('🏷️ Renomeando <b>' + (i + 1) + '/' + plano.length + '</b> — ' + p.novo);
-            progresso(0.4 + (i / plano.length) * 0.6);
-            if (norm(p.name) === norm(p.novo)) { ok++; linha('já estava: ' + p.novo); continue; }
-            const deu = await this.apiRename(p.uuid, p.novo);
-            if (deu) {
-              ok++;
-              linha(p.novo);
-              this.tileAssignments.set(p.uuid, { label: p.novo, type: 'scene', scene: 'Cena ' + p.cena, imgNum: p.g });
-              this.pintarNomeNoTile(p.uuid, p.novo);
-              this.startLabelObserver();
-              try { await this.apiFavorite(p.uuid, true); } catch (_) {}
-
-              // Mantém o mapa de cenas atualizado para o download em ZIP logo em seguida
-              const assignments = p.isVideo ? this.videoSceneAssignments : this.sceneAssignments;
-              const sceneName = 'Cena ' + p.cena;
-              if (!assignments.has(sceneName)) assignments.set(sceneName, []);
-              const list = assignments.get(sceneName);
-              const idx = list.findIndex(item => item.workflowId === p.uuid);
-              if (idx >= 0) list.splice(idx, 1);
-              list.push({ imgNum: p.g, workflowId: p.uuid, src: p.src || '' });
-            } else {
-              falhou++;
-              linha('falhou: ' + p.name.slice(0, 40), 'erro');
-            }
-          }
-
-          progresso(1);
-          aviso('✅ <b>' + ok + '</b> mídia(s) renomeada(s) em <b>' + cenas + '</b> cena(s)' +
-                (falhou ? ' · ' + falhou + ' falha(s)' : '') +
-                (semCena ? ' · ' + semCena + ' sem número' : '') + '.', 'success');
         } catch (erro) {
           if (erro && erro.stopped) aviso('⏹ Parado por você.', 'warning');
-          else aviso('❌ ' + erro.message, 'error');
+          else aviso('❌ ' + (erro?.message || erro), 'error');
         } finally {
           this._renomeando = false;
-          const b1 = document.getElementById('rn-start'), b2 = document.getElementById('rn-stop');
-          if (b1) b1.disabled = false;
-          if (b2) b2.disabled = true;
+          if (btnStart) btnStart.disabled = false;
+          if (btnAnalisar) btnAnalisar.disabled = false;
+          if (btnStop) btnStop.disabled = true;
+          await this.closeMenus();
         }
       },
 
@@ -2575,14 +2665,15 @@
             '</div>' +
           '</div>' +
 
-          '<div class="flow-actions">' +
-            '<button id="rn-start" class="flow-btn flow-btn-primary">🔎 Analisar a galeria</button>' +
-            '<button id="rn-stop" class="flow-btn flow-btn-secondary" disabled>⏹ Parar</button>' +
+          '<div class="flow-actions" style="display:flex;gap:6px;flex-wrap:wrap;">' +
+            '<button id="rn-start" class="flow-btn flow-btn-primary" style="flex:1;min-width:140px;" title="Varre a galeria e já vai identificando e renomeando cada vídeo/imagem">🏷️ Renomear Galeria</button>' +
+            '<button id="rn-analisar" class="flow-btn flow-btn-secondary" style="flex:1;min-width:110px;" title="Apenas varre e mostra a lista sem renomear">🔎 Analisar</button>' +
+            '<button id="rn-stop" class="flow-btn flow-btn-secondary" style="width:70px;" disabled>⏹ Parar</button>' +
           '</div>' +
           '<button class="flow-validate-btn" id="rn-testar" style="display:none;">analisar</button>' +
           '<button class="flow-btn flow-btn-primary" id="rn-aplicar" style="width:100%;margin-top:6px;display:none;" disabled>✅ Aplicar renomeação</button>' +
           '<div style="font-size:11px;color:var(--cd-text-muted);margin:2px 0 8px;line-height:1.5;">' +
-            'Nada é renomeado até você clicar em <b>Aplicar</b>. Revise a lista e use o <b>✕</b> para tirar o que não quer.' +
+            'Clique em <b>🏷️ Renomear Galeria</b> para varrer, identificar e renomear diretamente, ou <b>🔎 Analisar</b> para apenas listar.' +
           '</div>' +
           '<div id="rn-status" class="flow-status"></div>' +
           '<div class="flow-progress"><div id="rn-barra" class="flow-progress-bar"></div></div>' +
@@ -2661,8 +2752,10 @@
         document.getElementById('rn-stop').disabled = false;
         alvo.renomearGaleria({ escopo, apenasAnalisar });
       };
-      // Analisar NUNCA renomeia. Aplicar e um segundo clique, seu.
-      document.getElementById('rn-start').addEventListener('click', () => rodar(true));
+      // Renomear Galeria já vai identificando e renomeando diretamente!
+      document.getElementById('rn-start').addEventListener('click', () => rodar(false));
+      const btnAnalisarEl = document.getElementById('rn-analisar');
+      if (btnAnalisarEl) btnAnalisarEl.addEventListener('click', () => rodar(true));
       document.getElementById('rn-testar').addEventListener('click', () => rodar(true));
       document.getElementById('rn-aplicar').addEventListener('click', () => {
         const alvo = root.__flowInstance;
