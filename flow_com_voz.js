@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.2   -   2026-09-07
+//  Flow NOVO v7.3   -   2026-09-08
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -9,8 +9,8 @@
 //    PARTE 1 - Compatibilidade com o Flow novo (flow.google.com, Angular)
 //    PARTE 2 - O programa principal (painel, filas, tempos, downloads)
 //
-//  v7.2: renomeacao em duas etapas, caixas persistentes, confirmacao real e
-//        fallback nativo automatico sem exibir os menus do Flow.
+//  v7.3: caixas pretas nos cards, renomeacao sequencial pelos tres pontinhos e
+//        remocao do Worker bloqueado pela politica de seguranca do Flow.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -98,7 +98,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.2 (caixas antes de renomear)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.3 (caixas pretas + menu silencioso)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1320,7 +1320,10 @@
               const tile = await this.scrollToWorkflow(id);
               tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
               this.logDebug(`🏷️ Renomeando ${i + 1}/${ids.length}: ${marca.nome}`, 'info');
-              const deu = await this.apiRename(id, marca.nome, tile);
+              // O Flow mudou a API algumas vezes. Para as caixas, usa sempre o
+              // mesmo caminho que funciona manualmente: menu de três pontinhos,
+              // Renomear e confirmação. O overlay fica invisível pelo CSS.
+              const deu = await this.renomearPeloMenu(id, marca.nome, tile);
               if (deu) {
                 ok++;
                 this.pintarNomeNoTile(id, marca.nome);
@@ -2332,7 +2335,12 @@
             caixa.checked = p.selecionado !== false;
             caixa.disabled = !!this._renomeando;
             caixa.title = 'Incluir esta mídia na renomeação';
-            caixa.addEventListener('change', () => { p.selecionado = caixa.checked; desenhar(); });
+            caixa.addEventListener('change', () => {
+              p.selecionado = caixa.checked;
+              if (caixa.checked) this.adicionarCaixaDoPlano(p);
+              else this.removerCaixaDoPlano(p);
+              desenhar();
+            });
             const texto = document.createElement('span');
             texto.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
             const icone = estado === 'renaming' ? '⏳ ' : estado === 'failed' ? '❌ ' : '📌 ';
@@ -2348,7 +2356,11 @@
             x.disabled = !!this._renomeando;
             x.title = 'Tirar esta mídia da lista';
             x.style.cssText = 'border:0;background:transparent;cursor:pointer;color:#dc2626;font-size:13px;line-height:1;padding:2px 5px;';
-            x.addEventListener('click', () => { this._planoRenomear = this._planoRenomear.filter(o => o !== p); desenhar(); });
+            x.addEventListener('click', () => {
+              this.removerCaixaDoPlano(p);
+              this._planoRenomear = this._planoRenomear.filter(o => o !== p);
+              desenhar();
+            });
             linha.appendChild(caixa); linha.appendChild(texto); linha.appendChild(x);
             painel.appendChild(linha);
           }
@@ -2361,6 +2373,76 @@
           }
         };
         desenhar();
+      },
+
+      /** Cria a etiqueta preta no card e guarda o destino por projeto. */
+      adicionarCaixaDoPlano(p) {
+        if (!p?.uuid) return;
+        const cena = 'Cena ' + p.cena;
+        this.tileAssignments.set(p.uuid, {
+          label: p.novo, type: 'scene', scene: cena, imgNum: p.g, isVideo: !!p.isVideo
+        });
+        this.marcar(p.uuid, {
+          nome: p.novo, favoritar: true, tipo: 'scene', cena,
+          imgNum: p.g, ordem: p.ordem || Date.now(), origemPlano: 'auto'
+        });
+        const tile = this.getTiles().find(t => this.getUuidFromTile(t) === p.uuid);
+        if (tile) {
+          this.addLabelToTile(tile, p.novo, p.uuid, 'scene', cena);
+          $('.flow-tile-label', tile)?.setAttribute('data-rename-state', 'pending');
+        }
+        this.startLabelObserver();
+      },
+
+      removerCaixaDoPlano(p) {
+        if (!p?.uuid) return;
+        this.desmarcar(p.uuid);
+        this.tileAssignments.delete(p.uuid);
+        this.removeLabelFromTile(p.uuid);
+      },
+
+      /** Sincroniza uma leitura inteira de uma vez, sem centenas de gravações. */
+      sincronizarPlanoComCaixas(plano) {
+        const marcas = this.lerMarcas();
+        const atuais = new Set((plano || []).map(p => p.uuid));
+
+        // Retira somente caixas automáticas de uma leitura anterior. Caixas
+        // arrastadas manualmente pelo usuário são preservadas.
+        for (const [id, marca] of Object.entries(marcas)) {
+          if (marca?.origemPlano === 'auto' && !atuais.has(id)) {
+            delete marcas[id];
+            this.tileAssignments.delete(id);
+            this.removeLabelFromTile(id);
+          }
+        }
+
+        const agora = Date.now();
+        (plano || []).forEach((p, indice) => {
+          if (!p?.uuid || p.selecionado === false) return;
+          const cena = 'Cena ' + p.cena;
+          const anterior = marcas[p.uuid];
+          marcas[p.uuid] = {
+            original: anterior?.original || p.name || '',
+            nome: p.novo,
+            favoritar: true,
+            tipo: 'scene',
+            cena,
+            imgNum: p.g,
+            ordem: agora + indice,
+            origemPlano: 'auto'
+          };
+          this.tileAssignments.set(p.uuid, {
+            label: p.novo, type: 'scene', scene: cena, imgNum: p.g, isVideo: !!p.isVideo
+          });
+          const tile = this.getTiles().find(t => this.getUuidFromTile(t) === p.uuid);
+          if (tile) {
+            this.addLabelToTile(tile, p.novo, p.uuid, 'scene', cena);
+            $('.flow-tile-label', tile)?.setAttribute('data-rename-state', 'pending');
+          }
+        });
+        this.salvarMarcas(marcas);
+        this.startLabelObserver();
+        this.updateAssignCount();
       },
 
       /** Aplica o que sobrou na lista depois das suas remocoes. */
@@ -2377,31 +2459,39 @@
         const botao = document.getElementById('rn-aplicar');
         if (botao) botao.disabled = true;
         let ok = 0, falhou = 0;
+        const marcas = this.lerMarcas();
         try {
           for (let i = 0; i < plano.length; i++) {
             if (this.renomearParar) { aviso('⏹ Parado por você. ' + ok + ' renomeada(s).', 'warning'); return; }
             const p = plano[i];
             const atual = this._planoRenomear.find(o => o.uuid === p.uuid);
             if (atual) atual.estado = 'renaming';
+            const tile = await this.scrollToWorkflow(p.uuid);
+            tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
             this.mostrarPlanoRenomear(this._planoRenomear);
             aviso('🏷️ Renomeando <b>' + (i + 1) + '/' + plano.length + '</b> — ' + p.novo);
             if (barra) barra.style.width = Math.round((i / plano.length) * 100) + '%';
             if (norm(p.name) === norm(p.novo)) {
               ok++;
+              delete marcas[p.uuid];
+              tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
               this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
               continue;
             }
-            if (await this.apiRename(p.uuid, p.novo)) {
+            if (await this.renomearPeloMenu(p.uuid, p.novo, tile)) {
               ok++;
               this.tileAssignments.set(p.uuid, { label: p.novo, type: 'scene', scene: 'Cena ' + p.cena, imgNum: p.g });
               this.pintarNomeNoTile(p.uuid, p.novo);
               this.startLabelObserver();
               try { await this.apiFavorite(p.uuid, true); } catch (_) {}
+              delete marcas[p.uuid];
+              tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
               this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
             } else {
               falhou++;
               const pendente = this._planoRenomear.find(o => o.uuid === p.uuid);
               if (pendente) pendente.estado = 'failed';
+              tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'failed'));
             }
           }
           if (barra) barra.style.width = '100%';
@@ -2409,6 +2499,7 @@
         } catch (erro) {
           aviso('❌ ' + erro.message, 'error');
         } finally {
+          this.salvarMarcas(marcas);
           this._renomeando = false;
           this.mostrarPlanoRenomear(this._planoRenomear || []);
         }
@@ -2630,6 +2721,7 @@
             const cenas = new Set(plano.map(p => p.cena)).size;
             aviso('🔎 <b>' + plano.length + '</b> mídia(s) em <b>' + cenas + '</b> cena(s) identificadas' +
                   (semCena ? ' · ' + semCena + ' sem número' : '') + '.', 'success');
+            this.sincronizarPlanoComCaixas(plano);
             this.mostrarPlanoRenomear(plano);
           } else {
             const cenas = new Set(plano.map(p => p.cena)).size;
@@ -3281,7 +3373,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.2 (com Relatório)',
+        versao: 'Flow NOVO v7.3 (caixas pretas + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -3365,7 +3457,7 @@
         '.flow-assign-item.assigned .drag-icon{color:#16a34a!important;}',
         '.flow-assign-item.rename-pending{background:#fef3c7!important;border-color:#f59e0b!important;color:#92400e!important;}',
         '.flow-assign-item.rename-pending .assign-name,.flow-assign-item.rename-pending .assign-status{color:#92400e!important;font-weight:800!important;}',
-        '.flow-tile-label[data-rename-state="pending"]{background:#fef3c7!important;color:#92400e!important;border-color:#f59e0b!important;}',
+        '.flow-tile-label[data-rename-state="pending"]{background:rgba(0,0,0,.88)!important;color:#fff!important;border:1px solid rgba(255,255,255,.35)!important;box-shadow:0 2px 8px rgba(0,0,0,.45)!important;}',
         '.flow-tile-label[data-rename-state="renaming"]{background:#dbeafe!important;color:#1d4ed8!important;border-color:#3b82f6!important;}',
         '.flow-tile-label[data-rename-state="confirmed"]{background:#dcfce7!important;color:#166534!important;border-color:#22c55e!important;}',
         '.flow-tile-label[data-rename-state="failed"]{background:#fee2e2!important;color:#991b1b!important;border-color:#ef4444!important;}',
@@ -3758,46 +3850,17 @@
     // requestAnimationFrame PARA quando a aba não está visível (minimizada / em
     // segundo plano) — isso travava a automação. Esta versão resolve pelo rAF
     // quando dá, ou por um setTimeout de plano B quando o rAF está congelado.
-    // O Chrome FREIA setTimeout (mínimo ~1s) em aba oculta/minimizada. Timers
-    // dentro de um Web Worker NÃO sofrem esse freio — então toda a espera da
-    // automação passa por aqui e roda em velocidade cheia mesmo minimizado.
-    let _timerWorker = null, _timerSeq = 0;
-    const _timerWaiters = new Map();
+    // O Flow atual proíbe Worker criado por blob: na Content Security Policy.
+    // Não tentamos mais criá-lo, evitando o erro vermelho do console. As esperas
+    // usam setTimeout e o MessageChannel abaixo para devolver o controle ao app.
+    let _timerWorker = false;
     function getTimerWorker() {
-        if (_timerWorker !== null) return _timerWorker;
-        try {
-            const src = 'self.onmessage=function(e){setTimeout(function(){self.postMessage(e.data.id);},e.data.ms);};';
-            const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'application/javascript' })));
-            w.onmessage = ev => {
-                const done = _timerWaiters.get(ev.data);
-                if (done) { _timerWaiters.delete(ev.data); done(); }
-            };
-            _timerWorker = w;
-        } catch (_) {
-            _timerWorker = false;   // sem worker: cai no setTimeout normal
-        }
         return _timerWorker;
     }
 
     function wait(ms) {
-        const w = getTimerWorker();
-        if (!w) return new Promise(r => setTimeout(r, ms));
-        return new Promise(resolve => {
-            const id = ++_timerSeq;
-            _timerWaiters.set(id, resolve);
-            // rede de segurança: se o worker não responder, destrava assim mesmo
-            setTimeout(() => {
-                if (!_timerWaiters.has(id)) return;
-                _timerWaiters.delete(id);
-                if (_timerWorker) {
-                    try { _timerWorker.terminate(); } catch (_) {}
-                    _timerWorker = false;
-                    console.warn('[Flow] O Flow bloqueou o timer em Worker; usando setTimeout.');
-                }
-                resolve();
-            }, ms + 250);
-            w.postMessage({ id, ms });
-        });
+        getTimerWorker();
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     // Cede a vez para o React terminar de reconciliar. MessageChannel é o mesmo
@@ -5148,7 +5211,7 @@ this.validatedRefs[this.referenceKey(ref)] = true;
         // HELPERS
         // ──────────────────────────────────────────────
 
-        sleep(ms) { return wait(ms); }   // via Web Worker: não é freado minimizado
+        sleep(ms) { return wait(ms); }   // compatível com a CSP atual do Flow
 
         dynamicSleep(val) {
             // Minimizado o React não tem frames pra reconciliar; um respiro extra
