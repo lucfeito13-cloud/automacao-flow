@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.6   -   2026-09-08
+//  Flow NOVO v7.7   -   2026-09-08
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -9,8 +9,8 @@
 //    PARTE 1 - Compatibilidade com o Flow novo (flow.google.com, Angular)
 //    PARTE 2 - O programa principal (painel, filas, tempos, downloads)
 //
-//  v7.6: leitura passiva e invisivel; nunca clica em Reutilizar comando durante
-//        analise ou enumeracao.
+//  v7.7: renomeia todos os selecionados usando UUID real, confirmacao HTTP,
+//        fallback pelos tres pontinhos e tres rodadas para falhas transitorias.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -98,7 +98,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.6 (leitura invisível sem Reutilizar)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.7 (renomeação confirmada com repetição)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1005,10 +1005,50 @@
         return ok;
       },
 
+      /** Obtém o UUID persistente do workflow, inclusive para vídeos. */
+      workflowIdReal(tile, idConhecido = '') {
+        try {
+          const viaOriginal = old.getWorkflowIdFromTile?.call(this, tile);
+          if (/^[a-f0-9-]{36}$/i.test(viaOriginal || '')) return viaOriginal;
+        } catch (_) {}
+        try {
+          const href = tile?.querySelector('a[href*="/edit/"]')?.href || '';
+          const achou = href.match(/\/edit\/([a-f0-9-]{36})/i);
+          if (achou) return achou[1];
+        } catch (_) {}
+        return /^[a-f0-9-]{36}$/i.test(idConhecido || '') ? idConhecido : '';
+      },
+
+      /**
+       * Confirma pelo endpoint do Flow quando existe UUID real. Se o endpoint
+       * não aceitar, usa a interface nativa dos três pontinhos.
+       */
+      async renomearSelecionadoConfirmado(id, name, tileOptional = null) {
+        let tile = tileOptional;
+        if (!tile?.isConnected || this.getUuidFromTile(tile) !== id) {
+          tile = await this.scrollToWorkflow(id);
+        }
+        if (!tile) return false;
+
+        const realId = this.workflowIdReal(tile, id);
+        if (realId && old.apiRename) {
+          try {
+            const confirmado = await old.apiRename.call(this, realId, name);
+            if (confirmado) {
+              this.pintarNomeNoTile(id, name);
+              return true;
+            }
+          } catch (_) {}
+        }
+
+        return this.renomearPeloMenu(id, name, tile);
+      },
+
       async renomearPeloMenu(id, name, tileOptional = null) {
         document.documentElement.classList.add('flow-rename-silent');
         try {
-          const tile = (tileOptional && tileOptional.isConnected) ? tileOptional : (await this.scrollToWorkflow(id));
+          const tileValido = tileOptional && tileOptional.isConnected && this.getUuidFromTile(tileOptional) === id;
+          const tile = tileValido ? tileOptional : (await this.scrollToWorkflow(id));
           if (!tile) throw new Error('Mídia não encontrada para renomear.');
           if (this.getTileName(tile) === name) return true;
 
@@ -1283,10 +1323,7 @@
               const tile = await this.scrollToWorkflow(id);
               tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
               this.logDebug(`🏷️ Renomeando ${i + 1}/${ids.length}: ${marca.nome}`, 'info');
-              // O Flow mudou a API algumas vezes. Para as caixas, usa sempre o
-              // mesmo caminho que funciona manualmente: menu de três pontinhos,
-              // Renomear e confirmação. O overlay fica invisível pelo CSS.
-              const deu = await this.renomearPeloMenu(id, marca.nome, tile);
+              const deu = await this.renomearSelecionadoConfirmado(id, marca.nome, tile);
               if (deu) {
                 ok++;
                 this.pintarNomeNoTile(id, marca.nome);
@@ -2414,8 +2451,8 @@
 
       /** Aplica o que sobrou na lista depois das suas remocoes. */
       async aplicarPlanoRenomear() {
-        const plano = (this._planoRenomear || []).filter(p => p.selecionado !== false);
-        if (!plano.length || this._renomeando) return;
+        const selecionados = (this._planoRenomear || []).filter(p => p.selecionado !== false);
+        if (!selecionados.length || this._renomeando) return;
         this._renomeando = true;
         this.renomearParar = false;
         const aviso = (m, tipo) => {
@@ -2425,44 +2462,74 @@
         const barra = document.getElementById('rn-barra');
         const botao = document.getElementById('rn-aplicar');
         if (botao) botao.disabled = true;
-        let ok = 0, falhou = 0;
+        this.mostrarPlanoRenomear(this._planoRenomear || []);
+        let ok = 0;
+        let pendentes = selecionados.slice();
         const marcas = this.lerMarcas();
         try {
-          for (let i = 0; i < plano.length; i++) {
-            if (this.renomearParar) { aviso('⏹ Parado por você. ' + ok + ' renomeada(s).', 'warning'); return; }
-            const p = plano[i];
-            const atual = this._planoRenomear.find(o => o.uuid === p.uuid);
-            if (atual) atual.estado = 'renaming';
-            const tile = await this.scrollToWorkflow(p.uuid);
-            tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
-            this.mostrarPlanoRenomear(this._planoRenomear);
-            aviso('🏷️ Renomeando <b>' + (i + 1) + '/' + plano.length + '</b> — ' + p.novo);
-            if (barra) barra.style.width = Math.round((i / plano.length) * 100) + '%';
-            if (norm(p.name) === norm(p.novo)) {
-              ok++;
-              delete marcas[p.uuid];
-              tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
-              this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
-              continue;
+          rodadas: for (let rodada = 1; rodada <= 3 && pendentes.length; rodada++) {
+            const falharamNestaRodada = [];
+            const filaDaRodada = pendentes.slice();
+
+            for (let i = 0; i < filaDaRodada.length; i++) {
+              if (this.renomearParar) {
+                pendentes = falharamNestaRodada.concat(filaDaRodada.slice(i));
+                break rodadas;
+              }
+
+              const p = filaDaRodada[i];
+              const atual = this._planoRenomear.find(o => o.uuid === p.uuid);
+              if (atual) atual.estado = 'renaming';
+              aviso('🏷️ Rodada <b>' + rodada + '/3</b> · ' + (i + 1) + '/' + filaDaRodada.length + ' — ' + p.novo);
+              if (barra) barra.style.width = Math.round((ok / selecionados.length) * 100) + '%';
+
+              let tile = null;
+              let deu = false;
+              try {
+                tile = await this.scrollToWorkflow(p.uuid);
+                tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
+                deu = norm(p.name) === norm(p.novo)
+                  ? true
+                  : await this.renomearSelecionadoConfirmado(p.uuid, p.novo, tile);
+              } catch (erroItem) {
+                this.logDebug('Tentativa ' + rodada + ' falhou em ' + p.novo + ': ' + (erroItem?.message || erroItem), 'warning');
+              }
+
+              if (deu) {
+                ok++;
+                this.tileAssignments.set(p.uuid, { label: p.novo, type: 'scene', scene: 'Cena ' + p.cena, imgNum: p.g });
+                this.pintarNomeNoTile(p.uuid, p.novo);
+                this.startLabelObserver();
+                try { await this.apiFavorite(p.uuid, true); } catch (_) {}
+                delete marcas[p.uuid];
+                tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
+                this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
+                if (ok % 20 === 0) this.salvarMarcas(marcas);
+              } else {
+                falharamNestaRodada.push(p);
+                const pendente = this._planoRenomear.find(o => o.uuid === p.uuid);
+                if (pendente) pendente.estado = 'failed';
+                tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'failed'));
+              }
             }
-            if (await this.renomearPeloMenu(p.uuid, p.novo, tile)) {
-              ok++;
-              this.tileAssignments.set(p.uuid, { label: p.novo, type: 'scene', scene: 'Cena ' + p.cena, imgNum: p.g });
-              this.pintarNomeNoTile(p.uuid, p.novo);
-              this.startLabelObserver();
-              try { await this.apiFavorite(p.uuid, true); } catch (_) {}
-              delete marcas[p.uuid];
-              tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
-              this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
-            } else {
-              falhou++;
-              const pendente = this._planoRenomear.find(o => o.uuid === p.uuid);
-              if (pendente) pendente.estado = 'failed';
-              tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'failed'));
+
+            pendentes = falharamNestaRodada;
+            this.mostrarPlanoRenomear(this._planoRenomear || []);
+            this.salvarMarcas(marcas);
+            if (pendentes.length && rodada < 3) {
+              aviso('🔁 <b>' + pendentes.length + '</b> pendente(s). Preparando nova rodada automática...', 'warning');
+              await this.sleep(1200);
             }
           }
+
           if (barra) barra.style.width = '100%';
-          aviso((falhou ? '⚠️ ' : '✅ ') + '<b>' + ok + '</b> mídia(s) renomeada(s)' + (falhou ? ' · ' + falhou + ' continuaram marcadas para tentar novamente' : '') + '.', falhou ? 'warning' : 'success');
+          if (this.renomearParar) {
+            aviso('⏹ Parado por você: <b>' + ok + '</b> confirmada(s) · <b>' + pendentes.length + '</b> ainda selecionada(s).', 'warning');
+          } else {
+            aviso((pendentes.length ? '⚠️ ' : '✅ ') + '<b>' + ok + '/' + selecionados.length + '</b> selecionada(s) confirmada(s)' +
+              (pendentes.length ? ' · ' + pendentes.length + ' continuam marcadas após 3 tentativas' : ' · todas concluídas') + '.',
+              pendentes.length ? 'warning' : 'success');
+          }
         } catch (erro) {
           aviso('❌ ' + erro.message, 'error');
         } finally {
@@ -3324,7 +3391,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.6 (leitura invisível + Relatório)',
+        versao: 'Flow NOVO v7.7 (confirmação e repetição + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
