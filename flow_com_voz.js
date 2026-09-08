@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.4   -   2026-09-08
+//  Flow NOVO v7.5   -   2026-09-08
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -9,8 +9,8 @@
 //    PARTE 1 - Compatibilidade com o Flow novo (flow.google.com, Angular)
 //    PARTE 2 - O programa principal (painel, filas, tempos, downloads)
 //
-//  v7.4: varredura completa sem teto de 3 minutos, caixas progressivas e nenhuma
-//        recarga automatica durante processos longos.
+//  v7.5: libera checkboxes e o botao Renomear selecionadas assim que a leitura
+//        de galerias grandes termina.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -98,7 +98,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.4 (galerias grandes sem corte)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.5 (seletor liberado ao concluir)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -2767,6 +2767,10 @@
           if (btnStart) btnStart.disabled = false;
           if (btnAnalisar) btnAnalisar.disabled = false;
           if (btnStop) btnStop.disabled = true;
+          // O plano era desenhado ainda dentro do try, quando _renomeando=true;
+          // por isso checkboxes e botão final ficavam presos como desativados.
+          // Redesenha após liberar o estado para ficarem clicáveis imediatamente.
+          if (this._planoRenomear) this.mostrarPlanoRenomear(this._planoRenomear);
           await this.closeMenus();
         }
       },
@@ -3403,7 +3407,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.4 (galerias grandes + Relatório)',
+        versao: 'Flow NOVO v7.5 (seletor liberado + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
