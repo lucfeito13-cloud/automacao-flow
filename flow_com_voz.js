@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.3   -   2026-09-08
+//  Flow NOVO v7.4   -   2026-09-08
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -9,8 +9,8 @@
 //    PARTE 1 - Compatibilidade com o Flow novo (flow.google.com, Angular)
 //    PARTE 2 - O programa principal (painel, filas, tempos, downloads)
 //
-//  v7.3: caixas pretas nos cards, renomeacao sequencial pelos tres pontinhos e
-//        remocao do Worker bloqueado pela politica de seguranca do Flow.
+//  v7.4: varredura completa sem teto de 3 minutos, caixas progressivas e nenhuma
+//        recarga automatica durante processos longos.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -98,7 +98,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.3 (caixas pretas + menu silencioso)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.4 (galerias grandes sem corte)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -833,14 +833,18 @@
           errorReason: errReason
         };
       },
-      async scanGallery(visit, { restore = true, completo = false, aoAndar = null, maxMs = 0 } = {}) {
+      async scanGallery(visit, { restore = true, completo = false, aoAndar = null, maxMs = 0, revisarSubida = false } = {}) {
         const scroller = this.getScroller();
         if (!scroller) throw new Error('Galeria do projeto não encontrada. Volte à tela de mídias.');
         const originalTop = scroller.scrollTop;
         const entries = new Map();
         const inicio = Date.now();
-        const TETO = maxMs || (completo ? 180000 : 60000);
+        // Uma leitura com Reutilizar comando pode levar vários minutos em 800+
+        // mídias. O antigo teto de 180 s devolvia uma lista parcial como se fosse
+        // completa. No modo completo só há limite quando o chamador o informa.
+        const TETO = maxMs > 0 ? maxMs : (completo ? Infinity : 300000);
         let settledBottom = 0;
+        let bottomSignature = '';
         scroller.scrollTop = 0;
 
         // Espera a grade desenhar. No modo COMPLETO espera ela PARAR de mudar,
@@ -883,13 +887,28 @@
             await esperarGrade();
             if (!(await colher())) return [...entries.values()];
             if (!this.rolarUmPedaco(scroller, completo ? 0.45 : 0.65, false)) {
-              if (++settledBottom >= 2) break;
-            } else settledBottom = 0;
+              const assinaturaFundo = entries.size + '|' + Math.round(scroller.scrollHeight);
+              if (assinaturaFundo !== bottomSignature) {
+                bottomSignature = assinaturaFundo;
+                settledBottom = 0;
+              } else {
+                settledBottom++;
+              }
+              // No Flow a próxima página virtual pode chegar depois que a barra
+              // já encostou no fundo. Exigimos 2 s sem itens/altura novos antes
+              // de declarar concluída uma galeria grande.
+              if (completo) await this.pausa(250);
+              if (settledBottom >= (completo ? 8 : 2)) break;
+            } else {
+              settledBottom = 0;
+              bottomSignature = '';
+            }
           }
 
-          // ── Subida (so no modo completo): pega o que a lista virtualizada
-          //    nao chegou a desenhar na descida. ──
-          if (completo) {
+          // A descida usa sobreposição de 55% e espera a grade estabilizar, então
+          // captura todas as linhas sem precisar voltar visualmente até o topo.
+          // A revisão de subida fica disponível apenas para rotinas que a peçam.
+          if (completo && revisarSubida) {
             let parado = 0;
             for (let volta = 0; volta < 600; volta++) {
               if (this.modernStopped()) throw stopError();
@@ -2670,7 +2689,17 @@
 
               if (apenasAnalisar) {
                 linha((entry.name || 'sem nome').slice(0, 30) + ' → ' + novo);
-                aviso('🔎 Analisando: <b>' + plano.length + '</b> identificada(s)...');
+                // A caixa preta nasce imediatamente no card atual. A cada 25
+                // itens fazemos um checkpoint no localStorage; assim galerias
+                // enormes preservam o progresso mesmo se o Flow fechar a aba.
+                const cenaNome = 'Cena ' + cena;
+                this.tileAssignments.set(entry.uuid, {
+                  label: novo, type: 'scene', scene: cenaNome, imgNum: g, isVideo: !!entry.isVideo
+                });
+                this.addLabelToTile(tile, novo, entry.uuid, 'scene', cenaNome);
+                $('.flow-tile-label', tile)?.setAttribute('data-rename-state', 'pending');
+                if (plano.length % 25 === 0) this.sincronizarPlanoComCaixas(plano);
+                aviso('🔎 Analisando: <b>' + plano.length + '</b> identificada(s) · <b>' + totalProcessados + '</b> verificadas...');
               } else {
                 // JÁ VAI RENOMEANDO PROGRESSIVAMENTE!
                 if (norm(entry.name) === norm(novo)) {
@@ -2713,6 +2742,7 @@
           await this.closeMenus();
 
           if (this.renomearParar) {
+            if (apenasAnalisar && plano.length) this.sincronizarPlanoComCaixas(plano);
             aviso('⏹ Parado por você.' + (ok ? ' ' + ok + ' renomeada(s).' : ''), 'warning');
             return;
           }
@@ -3373,7 +3403,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.3 (caixas pretas + Relatório)',
+        versao: 'Flow NOVO v7.4 (galerias grandes + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -6215,10 +6245,8 @@ clearReferencesForUI(source = 'images') {
 
                     // Detecta crash do Flow e tenta recuperar
                     if (this.isFlowCrashed()) {
-                        this.logDebug('🔴 Flow crashou! Salvando estado e recarregando em 3s...', 'error');
+                        this.logDebug('🔴 Flow apresentou erro. Estado salvo; a automação foi pausada sem atualizar a página.', 'error');
                         this.saveRunState(promptObj.promptNum);
-                        await this.sleep(3000);
-                        location.reload();
                         return false;
                     }
 
