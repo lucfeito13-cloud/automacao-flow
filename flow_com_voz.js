@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.9   -   2026-09-08
+//  Flow NOVO v7.10  -   2026-09-08
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -11,6 +11,8 @@
 //
 //  v7.9: durante a renomeacao percorre a galeria continuamente de cima para
 //        baixo, sem reiniciar a busca no topo para cada midia.
+//  v7.10: o painel Atribuir Cenas reconhece os cartoes tanto em grade quanto
+//         em lista e mantem o botao de iniciar a renomeacao sempre visivel.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -98,7 +100,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.9 (renomeação descendo sem reiniciar)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.10 (atribuição em lista e grade)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -626,12 +628,48 @@
         if (!foiPraFrente) { scroller.scrollTop = antes; return false; }
         return true;
       },
-      getTiles() { return $$('flow-grid-tile-container').filter(tile => $('flow-image-tile,flow-video-tile', tile)); },
+      /**
+       * Resolve o cartao inteiro a partir de qualquer ponto onde o usuario
+       * soltou a cena. O Flow usa containers diferentes na grade compacta e
+       * na lista/cartao grande, por isso nao podemos depender de uma tag so.
+       */
+      resolveMediaTileFromElement(element) {
+        if (!element || element === document || element === document.body) return null;
+        const start = element.nodeType === 1 ? element : element.parentElement;
+        if (!start || start.closest?.('#flow-panel,#flow-mini,#flow-assign-panel')) return null;
+
+        const conhecido = start.closest?.('flow-grid-tile-container,[data-tile-id],flow-tile');
+        if (conhecido && $('flow-image-tile,flow-video-tile,video', conhecido)) return conhecido;
+
+        // No modo lista o alvo pode ser o texto lateral, fora do flow-video-tile.
+        // Sobe ate o menor ancestral que contenha a midia e o link/id do item.
+        let atual = start;
+        for (let nivel = 0; atual && nivel < 12 && atual !== document.body; nivel++, atual = atual.parentElement) {
+          const temMidia = atual.matches?.('flow-image-tile,flow-video-tile') || !!$('flow-image-tile,flow-video-tile,video', atual);
+          const temIdentidade = atual.hasAttribute?.('data-tile-id') || atual.hasAttribute?.('data-media-id') ||
+            atual.matches?.('a[href*="/edit/"]') || !!$('a[href*="/edit/"],[data-media-id]', atual);
+          if (temMidia && temIdentidade) return atual;
+        }
+
+        const midia = start.closest?.('flow-image-tile,flow-video-tile');
+        return midia || null;
+      },
+      getTiles() {
+        const encontrados = [];
+        const adicionar = elemento => {
+          const tile = this.resolveMediaTileFromElement(elemento);
+          if (tile && !encontrados.includes(tile) && $('flow-image-tile,flow-video-tile,video', tile)) encontrados.push(tile);
+        };
+        $$('flow-grid-tile-container,[data-tile-id],flow-tile,a[href*="/edit/"]').forEach(adicionar);
+        // Fallback para uma variante que ainda nao exponha container nem link.
+        if (!encontrados.length) $$('flow-image-tile,flow-video-tile').forEach(adicionar);
+        return encontrados;
+      },
       getUuidFromTile(tile) {
         if (!tile) return null;
         // Video tiles expose their persistent thumbnail id instead of data-media-id.
         // This is a gallery identity only; renaming/downloading use native UI actions.
-        const grid = tile.closest('flow-grid-tile-container') || tile;
+        const grid = this.resolveMediaTileFromElement(tile) || tile.closest?.('flow-grid-tile-container,[data-tile-id]') || tile;
         const isVid = grid.matches?.('flow-video-tile') || !!$('flow-video-tile', grid) || !!$('video', grid);
         if (isVid) {
           this._modernVideoIds ||= new WeakMap();
@@ -639,13 +677,17 @@
           if ($('flow-pending-tile', grid)) { this._modernVideoIds.delete(grid); return null; }
           const source = $('flow-video-tile img.thumbnail, img.thumbnail', grid)?.getAttribute('src') || $('flow-video-tile video, video', grid)?.getAttribute('poster') || $('flow-video-tile video, video', grid)?.getAttribute('src') || '';
           const key = videoIdentity(source), name = this.getTileName(grid), previous = this._modernVideoIds.get(grid);
-          if (!key) return previous?.id || null;
+          if (!key) {
+            const hrefId = $('a[href*="/edit/"]', grid)?.href?.match(/\/edit\/([a-f0-9-]{36})/i)?.[1];
+            return previous?.id || hrefId || grid.getAttribute?.('data-tile-id') || null;
+          }
           const sameTile = previous && (previous.key === key || previous.name === name);
           const id = this._modernVideoAliases.get(key) || (sameTile ? previous.id : key);
           this._modernVideoAliases.set(key, id); this._modernVideoIds.set(grid, { id, key, name });
           return id;
         }
-        return $('[data-media-id]', grid)?.getAttribute('data-media-id') || grid.getAttribute?.('data-media-id') || null;
+        return $('[data-media-id]', grid)?.getAttribute('data-media-id') || grid.getAttribute?.('data-media-id') ||
+          $('a[href*="/edit/"]', grid)?.href?.match(/\/edit\/([a-f0-9-]{36})/i)?.[1] || grid.getAttribute?.('data-tile-id') || null;
       },
       getWorkflowIdFromTile(tile) { return this.getUuidFromTile(tile); },
       // A grade e virtualizada: o tile pode ter saido da tela. Sem esta guarda,
@@ -1228,7 +1270,7 @@
         const marcas = this.lerMarcas();
         const pendentes = Object.values(marcas);
         const total = pendentes.length;
-        botao.style.display = total ? '' : 'none';
+        botao.style.display = 'inline-flex';
         botao.disabled = !!this._aplicandoMarcas || total === 0;
         botao.textContent = this._aplicandoMarcas
           ? '⏳ Renomeando...'
@@ -3453,7 +3495,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.9 (renomeação contínua + Relatório)',
+        versao: 'Flow NOVO v7.10 (atribuição em lista/grade + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -4796,7 +4838,7 @@ function triggerTrustedClick(el) {
     <h3 id="flow-assign-title">Atribuir</h3>
     <span class="flow-assign-count" id="flow-assign-count"></span>
     <div class="flow-assign-header-btns">
-      <button class="flow-assign-dl-btn" id="flow-assign-rename" style="display:none;background:#2563eb;color:#fff;border-color:#2563eb;">🏷️ Renomear selecionadas (0)</button>
+      <button class="flow-assign-dl-btn" id="flow-assign-rename" disabled title="Arraste uma cena para uma mídia antes de iniciar" style="display:inline-flex;background:#2563eb;color:#fff;border-color:#2563eb;">🏷️ Renomear selecionadas (0)</button>
       <button class="flow-assign-dl-btn" id="flow-assign-download" style="display:none;">⬇️ Baixar Cenas</button>
       <button class="flow-assign-hbtn" id="flow-assign-auto" title="Lê os prompts e monta automaticamente as caixas de renomeação">⚡ Auto</button>
       <button class="flow-assign-hbtn" id="flow-assign-layout" title="Alternar Horizontal/Vertical">↔</button>
@@ -7636,12 +7678,14 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             // Usa delegação global — tiles são virtualizados
             document.addEventListener('dragover', e => {
                 e.dataTransfer.dropEffect = 'copy';
-                const tile = e.target.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
+                const tile = (typeof this.resolveMediaTileFromElement === 'function')
+                    ? this.resolveMediaTileFromElement(e.target)
+                    : e.target.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
                 if (tile) {
                     e.preventDefault();
                     e.stopPropagation();
                     // Highlight só no tile que tem imagem
-                    const inner = tile.querySelector('flow-grid-tile-container, [data-tile-id]') || tile;
+                    const inner = tile;
                     document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
                     inner.classList.add('drop-hover');
                 }
@@ -7649,13 +7693,19 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
 
             document.addEventListener('dragleave', e => {
                 // Só remove se saiu do tile completamente
-                const related = e.relatedTarget?.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
-                const current = e.target.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
+                const related = typeof this.resolveMediaTileFromElement === 'function'
+                    ? this.resolveMediaTileFromElement(e.relatedTarget)
+                    : e.relatedTarget?.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
+                const current = typeof this.resolveMediaTileFromElement === 'function'
+                    ? this.resolveMediaTileFromElement(e.target)
+                    : e.target.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
                 if (current && current !== related) current.classList.remove('drop-hover');
             });
 
             document.addEventListener('drop', async e => {
-                const tile = e.target.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
+                const tile = (typeof this.resolveMediaTileFromElement === 'function')
+                    ? this.resolveMediaTileFromElement(e.target)
+                    : e.target.closest('flow-grid-tile-container, flow-tile, flow-image-tile, flow-video-tile, [data-tile-id]');
                 if (tile) tile.classList.remove('drop-hover');
                 document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
                 if (!tile) return;
@@ -7673,8 +7723,8 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                 if (!data?.type) return;
 
                 // Resolve gridTile e outerTile
-                const gridTile = tile.closest('flow-grid-tile-container') || tile;
-                const innerTile = gridTile.querySelector('flow-grid-tile-container, [data-tile-id]') || gridTile;
+                const gridTile = (typeof this.resolveMediaTileFromElement === 'function' && this.resolveMediaTileFromElement(tile)) || tile;
+                const innerTile = gridTile;
                 const workflowId = (typeof this.getUuidFromTile === 'function' ? this.getUuidFromTile(gridTile) : null)
                     || this.getWorkflowIdFromTile(innerTile)
                     || this.getWorkflowIdFromTile(gridTile)
@@ -8000,7 +8050,8 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             this.removeLabelFromTile(workflowId);
 
             // Encontra o outerTile para posicionar
-            const outer = tileEl.closest('flow-grid-tile-container, [data-tile-id]') || tileEl;
+            const outer = (typeof this.resolveMediaTileFromElement === 'function' && this.resolveMediaTileFromElement(tileEl)) ||
+                tileEl.closest('flow-grid-tile-container, [data-tile-id]') || tileEl;
             outer.style.position = 'relative';
 
             const label = document.createElement('div');
