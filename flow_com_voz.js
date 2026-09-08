@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.5   -   2026-09-08
+//  Flow NOVO v7.6   -   2026-09-08
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -9,8 +9,8 @@
 //    PARTE 1 - Compatibilidade com o Flow novo (flow.google.com, Angular)
 //    PARTE 2 - O programa principal (painel, filas, tempos, downloads)
 //
-//  v7.5: libera checkboxes e o botao Renomear selecionadas assim que a leitura
-//        de galerias grandes termina.
+//  v7.6: leitura passiva e invisivel; nunca clica em Reutilizar comando durante
+//        analise ou enumeracao.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -98,7 +98,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.5 (seletor liberado ao concluir)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.6 (leitura invisível sem Reutilizar)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -283,62 +283,6 @@
         return null;
       },
 
-      /**
-       * Pega o PROMPT de uma mídia pedindo ao próprio Flow: clica em
-       * "Reutilizar comando" (ícone redo), que joga o prompt inteiro na caixa de
-       * texto, lê de lá e limpa. É o único caminho que funciona — o painel de
-       * informações só abre com mouse físico, e a API não expõe o texto.
-       */
-      async promptViaReutilizar(tile) {
-        if (!tile) return '';
-        document.documentElement.classList.add('flow-rename-silent');
-        // 1. Força hover no tile para o Flow renderizar botões de ação
-        const rect = tile.getBoundingClientRect();
-        const cx = Math.round(rect.left + rect.width / 2);
-        const cy = Math.round(rect.top + rect.height / 2);
-        ['pointerenter', 'mouseenter', 'pointerover', 'mouseover', 'mousemove'].forEach(t => {
-          try { tile.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy })); } catch (_) {}
-        });
-        await this.pausa(80);
-
-        const botao = [...tile.querySelectorAll('button')].find(b => {
-          const icone = norm(b.querySelector('mat-icon,i')?.textContent);
-          const rotulo = norm(b.getAttribute('aria-label') || b.getAttribute('title'));
-          return icone === 'redo' || /reutilizar|reuse|usar novamente/i.test(rotulo);
-        });
-
-        try {
-          if (botao) {
-            botao.click();
-          } else {
-            // Se não tem botão direto no card, abre o menu da mídia e clica em Reuse prompt
-            await this.openTileMenu(tile);
-            const item = menuItem(['Reuse prompt', 'Reutilizar comando', 'Reutilizar', 'Reuse']);
-            if (!item) {
-              await this.closeMenus();
-              return '';
-            }
-            item.click();
-          }
-          const editor = await this.modernWait(() => this.getEditor(), 3000);
-          // MEDIDO AO VIVO: o prompt cai na caixa em ~210ms. Conferimos a cada
-          // 40ms para nao perder tempo, com 2s de teto por seguranca.
-          let texto = '';
-          for (let i = 0; i < 50; i++) {
-            await this.sleep(40);
-            texto = norm(cleanEditorText(editor));
-            if (texto.length > 15) break;
-          }
-          await this.clearEditor();
-          return texto;
-        } catch (_) {
-          try { await this.clearEditor(); } catch (__) {}
-          return '';
-        } finally {
-          await this.closeMenus();
-          document.documentElement.classList.remove('flow-rename-silent');
-        }
-      },
       async findAsset(name, type = 'image') {
         await this.openAtSelector();
         await this.clickDialogTab(type);
@@ -839,8 +783,8 @@
         const originalTop = scroller.scrollTop;
         const entries = new Map();
         const inicio = Date.now();
-        // Uma leitura com Reutilizar comando pode levar vários minutos em 800+
-        // mídias. O antigo teto de 180 s devolvia uma lista parcial como se fosse
+        // Uma leitura passiva pode levar vários minutos em 800+ mídias. O antigo
+        // teto de 180 s devolvia uma lista parcial como se fosse
         // completa. No modo completo só há limite quando o chamador o informa.
         const TETO = maxMs > 0 ? maxMs : (completo ? Infinity : 300000);
         let settledBottom = 0;
@@ -1952,18 +1896,25 @@
         const aviso = (m) => { try { (ehVideo ? this.setVideoStatus : this.setStatus).call(this, 'info', m); } catch (_) {} };
         aviso('🔎 Varrendo a galeria de ' + (ehVideo ? 'vídeos' : 'imagens') + '...');
 
-        // 1ª passada: lê o prompt de quem não tem número, clicando em
-        // "Reutilizar comando" (o Flow joga o prompt na caixa de texto).
+        // 1ª passada: leitura passiva. Não clica em Reutilizar comando e não
+        // coloca o prompt dentro do editor do Flow.
         const promptsLidos = new Map();
         let lidos = 0;
-        const entries = await this.scanGallery(async (entry, tile) => {
-          if (!entry.uuid || !entry.loaded) return;
-          if (entry.isVideo !== !!this._videoAssignActive) return;
-          if (sceneInfo(entry.name)) return;
-          const texto = await this.promptViaReutilizar(tile);
-          if (this.numeroDaCenaNoTexto(texto) != null) { promptsLidos.set(entry.uuid, texto); lidos++; }
-          aviso('🔎 Lendo os prompts... ' + lidos + ' lido(s)');
-        });
+        document.documentElement.classList.add('flow-prompt-read-silent');
+        let entries;
+        try {
+          entries = await this.scanGallery(async (entry, tile) => {
+            if (!entry.uuid || !entry.loaded) return;
+            if (entry.isVideo !== !!this._videoAssignActive) return;
+            if (sceneInfo(entry.name)) return;
+            const texto = this.promptDoComponente(tile) || await this.promptPorHover(tile, 800);
+            if (this.numeroDaCenaNoTexto(texto) != null) { promptsLidos.set(entry.uuid, texto); lidos++; }
+            aviso('🔎 Lendo passivamente... ' + lidos + ' identificado(s)');
+          }, { completo: true });
+        } finally {
+          await this.closeMenus();
+          document.documentElement.classList.remove('flow-prompt-read-silent');
+        }
         aviso('🏷️ Preparando a renomeação...');
 
         const results = [];
@@ -2161,11 +2112,8 @@
           if (doPainel != null) return { num: doPainel, origem: 'painel' };
         }
 
-        // 4. Último recurso: pedir o prompt ao Flow pelo botão Reutilizar.
-        if (!permitirReutilizar || !tile) return null;
-        const texto = await this.promptViaReutilizar(tile);
-        const doPrompt = this.numeroDaCenaNoTexto(texto);
-        if (doPrompt != null) return { num: doPrompt, origem: 'reutilizar' };
+        // Nunca abre Reutilizar comando. Se nome, contexto e hover não trouxerem
+        // um número, a mídia permanece como "sem cena" para revisão manual.
         return null;
       },
 
@@ -2527,6 +2475,7 @@
       async renomearGaleria({ escopo = 'ambos', apenasAnalisar = false } = {}) {
         if (this._renomeando) return;
         this._renomeando = true;
+        document.documentElement.classList.add('flow-prompt-read-silent');
         this.renomearParar = false;
 
         const painel = document.getElementById('rn-resultado');
@@ -2626,41 +2575,8 @@
               }
             }
 
-            // 5. Se ainda não achou a cena e temos o tile na tela: USAR REUTILIZAR COMANDO (redo)
-            if (cena == null && tile) {
-              try {
-                aviso('🔎 Identificando cena do ' + (entry.isVideo ? 'vídeo' : 'card') + ' ' + totalProcessados + '...');
-                const textoReutilizar = await this.promptViaReutilizar(tile);
-                await this.closeMenus();
-                if (textoReutilizar) {
-                  const doReut = this.numeroDaCenaNoTexto(textoReutilizar);
-                  if (doReut != null) {
-                    cena = doReut;
-                    origem = 'reutilizar';
-                  } else if (parsedPrompts.length > 0) {
-                    // Tenta casar o texto lido do editor com os prompts digitados
-                    const limpoReut = norm(textoReutilizar).toLowerCase().replace(/[^a-z0-9]/g, '');
-                    if (limpoReut.length >= 10) {
-                      const match = parsedPrompts.find(p => {
-                        const limpoP = norm(p.text).toLowerCase().replace(/[^a-z0-9]/g, '');
-                        return limpoP === limpoReut ||
-                          (limpoP.length >= 15 && limpoReut.includes(limpoP.slice(0, 30))) ||
-                          (limpoReut.length >= 15 && limpoP.includes(limpoReut.slice(0, 30)));
-                      });
-                      if (match) {
-                        const n = this.numeroDaCenaNoTexto(match.text);
-                        cena = n != null ? n : match.promptNum;
-                        origem = 'reutilizar_match';
-                      }
-                    }
-                  }
-                }
-              } catch (_) {
-                await this.closeMenus();
-              }
-            }
-
-            // 6. Se ainda não achou, tenta casar entry.name contra parsedPrompts
+            // 5. Se ainda não achou, tenta casar entry.name contra os prompts
+            // digitados. Esta comparação é local e não abre nenhuma janela.
             if (cena == null && parsedPrompts.length > 0 && entry.name) {
               const limpoName = norm(entry.name).toLowerCase().replace(/[^a-z0-9]/g, '');
               if (limpoName.length >= 10) {
@@ -2772,6 +2688,7 @@
           // Redesenha após liberar o estado para ficarem clicáveis imediatamente.
           if (this._planoRenomear) this.mostrarPlanoRenomear(this._planoRenomear);
           await this.closeMenus();
+          document.documentElement.classList.remove('flow-prompt-read-silent');
         }
       },
 
@@ -3407,7 +3324,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.5 (seletor liberado + Relatório)',
+        versao: 'Flow NOVO v7.6 (leitura invisível + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -3511,7 +3428,9 @@
         '#rn-resultado span[style*="opacity"]{opacity:.8!important;color:#334155!important;}',
         '#rn-aplicar{font-weight:800!important;}',
         /* O fallback nativo continua renderizado e clicavel, mas nao pisca na tela. */
-        'html.flow-rename-silent .cdk-overlay-pane,html.flow-rename-silent .cdk-overlay-backdrop{opacity:0!important;transition:none!important;}'
+        'html.flow-rename-silent .cdk-overlay-pane,html.flow-rename-silent .cdk-overlay-backdrop{opacity:0!important;transition:none!important;}',
+        /* A leitura por hover continua funcionando, mas o painel nunca aparece. */
+        'html.flow-prompt-read-silent .cdk-overlay-pane:has(flow-info-panel),html.flow-prompt-read-silent flow-info-panel{opacity:0!important;pointer-events:none!important;transition:none!important;}'
       ].join('');
       document.head.appendChild(st);
     }
