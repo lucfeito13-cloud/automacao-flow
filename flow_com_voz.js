@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.8   -   2026-09-08
+//  Flow NOVO v7.9   -   2026-09-08
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -9,8 +9,8 @@
 //    PARTE 1 - Compatibilidade com o Flow novo (flow.google.com, Angular)
 //    PARTE 2 - O programa principal (painel, filas, tempos, downloads)
 //
-//  v7.8: a analise ignora midias cujo nome ja corresponde exatamente ao destino,
-//        mantendo-as apenas no calculo da numeracao.
+//  v7.9: durante a renomeacao percorre a galeria continuamente de cima para
+//        baixo, sem reiniciar a busca no topo para cada midia.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -98,7 +98,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.8 (pula nomes já corretos)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.9 (renomeação descendo sem reiniciar)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -870,6 +870,48 @@
         if (found) { found.scrollIntoView({ block: 'center' }); return found; }
         await this.scanGallery((entry, tile) => { if (entry.uuid === id) { found = tile; return false; } }, { restore: false });
         return found || null;
+      },
+
+      /**
+       * Localiza o próximo item sem voltar ao começo. Usado nos lotes de
+       * renomeação, cuja fila já está na mesma ordem da galeria.
+       */
+      async scrollToWorkflowDescendo(id, scrollerOptional = null) {
+        const scroller = scrollerOptional || this.getScroller();
+        if (!scroller) return null;
+        let estabilidade = 0;
+        let assinaturaFundo = '';
+
+        for (let passo = 0; passo < 2500; passo++) {
+          const found = this.getTiles().find(t => this.getUuidFromTile(t) === id);
+          if (found) {
+            found.scrollIntoView({ block: 'center', inline: 'nearest' });
+            await this.pausa(80);
+            return found;
+          }
+
+          const antes = Math.round(scroller.scrollTop);
+          const alturaAntes = Math.round(scroller.scrollHeight);
+          const andou = this.rolarUmPedaco(scroller, 0.45, false);
+          await this.pausa(andou ? 140 : 250);
+
+          if (andou) {
+            estabilidade = 0;
+            assinaturaFundo = '';
+            continue;
+          }
+
+          const assinatura = Math.round(scroller.scrollTop) + '|' +
+            Math.round(scroller.scrollHeight) + '|' + this.getTiles().length;
+          if (assinatura !== assinaturaFundo || Math.round(scroller.scrollHeight) !== alturaAntes || Math.round(scroller.scrollTop) !== antes) {
+            assinaturaFundo = assinatura;
+            estabilidade = 0;
+          } else {
+            estabilidade++;
+          }
+          if (estabilidade >= 8) break;
+        }
+        return null;
       },
       async detectGrid() {
         const tiles = this.getTiles();
@@ -2470,6 +2512,13 @@
           rodadas: for (let rodada = 1; rodada <= 3 && pendentes.length; rodada++) {
             const falharamNestaRodada = [];
             const filaDaRodada = pendentes.slice();
+            const scrollerRodada = this.getScroller();
+            if (scrollerRodada) {
+              // Uma única volta ao topo por rodada. Daqui em diante o localizador
+              // percorre a fila continuamente para baixo.
+              scrollerRodada.scrollTop = 0;
+              await this.pausa(500);
+            }
 
             for (let i = 0; i < filaDaRodada.length; i++) {
               if (this.renomearParar) {
@@ -2486,11 +2535,15 @@
               let tile = null;
               let deu = false;
               try {
-                tile = await this.scrollToWorkflow(p.uuid);
+                tile = await this.scrollToWorkflowDescendo(p.uuid, scrollerRodada);
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
-                deu = norm(p.name) === norm(p.novo)
-                  ? true
-                  : await this.renomearSelecionadoConfirmado(p.uuid, p.novo, tile);
+                if (!tile) {
+                  this.logDebug('Card não encontrado nesta passagem: ' + p.novo, 'warning');
+                } else {
+                  deu = norm(p.name) === norm(p.novo)
+                    ? true
+                    : await this.renomearSelecionadoConfirmado(p.uuid, p.novo, tile);
+                }
               } catch (erroItem) {
                 this.logDebug('Tentativa ' + rodada + ' falhou em ' + p.novo + ': ' + (erroItem?.message || erroItem), 'warning');
               }
@@ -3400,7 +3453,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.8 (pula nomes corretos + Relatório)',
+        versao: 'Flow NOVO v7.9 (renomeação contínua + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
