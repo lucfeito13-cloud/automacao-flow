@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.7   -   2026-09-08
+//  Flow NOVO v7.8   -   2026-09-08
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -9,8 +9,8 @@
 //    PARTE 1 - Compatibilidade com o Flow novo (flow.google.com, Angular)
 //    PARTE 2 - O programa principal (painel, filas, tempos, downloads)
 //
-//  v7.7: renomeia todos os selecionados usando UUID real, confirmacao HTTP,
-//        fallback pelos tres pontinhos e tres rodadas para falhas transitorias.
+//  v7.8: a analise ignora midias cujo nome ja corresponde exatamente ao destino,
+//        mantendo-as apenas no calculo da numeracao.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -98,7 +98,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.7 (renomeação confirmada com repetição)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.8 (pula nomes já corretos)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -2584,7 +2584,7 @@
         const contador = new Map();
         const plano = [];
         const vistos = new Set();
-        let ok = 0, falhou = 0, semCena = 0, totalProcessados = 0;
+        let ok = 0, falhou = 0, semCena = 0, jaCorretas = 0, totalProcessados = 0;
 
         aviso(apenasAnalisar ? '🔎 Analisando galeria...' : '🏷️ Varrendo e renomeando vídeos e imagens...');
 
@@ -2668,6 +2668,14 @@
               contador.set(chave, Math.max(g, contador.get(chave) || 0));
               const novo = montarNome(cena, g, entry.isVideo);
 
+              // O nome já corresponde exatamente ao modelo escolhido. Reserva
+              // sua posição no contador, mas não cria caixa nem entra na fila.
+              if (norm(entry.name) === norm(novo)) {
+                jaCorretas++;
+                aviso('⏭️ <b>' + jaCorretas + '</b> já correta(s) ignorada(s) · <b>' + totalProcessados + '</b> verificadas...');
+                return;
+              }
+
               plano.push({ ...entry, cena, g, novo, origem });
 
               if (apenasAnalisar) {
@@ -2733,6 +2741,7 @@
           if (apenasAnalisar) {
             const cenas = new Set(plano.map(p => p.cena)).size;
             aviso('🔎 <b>' + plano.length + '</b> mídia(s) em <b>' + cenas + '</b> cena(s) identificadas' +
+                  (jaCorretas ? ' · ' + jaCorretas + ' já correta(s) ignorada(s)' : '') +
                   (semCena ? ' · ' + semCena + ' sem número' : '') + '.', 'success');
             this.sincronizarPlanoComCaixas(plano);
             this.mostrarPlanoRenomear(plano);
@@ -3391,7 +3400,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.7 (confirmação e repetição + Relatório)',
+        versao: 'Flow NOVO v7.8 (pula nomes corretos + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
