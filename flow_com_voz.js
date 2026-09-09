@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.15  -   2026-09-09
+//  Flow NOVO v7.16  -   2026-09-09
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -23,6 +23,8 @@
 //         personagens, avatares e videos tanto na aba Imagens quanto Videos.
 //  v7.15: adiciona Modo de seguranca opcional. Desligado envia o lote em
 //         paralelo; ligado confirma cada prompt antes de enviar o proximo.
+//  v7.16: resultados ausentes ficam em confirmacao por ate dois lotes antes
+//         de serem tratados como falha ou enviados novamente.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -110,7 +112,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.15 (modo de segurança opcional)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.16 (confirmação por dois lotes)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1921,13 +1923,88 @@
         }
         return recuperados;
       },
+      modoSegurancaAtivo() {
+        return !!document.getElementById(
+          this.videoIsRunning || this._modernTestVideo ? 'fv-safety-sequential' : 'flow-safety-sequential'
+        )?.checked;
+      },
+      adiarConfirmacaoDosPendentes(matrix) {
+        if (this.modoSegurancaAtivo()) return 0;
+        this._modernLateConfirmations ||= [];
+        let adicionados = 0;
+        for (const slot of matrix.filter(s => s.state === 'pending')) {
+          slot.state = 'confirming';
+          slot.errorReason = 'Aguardando confirmação por até 2 lotes';
+          this._modernLateConfirmations.push({
+            slot,
+            matrix,
+            bornBatch: Number(this._modernBatchIndex || 0),
+            video: !!this.videoIsRunning
+          });
+          adicionados++;
+        }
+        return adicionados;
+      },
+      confirmarResultadosAtrasados(batchIndex, final = false) {
+        const pendencias = (this._modernLateConfirmations || []).filter(p => p.slot.state === 'confirming');
+        if (!pendencias.length) return { recuperados: 0, expirados: 0 };
+        const usados = new Set();
+        for (const p of this._modernLateConfirmations || []) if (p.slot.uuid) usados.add(p.slot.uuid);
+        const prontos = this.getTiles().filter(tile => {
+          const uuid = this.getUuidFromTile(tile);
+          return uuid && !this._modernBaseline?.has(uuid) && !usados.has(uuid) && this.isTileLoaded(tile);
+        });
+        let recuperados = 0, expirados = 0;
+        this._modernLateFailedKeys ||= new Set();
+        for (const pendencia of pendencias) {
+          const tile = prontos.shift();
+          if (tile) {
+            const entry = this.tileEntry(tile);
+            if (entry.uuid && entry.loaded) {
+              Object.assign(pendencia.slot, entry, { state: 'loaded' });
+              delete pendencia.slot.errorReason;
+              this._modernBaseline?.add(entry.uuid);
+              usados.add(entry.uuid);
+              recuperados++;
+              continue;
+            }
+          }
+          const idade = Number(batchIndex) - pendencia.bornBatch;
+          if (final || idade >= 2) {
+            pendencia.slot.state = 'error';
+            pendencia.slot.errorReason = 'Não apareceu após 2 lotes de confirmação';
+            this._modernLateFailedKeys.add(this.chaveDoPrompt(pendencia.slot.promptNum));
+            expirados++;
+          }
+        }
+        // Atualiza os cartões da fila sem esperar o encerramento da execução.
+        const grupos = new Map();
+        for (const p of this._modernLateConfirmations || []) {
+          const key = this.chaveDoPrompt(p.slot.promptNum);
+          if (!grupos.has(key)) grupos.set(key, p);
+        }
+        for (const p of grupos.values()) {
+          const slots = p.matrix.filter(s => this.chaveDoPrompt(s.promptNum) === this.chaveDoPrompt(p.slot.promptNum));
+          const ok = slots.filter(s => s.state === 'loaded').length;
+          const aguardando = slots.some(s => s.state === 'confirming');
+          const lista = p.video ? this.videoPrompts : this.prompts;
+          const idx = (lista || []).findIndex(x => this.chaveDoPrompt(x.promptNum) === this.chaveDoPrompt(p.slot.promptNum));
+          const atualizar = p.video ? this.updateVideoPromptItemStatus : this.updatePromptItemStatus;
+          if (idx < 0 || typeof atualizar !== 'function') continue;
+          if (aguardando) atualizar.call(this, idx, 'retrying', `confirmando ${ok}/${slots.length}`);
+          else if (ok >= slots.length) atualizar.call(this, idx, 'done');
+          else if (ok > 0) atualizar.call(this, idx, 'partial', `${ok}/${slots.length}`);
+          else atualizar.call(this, idx, 'error', 'não confirmado');
+        }
+        return { recuperados, expirados };
+      },
       async waitForMatrix(matrix) {
         const noProgressLimit = Math.max(60000, Number(document.getElementById('flow-t-semprog')?.value || 2) * 60000);
         let lastProgress = Date.now(), signature = '';
         let motivoParada = null;   // encerra o lote sem derrubar a fila
         const hardDeadline = Date.now() + Math.max(noProgressLimit * 5, 5 * 60000);
         const confirmar = Math.max(0, Number(CONFIG.STABILIZE_TIME) || 0);
-        let zeradoEm = null;
+        let zeradoEm = null, semGeracaoVisivelEm = null;
         while (true) {
           if (this.modernStopped()) throw stopError();
           this.captureModernResults();
@@ -1952,6 +2029,13 @@
             if (zeradoEm == null) zeradoEm = Date.now();
             if (Date.now() - zeradoEm >= confirmar) break;
           } else zeradoEm = null;
+          if (pending && !this.modoSegurancaAtivo()) {
+            const gerandoVisivel = this.getTiles().some(tile => this.tileHasProgress(tile));
+            if (gerandoVisivel) semGeracaoVisivelEm = null;
+            else if (semGeracaoVisivelEm == null) semGeracaoVisivelEm = Date.now();
+            const carencia = Math.max(5000, confirmar * 2);
+            if (semGeracaoVisivelEm != null && Date.now() - semGeracaoVisivelEm >= carencia) break;
+          }
           const nextSignature = matrix.map(slot => `${slot.state}:${norm(slot.record?.nodes?.[slot.index]?.querySelector('.loading-percentage')?.textContent)}`).join('|');
           if (signature !== nextSignature) { signature = nextSignature; lastProgress = Date.now(); }
           if (Date.now() - lastProgress > noProgressLimit || Date.now() > hardDeadline) {
@@ -1963,6 +2047,11 @@
 
         // ── CONFERÊNCIA FINAL DA GALERIA (precisão de mídias concluídas) ──
         this.resgatarResultadosConcluidos(matrix, true);
+        const adiados = this.adiarConfirmacaoDosPendentes(matrix);
+        if (adiados) {
+          const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
+          try { reg.call(this, `⏳ ${adiados} resultado(s) seguirão em confirmação durante os próximos 2 lotes.`, 'warning'); } catch (_) {}
+        }
 
         if (motivoParada) {
           this._modernUncertain = true;
@@ -2023,6 +2112,7 @@
         const status = (type, text) => (video ? this.setVideoStatus : this.setStatus).call(this, type, text);
         this._modernTaskRunning = true; this.shouldStop = false; this.videoShouldStop = false; this._modernUncertain = false;
         this._modernActiveRecords = []; this._modernRecords = new Map(); this._modernCaptureError = null;
+        this._modernLateConfirmations = []; this._modernLateFailedKeys = new Set(); this._modernBatchIndex = 0;
         try {
           const prefix = video ? 'fv' : 'flow';
           if (!norm(document.getElementById(`${prefix}-prompts-input`).value)) { status('warning', 'Insira pelo menos um prompt.'); return; }
@@ -3542,7 +3632,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.15 (modo segurança + busca em Tudo + Relatório)',
+        versao: 'Flow NOVO v7.16 (confirmação por dois lotes + modo segurança + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -6669,6 +6759,8 @@ clearReferencesForUI(source = 'images') {
 
                 for (let bIdx = 0; bIdx < batches.length; bIdx++) {
                     if (this.shouldStop) break;
+                    this._modernBatchIndex = bIdx;
+                    this.confirmarResultadosAtrasados(bIdx, false);
                     const batch = batches[bIdx];
                     const totalN = batch.length * N;
                     const rowsThis = Math.ceil(totalN / C);
@@ -6720,7 +6812,8 @@ clearReferencesForUI(source = 'images') {
                         const prompt = batch[bIdx2];
                         const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
                         const loadedCount = slots.filter(s => s.state === 'loaded').length;
-                        if (loadedCount < N) {
+                        const aguardandoConfirmacao = slots.some(s => s.state === 'confirming');
+                        if (loadedCount < N && !aguardandoConfirmacao) {
                             const missing = N - loadedCount;
                             this.logDebug(`⚠️ Prompt ${prompt.promptNum}: gerou ${loadedCount}/${N} (faltam ${missing})`, 'warning');
                             failedPrompts.push(prompt);
@@ -6771,7 +6864,9 @@ while (retryCount[key] < maxRetries && !this.shouldStop) {
                         const gi = this.prompts.findIndex(x => x.promptNum === p.promptNum);
                         const slots = matrix.filter(s => s.promptNum === p.promptNum);
                         const loadedCount = slots.filter(s => s.state === 'loaded').length;
-                        if (loadedCount >= N) {
+                        if (slots.some(s => s.state === 'confirming')) {
+                            this.updatePromptItemStatus(gi, 'retrying', `confirmando ${loadedCount}/${N}`);
+                        } else if (loadedCount >= N) {
                             this.updatePromptItemStatus(gi, 'done');
                         } else if (loadedCount > 0) {
                             this.updatePromptItemStatus(gi, 'partial', `${loadedCount}/${N}`);
@@ -6804,6 +6899,11 @@ while (retryCount[key] < maxRetries && !this.shouldStop) {
                 }
 
                 // ══════ DEFERRED RETRY: retentar falhas acumuladas ══════
+                this.confirmarResultadosAtrasados(batches.length, true);
+                for (const key of this._modernLateFailedKeys || []) {
+                    const p = this.prompts.find(x => this.chaveDoPrompt(x.promptNum) === key);
+                    if (p && !deferredFailures.some(x => this.chaveDoPrompt(x.promptNum) === key)) deferredFailures.push(p);
+                }
                 if (deferredFailures.length > 0 && !this.shouldStop) {
                     this.logDebug(`\n╔═══ RETENTANDO ${deferredFailures.length} PROMPT(S) ADIADO(S) ═══╗`, 'info');
                     this.setStatus('info', `🔄 Retentando ${deferredFailures.length} prompt(s) que falharam...`);
@@ -8712,6 +8812,8 @@ this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
 
                 for (let bIdx = 0; bIdx < batches.length; bIdx++) {
                     if (this.videoShouldStop) break;
+                    this._modernBatchIndex = bIdx;
+                    this.confirmarResultadosAtrasados(bIdx, false);
                     const batch = batches[bIdx];
                     const totalN = batch.length * N;
                     const rowsThis = Math.ceil(totalN / C);
@@ -8767,7 +8869,8 @@ this.updateVideoPromptItemStatus(idx, 'done', 'Concluído');
                         const prompt = batch[bIdx2];
                         const slots = matrix.filter(s => s.promptNum === prompt.promptNum);
                         const loadedCount = slots.filter(s => s.state === 'loaded').length;
-                        if (loadedCount < N) {
+                        const aguardandoConfirmacao = slots.some(s => s.state === 'confirming');
+                        if (loadedCount < N && !aguardandoConfirmacao) {
                             const missing = N - loadedCount;
                             this.logVideoDebug(`⚠️ Prompt ${prompt.promptNum}: gerou ${loadedCount}/${N} (faltam ${missing})`, 'warning');
                             failedPrompts.push(prompt);
@@ -8820,7 +8923,9 @@ while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
                         const gi = this.videoPrompts.findIndex(x => x.promptNum === p.promptNum);
                         const slots = matrix.filter(s => s.promptNum === p.promptNum);
                         const loadedCount = slots.filter(s => s.state === 'loaded').length;
-                        if (loadedCount >= N) {
+                        if (slots.some(s => s.state === 'confirming')) {
+                            this.updateVideoPromptItemStatus(gi, 'retrying', `confirmando ${loadedCount}/${N}`);
+                        } else if (loadedCount >= N) {
                             this.updateVideoPromptItemStatus(gi, 'done');
                         } else if (loadedCount > 0) {
                             this.updateVideoPromptItemStatus(gi, 'partial', `${loadedCount}/${N}`);
@@ -8851,6 +8956,11 @@ while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
                 }
 
                 // ══════ DEFERRED RETRY (Vídeos): retentar falhas acumuladas ══════
+                this.confirmarResultadosAtrasados(batches.length, true);
+                for (const key of this._modernLateFailedKeys || []) {
+                    const p = this.videoPrompts.find(x => this.chaveDoPrompt(x.promptNum) === key);
+                    if (p && !deferredFailures.some(x => this.chaveDoPrompt(x.promptNum) === key)) deferredFailures.push(p);
+                }
                 if (deferredFailures.length > 0 && !this.videoShouldStop) {
                     this.logVideoDebug(`\n╔═══ RETENTANDO ${deferredFailures.length} PROMPT(S) ADIADO(S) ═══╗`, 'info');
                     this.setVideoStatus('info', `🔄 Retentando ${deferredFailures.length} prompt(s) que falharam...`);
