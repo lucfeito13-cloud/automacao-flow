@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.12  -   2026-09-09
+//  Flow NOVO v7.13  -   2026-09-09
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -17,6 +17,8 @@
 //         o Flow demora para exibir os novos resultados na galeria.
 //  v7.12: os controles de minimizar e restaurar do painel Atribuir permanecem
 //         visiveis e o estado do painel volta sincronizado ao ser reaberto.
+//  v7.13: encerra a espera assim que imagens/videos estiverem prontos, inclusive
+//         quando o Flow mantiver spinners ocultos ou usar apenas miniaturas.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -104,7 +106,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.12 (controles do painel Atribuir sempre visíveis)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.13 (detecção imediata de gerações concluídas)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -713,11 +715,12 @@
       getImgSrcFromTile(tile) { return this.getMediaSrcFromTile(tile); },
       tileHasProgress(tile) {
         if (!tile) return false;
-        if ($('flow-pending-tile,[role="progressbar"],mat-progress-spinner,mat-spinner,.flow-spinner', tile)) return true;
+        const indicador = $('flow-pending-tile,[role="progressbar"],mat-progress-spinner,mat-spinner,.flow-spinner', tile);
+        if (indicador && visible(indicador)) return true;
         const els = $$('div, span, p', tile);
         for (const el of els) {
           const t = el.textContent?.trim();
-          if (t && /^\d{1,3}%$/.test(t)) {
+          if (visible(el) && t && /^\d{1,3}%$/.test(t)) {
             const num = parseInt(t, 10);
             if (num < 100) return true;
           }
@@ -800,7 +803,12 @@
                           !!$('button[aria-label*="play" i], .play-button', tile);
           const vid = $('flow-video-tile video, video[src]', tile);
           const hasVidSrc = vid && vid.src && !vid.src.startsWith('data:image/svg') && vid.src.length > 10;
-          return hasPlay || !!hasVidSrc;
+          // O layout novo frequentemente nao monta <video>: um video concluido
+          // aparece como thumbnail com o play desenhado em SVG.
+          const thumb = $('flow-video-tile img.thumbnail, img.thumbnail, flow-video-tile img[src]', tile);
+          const hasThumb = thumb && thumb.src && !thumb.src.startsWith('data:image/svg') &&
+            (thumb.naturalWidth > 0 || thumb.complete);
+          return hasPlay || !!hasVidSrc || !!hasThumb;
         }
 
         // Para imagem: precisa de imagem real renderizada
@@ -1887,6 +1895,34 @@
           index
         })));
       },
+      /**
+       * Confere continuamente os cartoes novos já concluídos. Antes esta busca
+       * acontecia apenas DEPOIS dos dois minutos; agora ela também libera o lote
+       * imediatamente quando o Flow terminou mas mudou o DOM do indicador.
+       */
+      resgatarResultadosConcluidos(matrix, incluirErros = false) {
+        const faltaram = matrix.filter(s => s.state === 'pending' || (incluirErros && s.state === 'error'));
+        if (!faltaram.length) return 0;
+        const usedUuids = new Set(matrix.filter(s => s.state === 'loaded' && s.uuid).map(s => s.uuid));
+        const prontos = this.getTiles().filter(tile => {
+          const uuid = this.getUuidFromTile(tile);
+          return uuid && !this._modernBaseline?.has(uuid) && !usedUuids.has(uuid) && this.isTileLoaded(tile);
+        });
+        let recuperados = 0;
+        for (const slot of faltaram) {
+          const tile = prontos.shift();
+          if (!tile) break;
+          const entry = this.tileEntry(tile);
+          if (!entry.uuid || !entry.loaded) continue;
+          Object.assign(slot, entry, { state: 'loaded' });
+          delete slot.errorReason;
+          usedUuids.add(entry.uuid);
+          recuperados++;
+          const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
+          try { reg.call(this, `🎯 Geração concluída confirmada: prompt ${slot.promptNum} (mídia ${slot.imgNum})`, 'success'); } catch (_) {}
+        }
+        return recuperados;
+      },
       async waitForMatrix(matrix) {
         const noProgressLimit = Math.max(60000, Number(document.getElementById('flow-t-semprog')?.value || 2) * 60000);
         let lastProgress = Date.now(), signature = '';
@@ -1897,6 +1933,7 @@
         while (true) {
           if (this.modernStopped()) throw stopError();
           this.captureModernResults();
+          this.resgatarResultadosConcluidos(matrix, false);
           if (this._modernCaptureError) { motivoParada = this._modernCaptureError; break; }
           let pending = 0;
           for (const slot of matrix) {
@@ -1927,26 +1964,7 @@
         }
 
         // ── CONFERÊNCIA FINAL DA GALERIA (precisão de mídias concluídas) ──
-        const faltaram = matrix.filter(s => s.state === 'pending' || s.state === 'error');
-        if (faltaram.length > 0) {
-          const usedUuids = new Set(matrix.filter(s => s.state === 'loaded' && s.uuid).map(s => s.uuid));
-          const allFreshTiles = this.getTiles().filter(t => {
-            const u = this.getUuidFromTile(t);
-            return u && !this._modernBaseline?.has(u) && !usedUuids.has(u) && this.isTileLoaded(t);
-          });
-          for (const s of faltaram) {
-            if (!allFreshTiles.length) break;
-            const t = allFreshTiles.shift();
-            const u = this.getUuidFromTile(t);
-            if (u) {
-              const entry = this.tileEntry(t);
-              Object.assign(s, entry, { state: 'loaded' });
-              delete s.errorReason;
-              usedUuids.add(u);
-              this.logDebug(`🎯 Recuperado com precisão na conferência: prompt ${s.promptNum} (mídia ${s.imgNum})`, 'success');
-            }
-          }
-        }
+        this.resgatarResultadosConcluidos(matrix, true);
 
         if (motivoParada) {
           this._modernUncertain = true;
@@ -3526,7 +3544,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.12 (controles do Atribuir + confirmação tardia + Relatório)',
+        versao: 'Flow NOVO v7.13 (conclusão imediata + controles do Atribuir + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
