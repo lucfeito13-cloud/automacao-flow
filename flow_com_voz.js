@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.18  -   2026-09-09
+//  Flow NOVO v7.19  -   2026-09-09
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -29,6 +29,8 @@
 //         nomes antigos ou a ordem da grade nunca podem decidir outra cena.
 //  v7.18: caixas pretas existem somente enquanto a renomeacao esta pendente;
 //         depois da confirmacao somem e nao reaparecem ao atualizar a pagina.
+//  v7.19: Baixar Cenas usa a selecao multipla nativa do Flow: Ctrl em cada
+//         midia identificada e clique direito na ultima para acionar Baixar.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -116,7 +118,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.18 (caixas confirmadas são limpas)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.19 (download nativo por seleção múltipla)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1769,52 +1771,146 @@
         } catch (error) { this.setStatus('error', `Download: ${error.message}`); }
         finally { this._modernDownloading = false; this.silenciarMenus(false); }
       },
-      async downloadScenes() {
-        const assignments = this._videoAssignActive ? this.videoSceneAssignments : this.sceneAssignments;
-        let entries = [...assignments].flatMap(([name, items]) => items.map(item => ({
-          ...item,
-          uuid: item.workflowId,
-          filename: `${name.replace(/\s+/g, '_')}_${item.imgNum}`
-        })));
 
-        // Se o mapa em memória estiver vazio (ex: após F5 ou uso da aba Renomear),
-        // varre a galeria buscando todas as cenas já identificadas!
-        if (!entries.length) {
-          this.logDebug('Buscando cenas na galeria para gerar o ZIP...', 'info');
-          const gallery = await this.scanGallery();
-          const encontradas = [];
-          for (const item of gallery) {
-            const info = sceneInfo(item.name) || (item.name ? this.lerNome(item.name) : null);
-            if (info) {
-              encontradas.push({
-                uuid: item.uuid,
-                name: item.name,
-                isVideo: item.isVideo,
-                filename: `Cena_${info.sceneNum}_${info.imgNum || 1}`
-              });
-            } else {
-              const tileAssigned = this.tileAssignments.get(item.uuid);
-              if (tileAssigned && tileAssigned.type === 'scene') {
-                encontradas.push({
-                  uuid: item.uuid,
-                  name: tileAssigned.label || item.name,
-                  isVideo: item.isVideo,
-                  filename: `${(tileAssigned.scene || 'Cena').replace(/\s+/g, '_')}_${tileAssigned.imgNum || 1}`
-                });
-              }
-            }
+      /**
+       * Usa exatamente o fluxo nativo de lote do Google Flow:
+       *  1. percorre a galeria inteira;
+       *  2. segura Ctrl e seleciona cada card que possui nome/caixa de Cena;
+       *  3. solta Ctrl, abre o clique direito na ultima selecao e clica Baixar.
+       *
+       * O proprio Flow fica responsavel por preparar o lote. Nao montamos ZIP
+       * nem baixamos uma URL por vez neste caminho.
+       */
+      async baixarCenasPorSelecaoMultipla() {
+        if (this._modernDownloading) return;
+        this._modernDownloading = true;
+        const somenteVideos = !!this._videoAssignActive;
+        const status = (tipo, msg) => {
+          const fn = somenteVideos ? this.setVideoStatus : this.setStatus;
+          try { fn.call(this, tipo, msg); } catch (_) {}
+        };
+        let selecionadas = 0;
+        let ultima = null;
+
+        const alvoDoCard = tile =>
+          tile?.querySelector('flow-video-tile video, flow-image-tile img, video, img') || tile;
+        const mouse = (alvo, tipo, ctrlKey, button = 0) => {
+          if (!alvo) return;
+          const r = alvo.getBoundingClientRect();
+          const x = Math.round(r.left + r.width / 2);
+          const y = Math.round(r.top + r.height / 2);
+          const apertado = tipo === 'mousedown' || tipo === 'pointerdown';
+          const opts = {
+            bubbles: true, cancelable: true, composed: true, view: window,
+            clientX: x, clientY: y, screenX: x, screenY: y,
+            ctrlKey: !!ctrlKey, button, buttons: apertado ? (button === 2 ? 2 : 1) : 0
+          };
+          try {
+            alvo.dispatchEvent(/^pointer/.test(tipo)
+              ? new PointerEvent(tipo, Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, opts))
+              : new MouseEvent(tipo, opts));
+          } catch (_) {}
+        };
+        const clicarComCtrl = alvo => {
+          for (const tipo of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            mouse(alvo, tipo, true, 0);
           }
-          entries = encontradas;
-        }
+        };
 
-        if (!entries.length) {
-          this.setStatus('warning', 'Nenhuma cena encontrada para download. Atribua ou renomeie as cenas primeiro.');
-          return;
-        }
+        try {
+          await this.closeMenus();
+          try {
+            document.dispatchEvent(new KeyboardEvent('keydown', {
+              key: 'Escape', code: 'Escape', keyCode: 27, which: 27,
+              bubbles: true, cancelable: true
+            }));
+            document.dispatchEvent(new KeyboardEvent('keyup', {
+              key: 'Escape', code: 'Escape', keyCode: 27, which: 27,
+              bubbles: true, cancelable: true
+            }));
+          } catch (_) {}
 
-        return this.downloadEntries(entries);
+          status('info', '🔎 Localizando e selecionando todas as cenas...');
+          try {
+            document.dispatchEvent(new KeyboardEvent('keydown', {
+              key: 'Control', code: 'ControlLeft', keyCode: 17, which: 17,
+              ctrlKey: true, bubbles: true, cancelable: true
+            }));
+          } catch (_) {}
+
+          await this.scanGallery(async (entry, tile) => {
+            if (!entry.uuid || !entry.loaded || entry.isVideo !== somenteVideos) return;
+            const atrib = this.tileAssignments.get(entry.uuid);
+            const identificada = !!(sceneInfo(entry.name) || lerNomeModelo(entry.name) || atrib?.type === 'scene');
+            if (!identificada) return;
+
+            const alvo = alvoDoCard(tile);
+            clicarComCtrl(alvo);
+            selecionadas++;
+            ultima = { tile, alvo, uuid: entry.uuid };
+            status('info', '☑️ Selecionando cenas: <b>' + selecionadas + '</b>');
+            await this.pausa(90);
+          }, { restore: false, completo: true });
+
+          try {
+            document.dispatchEvent(new KeyboardEvent('keyup', {
+              key: 'Control', code: 'ControlLeft', keyCode: 17, which: 17,
+              bubbles: true, cancelable: true
+            }));
+          } catch (_) {}
+
+          if (!selecionadas || !ultima) {
+            throw new Error('Nenhuma mídia identificada como Cena foi encontrada para selecionar.');
+          }
+
+          const tileFinal = this.getTiles().find(t => this.getUuidFromTile(t) === ultima.uuid) || ultima.tile;
+          if (!tileFinal?.isConnected) throw new Error('A última cena selecionada saiu da grade antes de abrir o menu.');
+          tileFinal.scrollIntoView({ block: 'center' });
+          await this.pausa(250);
+          const alvoFinal = alvoDoCard(tileFinal) || ultima.alvo;
+          mouse(alvoFinal, 'contextmenu', false, 2);
+
+          const baixar = await this.modernWait(() => menuItem(['Download', 'Baixar']), 6000);
+          if (!baixar) throw new Error('A opção Baixar não apareceu no clique direito da última mídia.');
+          baixar.click();
+
+          // Algumas contas mostram um segundo menu de qualidade; se existir,
+          // prioriza Original. Quando o download começa direto, não interfere.
+          let qualidades = null;
+          try {
+            qualidades = await this.modernWait(() => {
+              const itens = $$('[role="menuitem"]').filter(el => visible(el) && !el.disabled &&
+                /original|upscaled|\b\d(?:k|80p|20p)\b/i.test(norm(el.textContent)));
+              return itens.length ? itens : null;
+            }, 1800);
+          } catch (_) {}
+          if (qualidades?.length) {
+            const original = qualidades.find(el => /original/i.test(norm(el.textContent))) || qualidades[0];
+            original.click();
+          }
+
+          status('success', '⬇️ <b>' + selecionadas + '</b> cena(s) selecionada(s). O download nativo do Flow foi iniciado.');
+          return selecionadas;
+        } catch (erro) {
+          status('error', 'Download por seleção: ' + (erro?.message || erro));
+          this.logDebug('Download por seleção múltipla: ' + (erro?.message || erro), 'error');
+          return 0;
+        } finally {
+          try {
+            document.dispatchEvent(new KeyboardEvent('keyup', {
+              key: 'Control', code: 'ControlLeft', keyCode: 17, which: 17,
+              bubbles: true, cancelable: true
+            }));
+          } catch (_) {}
+          this._modernDownloading = false;
+        }
+      },
+
+      async downloadScenes() {
+        return this.baixarCenasPorSelecaoMultipla();
       },
       async downloadProjectImages(mode) {
+        if (mode === 'scenes') return this.baixarCenasPorSelecaoMultipla();
         const entries = await this.scanGallery();
         const filtered = entries.filter(e => mode === 'all' || (mode === 'scenes' ? this.tileAssignments.get(e.uuid)?.type === 'scene' : mode === 'refs' ? this.tileAssignments.get(e.uuid)?.type === 'ref' : this.tileAssignments.has(e.uuid)));
         return this.downloadEntries(filtered);
@@ -3635,7 +3731,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.18 (limpeza das caixas + prompt exato + Relatório)',
+        versao: 'Flow NOVO v7.19 (download por seleção múltipla + limpeza das caixas + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
