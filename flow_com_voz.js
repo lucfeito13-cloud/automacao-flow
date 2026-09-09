@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.14  -   2026-09-09
+//  Flow NOVO v7.15  -   2026-09-09
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -21,6 +21,8 @@
 //         quando o Flow mantiver spinners ocultos ou usar apenas miniaturas.
 //  v7.14: referencias visuais sao procuradas em Tudo, cobrindo imagens,
 //         personagens, avatares e videos tanto na aba Imagens quanto Videos.
+//  v7.15: adiciona Modo de seguranca opcional. Desligado envia o lote em
+//         paralelo; ligado confirma cada prompt antes de enviar o proximo.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -108,7 +110,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.14 (referências pesquisadas em Tudo)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.15 (modo de segurança opcional)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1832,6 +1834,11 @@
           }
         }
         record.observer = this._modernGalleryObserver;
+        const modoSeguranca = !!document.getElementById(
+          this.videoIsRunning || this._modernTestVideo ? 'fv-safety-sequential' : 'flow-safety-sequential'
+        )?.checked;
+        if (!modoSeguranca) return true;
+
         try {
           await this.modernWait(() => {
             this.captureModernResults();
@@ -3535,7 +3542,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.14 (busca em Tudo + conclusão imediata + Relatório)',
+        versao: 'Flow NOVO v7.15 (modo segurança + busca em Tudo + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -3708,6 +3715,22 @@
     proto.initUI = function () {
       old.initUI.call(this);
       root.__flowInstance = this;   // a aba Renomear precisa da instância
+      // Um unico Modo de seguranca, espelhado nas duas abas e salvo. O padrao
+      // e desligado para que o lote seja realmente enviado em paralelo.
+      const CHAVE_SEGURANCA = 'flow_modo_seguranca_sequencial';
+      let segurancaSalva = false;
+      try { segurancaSalva = localStorage.getItem(CHAVE_SEGURANCA) === '1'; } catch (_) {}
+      const caixasSeguranca = [
+        document.getElementById('flow-safety-sequential'),
+        document.getElementById('fv-safety-sequential')
+      ].filter(Boolean);
+      caixasSeguranca.forEach(caixa => {
+        caixa.checked = segurancaSalva;
+        caixa.addEventListener('change', () => {
+          caixasSeguranca.forEach(outra => { outra.checked = caixa.checked; });
+          try { localStorage.setItem(CHAVE_SEGURANCA, caixa.checked ? '1' : '0'); } catch (_) {}
+        });
+      });
       // Lembra se voce deixou o painel de atribuir encolhido no canto.
       const aplicarCantoSalvo = () => {
         try {
@@ -4614,6 +4637,14 @@ function triggerTrustedClick(el) {
             </label>
 
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+              <input type="checkbox" id="flow-safety-sequential">
+              <div class="flow-option-text">
+                <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">🛡️ Modo de segurança</div>
+                <div class="flow-option-desc">Ligado: confirma cada prompt antes do próximo. Desligado: envia o lote em paralelo (mais rápido).</div>
+              </div>
+            </label>
+
+            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
               <input type="checkbox" id="flow-use-backspace">
               <div class="flow-option-text">
                 <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Modo alternativo (Backspace 3x)</div>
@@ -4811,6 +4842,13 @@ function triggerTrustedClick(el) {
               <div class="flow-option-text">
                 <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">Retentar falhas no final</div>
                 <div class="flow-option-desc">Em vez de parar para retentar, guarda os que falharam e retenta tudo no final.</div>
+              </div>
+            </label>
+            <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
+              <input type="checkbox" id="fv-safety-sequential">
+              <div class="flow-option-text">
+                <div class="flow-option-title" style="color:var(--cd-text-muted);font-size:12px;">🛡️ Modo de segurança</div>
+                <div class="flow-option-desc">Ligado: confirma cada prompt antes do próximo. Desligado: envia o lote em paralelo (mais rápido).</div>
               </div>
             </label>
             <label class="flow-option" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--cd-border-light);">
