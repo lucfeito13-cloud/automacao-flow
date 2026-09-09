@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.16  -   2026-09-09
+//  Flow NOVO v7.17  -   2026-09-09
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -25,6 +25,8 @@
 //         paralelo; ligado confirma cada prompt antes de enviar o proximo.
 //  v7.16: resultados ausentes ficam em confirmacao por ate dois lotes antes
 //         de serem tratados como falha ou enviados novamente.
+//  v7.17: o renomeador valida todos os nomes pelo prompt do proprio cartao;
+//         nomes antigos ou a ordem da grade nunca podem decidir outra cena.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -112,7 +114,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.16 (confirmação por dois lotes)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.17 (renomeação validada pelo prompt exato)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -2514,11 +2516,28 @@
             sairTudo();
             const corpo = document.body;
             ['pointermove', 'mousemove'].forEach(t => {
-              try { corpo.dispatchEvent(new MouseEvent(t, { bubbles: true, clientX: 2, clientY: 2 })); } catch (_) {}
+              try {
+                corpo.dispatchEvent(/^pointer/.test(t)
+                  ? new PointerEvent(t, { bubbles: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: 2, clientY: 2 })
+                  : new MouseEvent(t, { bubbles: true, clientX: 2, clientY: 2 }));
+              } catch (_) {}
             });
             for (let e = 0; e < 1200 && this.lerPainelDePrompt(); e += 100) await this.sleep(100);
+
+            // Se o overlay anterior resistiu ao mouseleave, fecha menus e
+            // tenta limpar mais uma vez. Jamais continua enquanto houver um
+            // prompt antigo visivel: nesse caso o cartao atual sera pulado.
+            if (this.lerPainelDePrompt()) {
+              try { await this.closeMenus(); } catch (_) {}
+              sairTudo();
+              for (let e = 0; e < 700 && this.lerPainelDePrompt(); e += 100) await this.sleep(100);
+            }
+            if (this.lerPainelDePrompt()) return null;
           }
           entrarTudo();
+          // Evita aceitar no mesmo instante um overlay que o Angular ainda
+          // esteja desmontando/montando entre dois cartoes consecutivos.
+          await this.pausa(240);
           for (let esperou = 0; esperou < tetoMs; esperou += 80) {
             await this.pausa(80);
             texto = this.lerPainelDePrompt();
@@ -2805,14 +2824,6 @@
         if (btnAnalisar) btnAnalisar.disabled = true;
         if (btnStop) btnStop.disabled = false;
 
-        // Pré-carrega todos os prompts digitados em ambas as abas (Vídeos e Imagens)
-        const fvInput = document.getElementById('fv-prompts-input')?.value || '';
-        const flowInput = document.getElementById('flow-prompts-input')?.value || '';
-        const parsedPrompts = [
-          ...parsePromptsText(fvInput),
-          ...parsePromptsText(flowInput)
-        ];
-
         const contador = new Map();
         const plano = [];
         const vistos = new Set();
@@ -2830,67 +2841,36 @@
             totalProcessados++;
 
             let cena = null, origem = null, imgNumExistente = null;
-
-            // 1. Já está nomeada? (ex: "Cena 1 - Vídeo 1" ou "Cena 1 - Imagem 2")
             const jaNomeada = lerNomeModelo(entry.name) || sceneInfo(entry.name);
-            if (jaNomeada) {
-              cena = jaNomeada.sceneNum;
-              imgNumExistente = jaNomeada.imgNum;
-              origem = 'nome';
-            } else {
-              // O título automático do Flow não é o prompt e pode começar com
-              // números sem relação com a cena. Só confiamos no nome quando ele
-              // já está no formato oficial (tratado acima). Para os demais cards,
-              // a cena precisa vir do prompt real.
-              const doRotulo = null;
-              if (doRotulo != null) {
-                cena = doRotulo;
-                origem = 'rótulo';
-              } else {
-                // 3. Pelo componente Angular na memória
-                let doAngular = null;
-                try {
-                  if (typeof this.promptDoComponente === 'function') {
-                    doAngular = this.promptDoComponente(tile);
-                  } else if (typeof this.promptDoContexto === 'function') {
-                    doAngular = this.promptDoContexto(tile);
-                  }
-                } catch (_) {}
-                const cenaAngular = doAngular ? this.numeroDaCenaNoTexto(doAngular) : null;
-                if (cenaAngular != null) {
-                  cena = cenaAngular;
-                  origem = 'angular';
-                } else {
-                  // 4. Hover rápido
-                  try {
-                    const promptHover = await this.promptPorHover(tile, 800);
-                    const doHover = this.numeroDaCenaNoTexto(promptHover);
-                    if (doHover != null) {
-                      cena = doHover;
-                      origem = 'hover';
-                    }
-                  } catch (_) {}
-                }
+
+            // O PROMPT DO CARTAO e a unica fonte autorizada para decidir a cena.
+            // Um nome no formato oficial pode ter sido aplicado incorretamente
+            // numa execucao anterior (como Cena 191 em um prompt 192/193), entao
+            // ele nunca mais e aceito sem validacao.
+            let promptHover = null, cenaHover = null;
+            try {
+              promptHover = await this.promptPorHover(tile, 2200);
+              cenaHover = this.numeroDaCenaNoTexto(promptHover);
+            } catch (_) {}
+
+            // Nem nome existente, nem contexto Angular, nem posicao na grade
+            // podem escolher uma cena. O contexto de um ancestral pode ser do
+            // cartao vizinho, portanto so o painel aberto pelo proprio hover
+            // autoriza a renomeacao.
+            if (cenaHover != null) {
+              cena = cenaHover;
+              origem = 'prompt_hover_exato';
+              if (jaNomeada && Number(jaNomeada.sceneNum) === Number(cenaHover)) {
+                imgNumExistente = jaNomeada.imgNum;
               }
             }
 
-            // 5. Se ainda não achou, tenta casar entry.name contra os prompts
-            // digitados. Esta comparação é local e não abre nenhuma janela.
-            if (cena == null && parsedPrompts.length > 0 && entry.name) {
-              const limpoName = norm(entry.name).toLowerCase().replace(/[^a-z0-9]/g, '');
-              if (limpoName.length >= 10) {
-                const match = parsedPrompts.find(p => {
-                  const limpoP = norm(p.text).toLowerCase().replace(/[^a-z0-9]/g, '');
-                  return limpoP === limpoName ||
-                    (limpoP.length >= 15 && limpoName.includes(limpoP.slice(0, 25))) ||
-                    (limpoName.length >= 15 && limpoP.includes(limpoName.slice(0, 25)));
-                });
-                if (match) {
-                  const n = this.numeroDaCenaNoTexto(match.text);
-                  cena = n != null ? n : match.promptNum;
-                  origem = 'nome_match';
-                }
-              }
+            // Sem prompt confiavel nao ha renomeacao. Nenhuma aproximacao por
+            // titulo, posicao ou sequencia e permitida.
+            if (cena == null) {
+              semCena++;
+              if (apenasAnalisar) linha('⚠️ Pulada sem prompt confirmado: ' + (entry.name || 'sem nome').slice(0, 45), 'aviso');
+              return;
             }
 
             // Se identificou a cena:
@@ -3632,7 +3612,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.16 (confirmação por dois lotes + modo segurança + Relatório)',
+        versao: 'Flow NOVO v7.17 (prompt exato + confirmação por dois lotes + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
