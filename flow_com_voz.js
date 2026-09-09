@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.17  -   2026-09-09
+//  Flow NOVO v7.18  -   2026-09-09
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -27,6 +27,8 @@
 //         de serem tratados como falha ou enviados novamente.
 //  v7.17: o renomeador valida todos os nomes pelo prompt do proprio cartao;
 //         nomes antigos ou a ordem da grade nunca podem decidir outra cena.
+//  v7.18: caixas pretas existem somente enquanto a renomeacao esta pendente;
+//         depois da confirmacao somem e nao reaparecem ao atualizar a pagina.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -114,7 +116,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.17 (renomeação validada pelo prompt exato)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.18 (caixas confirmadas são limpas)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1424,6 +1426,7 @@
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
                 this.updateAssignItemUI(marca.tipo === 'ref' ? marca.referencia : marca.cena, true);
                 delete marcas[id];
+                this.removeLabelFromTile(id);
               } else {
                 falhou++;
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'failed'));
@@ -1512,9 +1515,24 @@
       startLabelObserver() {
         const render = () => {
           const marcas = this.lerMarcas();
+          let limpouConfirmadas = false;
           for (const tile of this.getTiles()) {
             const id = this.getUuidFromTile(tile);
-            const pendente = id && marcas[id];
+            let pendente = id && marcas[id];
+
+            // Recuperacao de versoes anteriores: se a pagina recarregou com
+            // uma marca salva, mas o nome definitivo ja esta no proprio card,
+            // a operacao foi concluida e essa pendencia ficou obsoleta.
+            if (pendente?.nome) {
+              let nomeAtual = '';
+              try { nomeAtual = this.getTileName(tile) || ''; } catch (_) {}
+              if (norm(nomeAtual) === norm(pendente.nome)) {
+                delete marcas[id];
+                pendente = null;
+                limpouConfirmadas = true;
+                this.removeLabelFromTile(id);
+              }
+            }
             let data = this.tileAssignments.get(id);
             if (!data && pendente) {
               if (pendente.tipo === 'ref') {
@@ -1531,10 +1549,14 @@
               this.tileAssignments.set(id, data);
             }
             const previous = $('.flow-tile-label', tile);
-            if (previous && (previous.dataset.wf !== id || !data)) previous.remove();
-            if (data && !$('.flow-tile-label', tile)) this.addLabelToTile(tile, data.label, id, data.type, data.type === 'ref' ? data.name : data.scene);
+            // A caixa preta representa uma ACAO PENDENTE, nao o nome definitivo
+            // da midia. Depois que a marca sai do localStorage, o observador deve
+            // remover a caixa em vez de recria-la a partir de tileAssignments.
+            if (previous && (previous.dataset.wf !== id || !data || !pendente)) previous.remove();
+            if (data && pendente && !$('.flow-tile-label', tile)) this.addLabelToTile(tile, data.label, id, data.type, data.type === 'ref' ? data.name : data.scene);
             if (pendente) $('.flow-tile-label', tile)?.setAttribute('data-rename-state', 'pending');
           }
+          if (limpouConfirmadas) this.salvarMarcas(marcas);
           this.atualizarBotaoRenomearMarcadas();
         };
         render();
@@ -2754,6 +2776,7 @@
                 try { await this.apiFavorite(p.uuid, true); } catch (_) {}
                 delete marcas[p.uuid];
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
+                this.removeLabelFromTile(p.uuid);
                 this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
                 if (ok % 20 === 0) this.salvarMarcas(marcas);
               } else {
@@ -3612,7 +3635,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.17 (prompt exato + confirmação por dois lotes + Relatório)',
+        versao: 'Flow NOVO v7.18 (limpeza das caixas + prompt exato + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
