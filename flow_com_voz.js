@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.13  -   2026-09-09
+//  Flow NOVO v7.14  -   2026-09-09
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -19,6 +19,8 @@
 //         visiveis e o estado do painel volta sincronizado ao ser reaberto.
 //  v7.13: encerra a espera assim que imagens/videos estiverem prontos, inclusive
 //         quando o Flow mantiver spinners ocultos ou usar apenas miniaturas.
+//  v7.14: referencias visuais sao procuradas em Tudo, cobrindo imagens,
+//         personagens, avatares e videos tanto na aba Imagens quanto Videos.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -106,7 +108,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.13 (detecção imediata de gerações concluídas)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.14 (referências pesquisadas em Tudo)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -250,12 +252,12 @@
         await this.modernWait(() => visible($('input[aria-label="Search assets"]')));
       },
       async clickDialogTab(type, broad = false) {
-        // O Flow passou a separar referências visuais entre Images, Characters,
-        // Avatars e Uploads. Mantemos Images como primeira tentativa e usamos
-        // All como fallback, para que referências antigas continuem funcionando.
+        // Referencias comuns podem estar em Imagens, Personagens, Avatares,
+        // Videos ou Envios. Por isso imagem E video pesquisam primeiro em Tudo.
+        // Somente a marcacao explicita de voz fica restrita a Vozes.
         const labels = type === 'voice'
           ? ['Voices', 'Vozes']
-          : (broad ? ['All', 'Tudo', 'Todos'] : ['Images', 'Imagens']);
+          : ['All', 'Tudo', 'Todos'];
         const tab = $$('[role="tablist"][aria-label="Category navigation"] [role="tab"]').find(el => labels.includes(norm($('.toggle-text', el)?.textContent || el.textContent).replace(/^(image|voice_selection)\s*/, '')));
         // Match the visible category label without depending on the icon font.
         const match = tab || $$('[role="tablist"][aria-label="Category navigation"] [role="tab"]').find(el => labels.some(label => norm(el.textContent).endsWith(label)));
@@ -297,33 +299,22 @@
         let input = $('input[aria-label="Search assets"]');
         const opcoes = () => $$('[role="listbox"][aria-label="Asset list"] [role="option"]');
         const exatas = () => opcoes().filter(o => refKey($('.asset-title', o)?.textContent) === refKey(name));
-        // Espera a lista responder. Assim que aparece um resultado exato usamos
-        // ele; se so vierem parecidos, ficamos com o PRIMEIRO, como a versao
-        // rapida fazia. Antes exigiamos nome exato E unico, e qualquer duvida
-        // custava uma troca de aba mais 12 segundos de espera por prompt.
+        // Espera a lista responder e aceita somente o nome solicitado. Pegar o
+        // primeiro resultado parecido fazia um item de Imagens ocupar o lugar de
+        // um Personagem e impedia a busca correta na categoria Tudo.
         const esperar = async timeout => {
           const fimT = Date.now() + timeout;
-          let algum = [];
           while (Date.now() < fimT) {
             if (this.modernStopped()) throw stopError();
             const e = exatas();
             if (e.length) return e[0];
-            algum = opcoes();
-            if (algum.length) { await this.pausa(200); const e2 = exatas(); return e2.length ? e2[0] : (opcoes()[0] || algum[0]); }
             await this.pausa(120);
           }
           return null;
         };
 
         setInput(input, name);
-        let alvo = await esperar(type === 'voice' ? 12000 : 3000);
-        if (!alvo && type !== 'voice') {
-          await this.clickDialogTab(type, true);
-          input = $('input[aria-label="Search assets"]');
-          if (!input) throw new Error('Campo de busca de referencias nao encontrado.');
-          setInput(input, name);
-          alvo = await esperar(8000);
-        }
+        const alvo = await esperar(type === 'voice' ? 12000 : 10000);
         if (!alvo) throw new Error(`Referência ${type === 'voice' ? 'de voz ' : ''}"${name}" não encontrada.`);
         return alvo;
       },
@@ -3544,7 +3535,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.13 (conclusão imediata + controles do Atribuir + Relatório)',
+        versao: 'Flow NOVO v7.14 (busca em Tudo + conclusão imediata + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
