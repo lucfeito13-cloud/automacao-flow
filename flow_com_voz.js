@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.11  -   2026-09-09
+//  Flow NOVO v7.12  -   2026-09-09
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -15,6 +15,8 @@
 //         em lista e mantem o botao de iniciar a renomeacao sempre visivel.
 //  v7.11: imagens e videos mantem o registro de cenas decimais mesmo quando
 //         o Flow demora para exibir os novos resultados na galeria.
+//  v7.12: os controles de minimizar e restaurar do painel Atribuir permanecem
+//         visiveis e o estado do painel volta sincronizado ao ser reaberto.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -102,7 +104,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.11 (confirmação tardia de imagens e vídeos)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.12 (controles do painel Atribuir sempre visíveis)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -3524,7 +3526,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.11 (confirmação tardia + cenas decimais + Relatório)',
+        versao: 'Flow NOVO v7.12 (controles do Atribuir + confirmação tardia + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -3547,11 +3549,25 @@
       const st = document.createElement('style');
       st.id = 'flow-estilo-canto';
       st.textContent = [
+        '#flow-assign-panel .flow-assign-header{min-width:0;flex-wrap:wrap;overflow:visible;}',
+        '#flow-assign-panel .flow-assign-header h3{min-width:0;overflow:hidden;text-overflow:ellipsis;}',
+        '#flow-assign-panel .flow-assign-header-btns{min-width:0;max-width:100%;flex-wrap:wrap;justify-content:flex-end;}',
+        '#flow-assign-toggle{order:-30;flex:0 0 auto!important;}',
+        '#flow-assign-layout{order:-29;flex:0 0 auto!important;}',
+        '#flow-assign-close{order:-28;flex:0 0 auto!important;}',
         '#flow-assign-panel.canto{top:auto!important;left:auto!important;right:16px!important;',
         'bottom:16px!important;width:auto!important;max-width:340px;min-width:190px;',
         'border-radius:14px;box-shadow:0 12px 32px rgba(0,0,0,.28);}',
-        '#flow-assign-panel.canto .flow-assign-header{padding:8px 12px;}',
-        '#flow-assign-panel.canto .flow-assign-header h3{font-size:12px;}',
+        '#flow-assign-panel.canto .flow-assign-header{padding:8px 12px;flex-wrap:nowrap;}',
+        '#flow-assign-panel.canto .flow-assign-header h3{font-size:12px;flex:1 1 auto;}',
+        '#flow-assign-panel.canto .flow-assign-count,',
+        '#flow-assign-panel.canto #flow-assign-rename,',
+        '#flow-assign-panel.canto #flow-assign-download,',
+        '#flow-assign-panel.canto #flow-assign-auto,',
+        '#flow-assign-panel.canto #flow-assign-layout{display:none!important;}',
+        '#flow-assign-panel.canto .flow-assign-header-btns{flex:0 0 auto;flex-wrap:nowrap;margin-left:auto;}',
+        '#flow-assign-panel.canto #flow-assign-toggle,',
+        '#flow-assign-panel.canto #flow-assign-close{display:inline-flex!important;position:relative!important;visibility:visible!important;opacity:1!important;}',
         '#flow-assign-panel.canto .flow-assign-items,',
         '#flow-assign-panel.canto .flow-assign-prompt-preview,',
         '#flow-assign-panel.canto .flow-assign-reload-bar{display:none;}'
@@ -3698,7 +3714,19 @@
       for (const nome of abrir) {
         if (typeof this[nome] !== 'function') continue;
         const original = this[nome].bind(this);
-        this[nome] = (...args) => { const r = original(...args); setTimeout(aplicarCantoSalvo, 60); return r; };
+        this[nome] = (...args) => {
+          // Toda abertura comeca em um estado coerente. A rotina original tira
+          // "minimized", mas antes deixava "canto" para tras e o botao passava
+          // a representar a acao errada (ou ficava recortado fora da barra).
+          const painel = document.getElementById('flow-assign-panel');
+          if (painel) {
+            painel.classList.remove('minimized', 'canto');
+            painel.style.removeProperty('bottom');
+          }
+          const r = original(...args);
+          setTimeout(aplicarCantoSalvo, 60);
+          return r;
+        };
       }
 
       // ── Escolha da qualidade do download ───────────────────────────────────
