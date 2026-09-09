@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.10  -   2026-09-08
+//  Flow NOVO v7.11  -   2026-09-09
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -13,6 +13,8 @@
 //        baixo, sem reiniciar a busca no topo para cada midia.
 //  v7.10: o painel Atribuir Cenas reconhece os cartoes tanto em grade quanto
 //         em lista e mantem o botao de iniciar a renomeacao sempre visivel.
+//  v7.11: imagens e videos mantem o registro de cenas decimais mesmo quando
+//         o Flow demora para exibir os novos resultados na galeria.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -100,7 +102,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.10 (atribuição em lista e grade)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.11 (confirmação tardia de imagens e vídeos)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1794,36 +1796,56 @@
 
     const prepare = proto.prepareAndSubmit;
     Object.assign(proto, {
+      chaveDoPrompt(promptNum) {
+        return String(promptNum ?? '').trim().replace(',', '.');
+      },
       async prepareAndSubmit(prompt) {
         this._modernCurrentPrompt = prompt.promptNum;
         const beforeIds = this.snapshotImageUuids();
         const expected = this.videoIsRunning ? this.videoResultsPerPrompt : this.imagesPerPrompt;
-        const enviou = await prepare.call(this, prompt);
-        // Pulado lá dentro: não adianta esperar resultados que não virão.
-        if (enviou === false) return false;
-        const record = { promptNum: prompt.promptNum, nodes: [], results: new Map(), beforeIds, expected, signature: this._modernPreparedText };
+        const promptKey = this.chaveDoPrompt(prompt.promptNum);
+        // O registro nasce ANTES do envio. Se o Flow aceitar o clique mas demorar
+        // para mostrar os cartoes, a cena (inclusive 70.1, 71.1...) nao se perde.
+        const record = { promptNum: prompt.promptNum, promptKey, nodes: [], results: new Map(), beforeIds, expected, signature: '' };
         this._modernActiveRecords ||= [];
         this._modernActiveRecords.push(record);
+        this._modernRecords ||= new Map();
+        this._modernRecords.set(promptKey, record);
+
+        const enviou = await prepare.call(this, prompt);
+        record.signature = this._modernPreparedText;
+        record.envioConfirmado = enviou !== false;
+        if (enviou === false) {
+          // Pode ser apenas falso negativo do clique: mantemos o registro para a
+          // conferencia da galeria resgatar a midia que aparecer depois.
+          record.confirmacaoPendente = true;
+          const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
+          try { reg.call(this, `⏳ Prompt ${prompt.promptNum}: o clique não foi confirmado; acompanhando a galeria antes de considerar falha.`, 'warning'); } catch (_) {}
+        }
+
+        if (!this._modernGalleryObserver) {
+          const scroller = this.getScroller();
+          if (scroller) {
+            this._modernGalleryObserver = new MutationObserver(() => this.captureModernResults());
+            this._modernGalleryObserver.observe(scroller, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'data-media-id', 'aria-label'] });
+          }
+        }
+        record.observer = this._modernGalleryObserver;
         try {
           await this.modernWait(() => {
             this.captureModernResults();
             return record.nodes.length === expected;
-          }, 12000);
+          }, 20000);
         } catch (error) {
           if (error && error.stopped) throw error;
           this._modernUncertain = true;
           const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
-          try { reg.call(this, `⏭️ Prompt ${prompt.promptNum}: envio feito, mas não identifiquei os resultados — conta como falha e sigo.`, 'error'); } catch (_) {}
-          return false;
+          try { reg.call(this, `⏳ Prompt ${prompt.promptNum}: resultados ainda não apareceram; continuarei conferindo durante o lote.`, 'warning'); } catch (_) {}
         }
-        if (!this._modernGalleryObserver) {
-          this._modernGalleryObserver = new MutationObserver(() => this.captureModernResults());
-          this._modernGalleryObserver.observe(this.getScroller(), { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'data-media-id', 'aria-label'] });
+        if (record.observer) {
+          this._modernObservers ||= [];
+          this._modernObservers.push(record.observer);
         }
-        record.observer = this._modernGalleryObserver;
-        this._modernRecords ||= new Map();
-        this._modernRecords.set(prompt.promptNum, record);
-        this._modernObservers ||= []; this._modernObservers.push(record.observer);
         return true;
       },
       captureModernResults() {
@@ -1854,7 +1876,14 @@
         }
       },
       buildPositionMatrix(batch, count) {
-        return batch.flatMap(prompt => Array.from({ length: count }, (_, index) => ({ promptNum: prompt.promptNum, imgNum: index + 1, state: 'pending', record: this._modernRecords?.get(prompt.promptNum), index })));
+        return batch.flatMap(prompt => Array.from({ length: count }, (_, index) => ({
+          promptNum: prompt.promptNum,
+          promptKey: this.chaveDoPrompt(prompt.promptNum),
+          imgNum: index + 1,
+          state: 'pending',
+          record: this._modernRecords?.get(this.chaveDoPrompt(prompt.promptNum)),
+          index
+        })));
       },
       async waitForMatrix(matrix) {
         const noProgressLimit = Math.max(60000, Number(document.getElementById('flow-t-semprog')?.value || 2) * 60000);
@@ -1924,7 +1953,7 @@
           const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
           try { reg.call(this, '⚠️ ' + motivoParada + ' ' + aindaFaltam.length + ' contam como falha real — a fila SEGUE.', 'warning'); } catch (_) {}
         }
-        for (const record of new Set(matrix.map(slot => slot.record).filter(Boolean))) record.observer.disconnect();
+        for (const record of new Set(matrix.map(slot => slot.record).filter(Boolean))) record.observer?.disconnect();
         for (const slot of matrix) if (slot.uuid) this._modernBaseline?.add(slot.uuid);
         this.rememberModernErrors();
         this._modernActiveRecords = [];
@@ -1975,7 +2004,7 @@
         if (this.isRunning || this.videoIsRunning || this._modernTaskRunning) return;
         const status = (type, text) => (video ? this.setVideoStatus : this.setStatus).call(this, type, text);
         this._modernTaskRunning = true; this.shouldStop = false; this.videoShouldStop = false; this._modernUncertain = false;
-        this._modernActiveRecords = []; this._modernCaptureError = null;
+        this._modernActiveRecords = []; this._modernRecords = new Map(); this._modernCaptureError = null;
         try {
           const prefix = video ? 'fv' : 'flow';
           if (!norm(document.getElementById(`${prefix}-prompts-input`).value)) { status('warning', 'Insira pelo menos um prompt.'); return; }
@@ -3495,7 +3524,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.10 (atribuição em lista/grade + Relatório)',
+        versao: 'Flow NOVO v7.11 (confirmação tardia + cenas decimais + Relatório)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
