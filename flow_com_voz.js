@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v8.1  -   2026-09-10
+//  Flow NOVO v8.2  -   2026-09-10
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -35,6 +35,8 @@
 //        renomeia no formato escolhido e usa essa midia na cena seguinte.
 //  v8.1: o painel Atribuir diferencia selecao pendente em verde-claro da
 //        renomeacao confirmada em verde-escuro com o simbolo de concluido.
+//  v8.2: falhas de renomeacao recebem aviso visual e os controles de minimizar
+//        e restaurar permanecem visiveis tambem no painel vertical.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -122,7 +124,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.1 (estados de atribuição e renomeação)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.2 (confirmação, falhas e painel vertical)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1285,7 +1287,7 @@
         document.querySelectorAll('.flow-assign-item').forEach(item => {
           const nome = item.dataset.name || item.dataset.scene;
           if (nome !== chave) return;
-          item.classList.remove('assigned', 'complete', 'rename-pending', 'rename-confirmed');
+          item.classList.remove('assigned', 'complete', 'rename-pending', 'rename-confirmed', 'rename-failed');
           const status = item.querySelector('.assign-status');
           if (estado === 'pending') {
             item.classList.add('assigned', 'rename-pending');
@@ -1297,6 +1299,11 @@
             item.title = 'Renomeação confirmada pelo Flow';
             item.setAttribute('aria-label', `${nome}: renomeação concluída`);
             if (status) status.textContent = '✅';
+          } else if (estado === 'failed') {
+            item.classList.add('assigned', 'rename-failed');
+            item.title = 'Atenção: o Flow não confirmou a renomeação; tente novamente';
+            item.setAttribute('aria-label', `${nome}: atenção, renomeação não confirmada`);
+            if (status) status.textContent = '⚠️';
           } else {
             item.removeAttribute('title');
             item.removeAttribute('aria-label');
@@ -1329,12 +1336,14 @@
           : `🏷️ Renomear selecionadas (${total})`;
         document.querySelectorAll('.flow-assign-item').forEach(item => {
           const chave = item.dataset.name || item.dataset.scene;
-          const temPendente = pendentes.some(m =>
+          const marcasDoItem = pendentes.filter(m =>
             (m.tipo === 'ref' && m.referencia === chave) ||
             (m.tipo === 'scene' && m.cena === chave)
           );
+          const temPendente = marcasDoItem.length > 0;
           if (temPendente) {
-            this.atualizarEstadoItemAtribuir(chave, 'pending');
+            const teveFalha = marcasDoItem.some(m => m.estado === 'failed');
+            this.atualizarEstadoItemAtribuir(chave, teveFalha ? 'failed' : 'pending');
             return;
           }
           const atribuidoComoRef = !!(item.dataset.name && this.refAssignments?.get(chave));
@@ -1356,7 +1365,7 @@
           try { original = this.getTileName(this.getTiles().find(t => this.getUuidFromTile(t) === id)) || ''; }
           catch (_) { original = ''; }
         }
-        marcas[id] = Object.assign({ original }, dados);
+        marcas[id] = Object.assign({ original, estado: 'pending' }, dados);
         this.salvarMarcas(marcas);
       },
       desmarcar(id) {
@@ -1462,6 +1471,8 @@
           for (let i = 0; i < ids.length; i++) {
             const id = ids[i], marca = marcas[id];
             try {
+              marca.estado = 'pending';
+              this.atualizarEstadoItemAtribuir(marca.tipo === 'ref' ? marca.referencia : marca.cena, 'pending');
               const tile = await this.scrollToWorkflow(id);
               tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
               this.logDebug(`🏷️ Renomeando ${i + 1}/${ids.length}: ${marca.nome}`, 'info');
@@ -1476,10 +1487,14 @@
                 this.removeLabelFromTile(id);
               } else {
                 falhou++;
+                marca.estado = 'failed';
+                this.atualizarEstadoItemAtribuir(marca.tipo === 'ref' ? marca.referencia : marca.cena, 'failed');
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'failed'));
               }
             } catch (erro) {
               falhou++;
+              marca.estado = 'failed';
+              this.atualizarEstadoItemAtribuir(marca.tipo === 'ref' ? marca.referencia : marca.cena, 'failed');
               this.logDebug(`❌ ${marca.nome}: ${erro?.message || erro}`, 'error');
             }
           }
@@ -1601,7 +1616,10 @@
             // remover a caixa em vez de recria-la a partir de tileAssignments.
             if (previous && (previous.dataset.wf !== id || !data || !pendente)) previous.remove();
             if (data && pendente && !$('.flow-tile-label', tile)) this.addLabelToTile(tile, data.label, id, data.type, data.type === 'ref' ? data.name : data.scene);
-            if (pendente) $('.flow-tile-label', tile)?.setAttribute('data-rename-state', 'pending');
+            if (pendente) $('.flow-tile-label', tile)?.setAttribute(
+              'data-rename-state',
+              pendente.estado === 'failed' ? 'failed' : 'pending'
+            );
           }
           if (limpouConfirmadas) this.salvarMarcas(marcas);
           this.atualizarBotaoRenomearMarcadas();
@@ -4099,7 +4117,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','runContinuity','esperarReferenciaContinuidade','baixarCenasPorSelecaoMultipla','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v8.1 (estados visuais de atribuição e renomeação)',
+        versao: 'Flow NOVO v8.2 (confirmação, alerta de falha e painel vertical)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -4143,7 +4161,10 @@
         '#flow-assign-panel.canto #flow-assign-close{display:inline-flex!important;position:relative!important;visibility:visible!important;opacity:1!important;}',
         '#flow-assign-panel.canto .flow-assign-items,',
         '#flow-assign-panel.canto .flow-assign-prompt-preview,',
-        '#flow-assign-panel.canto .flow-assign-reload-bar{display:none;}'
+        '#flow-assign-panel.canto .flow-assign-reload-bar{display:none;}',
+        '#flow-assign-panel.vertical:not(.canto) .flow-assign-header{position:relative!important;padding-right:70px!important;overflow:visible!important;}',
+        '#flow-assign-panel.vertical:not(.canto) #flow-assign-toggle{display:inline-flex!important;align-items:center!important;justify-content:center!important;position:absolute!important;top:7px!important;right:36px!important;visibility:visible!important;opacity:1!important;z-index:4!important;}',
+        '#flow-assign-panel.vertical:not(.canto) #flow-assign-close{display:inline-flex!important;align-items:center!important;justify-content:center!important;position:absolute!important;top:7px!important;right:9px!important;visibility:visible!important;opacity:1!important;z-index:4!important;}'
       ].join('');
       document.head.appendChild(st);
     }
@@ -4199,6 +4220,8 @@
         '.flow-assign-item.rename-pending .assign-name,.flow-assign-item.rename-pending .assign-status,.flow-assign-item.rename-pending .drag-icon{color:#166534!important;font-weight:800!important;}',
         '.flow-assign-item.rename-confirmed{background:#15803d!important;border-color:#14532d!important;color:#fff!important;box-shadow:0 2px 7px rgba(20,83,45,.3)!important;}',
         '.flow-assign-item.rename-confirmed .assign-name,.flow-assign-item.rename-confirmed .assign-status,.flow-assign-item.rename-confirmed .drag-icon{color:#fff!important;font-weight:800!important;text-decoration:none!important;}',
+        '.flow-assign-item.rename-failed{background:#fff7ed!important;border-color:#f97316!important;color:#9a3412!important;box-shadow:0 0 0 1px rgba(249,115,22,.18)!important;}',
+        '.flow-assign-item.rename-failed .assign-name,.flow-assign-item.rename-failed .assign-status,.flow-assign-item.rename-failed .drag-icon{color:#9a3412!important;font-weight:800!important;}',
         '.flow-tile-label[data-rename-state="pending"]{background:rgba(0,0,0,.88)!important;color:#fff!important;border:1px solid rgba(255,255,255,.35)!important;box-shadow:0 2px 8px rgba(0,0,0,.45)!important;}',
         '.flow-tile-label[data-rename-state="renaming"]{background:#dbeafe!important;color:#1d4ed8!important;border-color:#3b82f6!important;}',
         '.flow-tile-label[data-rename-state="confirmed"]{background:#dcfce7!important;color:#166534!important;border-color:#22c55e!important;}',
@@ -4974,6 +4997,8 @@ function triggerTrustedClick(el) {
 .flow-assign-item.rename-pending{background:#dcfce7;border-color:#86efac;color:#166534;}
 .flow-assign-item.rename-confirmed{background:#15803d;border-color:#14532d;color:#fff;box-shadow:0 2px 7px rgba(20,83,45,.3);}
 .flow-assign-item.rename-confirmed .assign-name,.flow-assign-item.rename-confirmed .assign-status,.flow-assign-item.rename-confirmed .drag-icon{color:#fff;font-weight:800;}
+.flow-assign-item.rename-failed{background:#fff7ed;border-color:#f97316;color:#9a3412;}
+.flow-assign-item.rename-failed .assign-name,.flow-assign-item.rename-failed .assign-status,.flow-assign-item.rename-failed .drag-icon{color:#9a3412;font-weight:800;}
 /* ADD-ON Auto-Enumerador: conclusão (verde) e faltante (apagado) */
 .flow-assign-item.complete{background:#dcfce7;border-color:#22c55e;opacity:1;}
 .flow-assign-item.complete .assign-name{color:#15803d;font-weight:700;text-decoration:none;}
@@ -5002,6 +5027,9 @@ function triggerTrustedClick(el) {
 #flow-assign-panel.vertical .flow-assign-items{flex-direction:column;flex-wrap:nowrap;max-height:none;flex:1;overflow-y:auto;padding:6px 8px;gap:4px;}
 #flow-assign-panel.vertical .flow-assign-item{white-space:nowrap;font-size:11px;padding:5px 10px;}
 #flow-assign-panel.vertical .flow-assign-header-btns{gap:2px;}
+#flow-assign-panel.vertical:not(.canto) .flow-assign-header{position:relative;padding-right:70px;overflow:visible;}
+#flow-assign-panel.vertical:not(.canto) #flow-assign-toggle{display:inline-flex;position:absolute;top:7px;right:36px;visibility:visible;opacity:1;z-index:4;}
+#flow-assign-panel.vertical:not(.canto) #flow-assign-close{display:inline-flex;position:absolute;top:7px;right:9px;visibility:visible;opacity:1;z-index:4;}
 #flow-assign-panel.vertical .flow-assign-dl-btn{font-size:10px;padding:4px 8px;}
 #flow-assign-panel.vertical .flow-assign-prompt-preview{font-size:10px;padding:0 8px 6px;}
 #flow-assign-panel.vertical.panel-closed{right:12px;}
