@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v8.0  -   2026-09-10
+//  Flow NOVO v8.1  -   2026-09-10
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -33,6 +33,8 @@
 //         midia identificada e clique direito na ultima para acionar Baixar.
 //  v8.0: adiciona Modo Continuidade opcional e isolado: gera uma cena, confirma,
 //        renomeia no formato escolhido e usa essa midia na cena seguinte.
+//  v8.1: o painel Atribuir diferencia selecao pendente em verde-claro da
+//        renomeacao confirmada em verde-escuro com o simbolo de concluido.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -120,7 +122,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.0 (Modo Continuidade opcional)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.1 (estados de atribuição e renomeação)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1279,6 +1281,41 @@
         this.mostrarBarraDeAtualizar();
         this.atualizarBotaoRenomearMarcadas?.();
       },
+      atualizarEstadoItemAtribuir(chave, estado) {
+        document.querySelectorAll('.flow-assign-item').forEach(item => {
+          const nome = item.dataset.name || item.dataset.scene;
+          if (nome !== chave) return;
+          item.classList.remove('assigned', 'complete', 'rename-pending', 'rename-confirmed');
+          const status = item.querySelector('.assign-status');
+          if (estado === 'pending') {
+            item.classList.add('assigned', 'rename-pending');
+            item.title = 'Referência selecionada; aguardando renomeação';
+            item.setAttribute('aria-label', `${nome}: selecionada, aguardando renomeação`);
+            if (status) status.textContent = '📌';
+          } else if (estado === 'confirmed') {
+            item.classList.add('assigned', 'complete', 'rename-confirmed');
+            item.title = 'Renomeação confirmada pelo Flow';
+            item.setAttribute('aria-label', `${nome}: renomeação concluída`);
+            if (status) status.textContent = '✅';
+          } else {
+            item.removeAttribute('title');
+            item.removeAttribute('aria-label');
+            if (status) status.textContent = '○';
+          }
+        });
+      },
+      updateAssignItemUI(name, assigned) {
+        if (!assigned) {
+          this.atualizarEstadoItemAtribuir(name, 'empty');
+          return;
+        }
+        const pendentes = Object.values(this.lerMarcas?.() || {});
+        const temPendente = pendentes.some(m =>
+          (m.tipo === 'ref' && m.referencia === name) ||
+          (m.tipo === 'scene' && m.cena === name)
+        );
+        this.atualizarEstadoItemAtribuir(name, temPendente ? 'pending' : 'confirmed');
+      },
       atualizarBotaoRenomearMarcadas() {
         const botao = document.getElementById('flow-assign-rename');
         if (!botao) return;
@@ -1296,12 +1333,18 @@
             (m.tipo === 'ref' && m.referencia === chave) ||
             (m.tipo === 'scene' && m.cena === chave)
           );
-          item.classList.toggle('rename-pending', temPendente);
           if (temPendente) {
-            item.classList.remove('assigned', 'complete');
-            const status = item.querySelector('.assign-status');
-            if (status) status.textContent = '⏳';
+            this.atualizarEstadoItemAtribuir(chave, 'pending');
+            return;
           }
+          const atribuidoComoRef = !!(item.dataset.name && this.refAssignments?.get(chave));
+          const atribuidoComoCena = !!(item.dataset.scene && (
+            (this.sceneAssignments?.get(chave) || []).length ||
+            (this.videoSceneAssignments?.get(chave) || []).length
+          ));
+          const jaAtribuido = atribuidoComoRef || atribuidoComoCena ||
+            item.classList.contains('assigned') || item.classList.contains('complete');
+          this.atualizarEstadoItemAtribuir(chave, jaAtribuido ? 'confirmed' : 'empty');
         });
       },
       marcar(id, dados) {
@@ -4056,7 +4099,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','runContinuity','esperarReferenciaContinuidade','baixarCenasPorSelecaoMultipla','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v8.0 (continuidade opcional + download múltiplo + renomeação exata)',
+        versao: 'Flow NOVO v8.1 (estados visuais de atribuição e renomeação)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -4148,17 +4191,19 @@
         '.flow-assign-item{color:#334155!important;background:#f8fafc!important;border:1.5px solid #cbd5e1!important;border-radius:9999px!important;user-select:none!important;-webkit-user-select:none!important;-webkit-user-drag:element!important;opacity:1!important;text-decoration:none!important;}',
         '.flow-assign-item .assign-name{color:#334155!important;font-weight:600!important;text-decoration:none!important;}',
         '.flow-assign-item .assign-status{font-weight:800!important;color:#64748b!important;}',
-        '.flow-assign-item.assigned{background:#dcfce7!important;border-color:#22c55e!important;color:#15803d!important;opacity:1!important;}',
-        '.flow-assign-item.assigned .assign-name{color:#15803d!important;font-weight:700!important;text-decoration:none!important;}',
-        '.flow-assign-item.assigned .assign-status{color:#15803d!important;}',
+        '.flow-assign-item.assigned{background:#dcfce7!important;border-color:#86efac!important;color:#166534!important;opacity:1!important;}',
+        '.flow-assign-item.assigned .assign-name{color:#166534!important;font-weight:700!important;text-decoration:none!important;}',
+        '.flow-assign-item.assigned .assign-status{color:#166534!important;}',
         '.flow-assign-item.assigned .drag-icon{color:#16a34a!important;}',
-        '.flow-assign-item.rename-pending{background:#fef3c7!important;border-color:#f59e0b!important;color:#92400e!important;}',
-        '.flow-assign-item.rename-pending .assign-name,.flow-assign-item.rename-pending .assign-status{color:#92400e!important;font-weight:800!important;}',
+        '.flow-assign-item.rename-pending{background:#dcfce7!important;border-color:#86efac!important;color:#166534!important;box-shadow:0 0 0 1px rgba(134,239,172,.3)!important;}',
+        '.flow-assign-item.rename-pending .assign-name,.flow-assign-item.rename-pending .assign-status,.flow-assign-item.rename-pending .drag-icon{color:#166534!important;font-weight:800!important;}',
+        '.flow-assign-item.rename-confirmed{background:#15803d!important;border-color:#14532d!important;color:#fff!important;box-shadow:0 2px 7px rgba(20,83,45,.3)!important;}',
+        '.flow-assign-item.rename-confirmed .assign-name,.flow-assign-item.rename-confirmed .assign-status,.flow-assign-item.rename-confirmed .drag-icon{color:#fff!important;font-weight:800!important;text-decoration:none!important;}',
         '.flow-tile-label[data-rename-state="pending"]{background:rgba(0,0,0,.88)!important;color:#fff!important;border:1px solid rgba(255,255,255,.35)!important;box-shadow:0 2px 8px rgba(0,0,0,.45)!important;}',
         '.flow-tile-label[data-rename-state="renaming"]{background:#dbeafe!important;color:#1d4ed8!important;border-color:#3b82f6!important;}',
         '.flow-tile-label[data-rename-state="confirmed"]{background:#dcfce7!important;color:#166534!important;border-color:#22c55e!important;}',
         '.flow-tile-label[data-rename-state="failed"]{background:#fee2e2!important;color:#991b1b!important;border-color:#ef4444!important;}',
-        '.flow-assign-item.complete .assign-name{color:#14532d!important;font-weight:800!important;text-decoration:none!important;}',
+        '.flow-assign-item.complete:not(.rename-confirmed) .assign-name{color:#14532d!important;font-weight:800!important;text-decoration:none!important;}',
         '.flow-assign-item.missing{opacity:.85!important;}',
         /* quantos prompts foram lidos, nas duas abas */
         '#flow-prompt-count,#fv-prompt-count{color:#0f172a!important;font-weight:700!important;font-size:12px!important;}',
@@ -4922,10 +4967,13 @@ function triggerTrustedClick(el) {
 .flow-assign-item .drag-icon{color:#94a3b8;font-size:14px;flex-shrink:0;user-select:none;}
 .flow-assign-item .assign-name{white-space:nowrap;user-select:none;text-decoration:none;}
 .flow-assign-item .assign-status{font-size:12px;flex-shrink:0;font-weight:800;user-select:none;}
-.flow-assign-item.assigned{background:#dcfce7;border-color:#22c55e;color:#15803d;opacity:1;}
-.flow-assign-item.assigned .assign-name{color:#15803d;text-decoration:none;font-weight:700;}
-.flow-assign-item.assigned .assign-status{color:#15803d;}
+.flow-assign-item.assigned{background:#dcfce7;border-color:#86efac;color:#166534;opacity:1;}
+.flow-assign-item.assigned .assign-name{color:#166534;text-decoration:none;font-weight:700;}
+.flow-assign-item.assigned .assign-status{color:#166534;}
 .flow-assign-item.assigned .drag-icon{color:#16a34a;}
+.flow-assign-item.rename-pending{background:#dcfce7;border-color:#86efac;color:#166534;}
+.flow-assign-item.rename-confirmed{background:#15803d;border-color:#14532d;color:#fff;box-shadow:0 2px 7px rgba(20,83,45,.3);}
+.flow-assign-item.rename-confirmed .assign-name,.flow-assign-item.rename-confirmed .assign-status,.flow-assign-item.rename-confirmed .drag-icon{color:#fff;font-weight:800;}
 /* ADD-ON Auto-Enumerador: conclusão (verde) e faltante (apagado) */
 .flow-assign-item.complete{background:#dcfce7;border-color:#22c55e;opacity:1;}
 .flow-assign-item.complete .assign-name{color:#15803d;font-weight:700;text-decoration:none;}
