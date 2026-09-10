@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v7.19  -   2026-09-09
+//  Flow NOVO v8.0  -   2026-09-10
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -31,6 +31,8 @@
 //         depois da confirmacao somem e nao reaparecem ao atualizar a pagina.
 //  v7.19: Baixar Cenas usa a selecao multipla nativa do Flow: Ctrl em cada
 //         midia identificada e clique direito na ultima para acionar Baixar.
+//  v8.0: adiciona Modo Continuidade opcional e isolado: gera uma cena, confirma,
+//        renomeia no formato escolhido e usa essa midia na cena seguinte.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -118,7 +120,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v7.19 (download nativo por seleção múltipla)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.0 (Modo Continuidade opcional)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -2044,6 +2046,9 @@
         return recuperados;
       },
       modoSegurancaAtivo() {
+        // Continuidade nunca pode liberar a proxima cena antes de confirmar a
+        // atual, independentemente da opcao geral de velocidade/seguranca.
+        if (this._continuityRunning) return true;
         return !!document.getElementById(
           this.videoIsRunning || this._modernTestVideo ? 'fv-safety-sequential' : 'flow-safety-sequential'
         )?.checked;
@@ -2227,8 +2232,240 @@
           this._modernIgnoredErrors.set(key, (this._modernIgnoredErrors.get(key) || 0) + 1);
         }
       },
+
+      continuidadeAtiva(video) {
+        return !!document.getElementById(video ? 'fv-continuity-enabled' : 'flow-continuity-enabled')?.checked;
+      },
+
+      chaveContinuidade(video) {
+        const projeto = (typeof this.getProjectId === 'function' && this.getProjectId()) || location.pathname;
+        return 'flow_continuidade_' + (video ? 'video_' : 'imagem_') + projeto;
+      },
+
+      salvarContinuidade(video, dados) {
+        try { localStorage.setItem(this.chaveContinuidade(video), JSON.stringify(dados || {})); } catch (_) {}
+      },
+
+      limparContinuidade(video) {
+        try { localStorage.removeItem(this.chaveContinuidade(video)); } catch (_) {}
+      },
+
+      /** Aguarda o nome recém-aplicado entrar no seletor de recursos do Flow. */
+      async esperarReferenciaContinuidade(nome) {
+        let ultimoErro = null;
+        for (let tentativa = 1; tentativa <= 5; tentativa++) {
+          if (this.modernStopped()) throw stopError();
+          try {
+            const alvo = await this.findAsset(nome, 'image');
+            if (alvo) {
+              await this.closeAssetPicker();
+              return true;
+            }
+          } catch (erro) { ultimoErro = erro; }
+          try { await this.closeAssetPicker(); } catch (_) {}
+          await this.sleep(1200);
+        }
+        throw new Error('A mídia renomeada como "' + nome + '" ainda não apareceu no seletor de referências' +
+          (ultimoErro?.message ? ': ' + ultimoErro.message : '.'));
+      },
+
+      /**
+       * Pipeline independente. O fluxo tradicional não entra aqui quando a
+       * opção está desligada, portanto lotes, retries e enumeração antigos
+       * continuam intocados.
+       */
+      async runContinuity(video) {
+        if (this.isRunning || this.videoIsRunning || this._modernTaskRunning || this._continuityRunning) return;
+        const prefix = video ? 'fv' : 'flow';
+        const input = document.getElementById(prefix + '-prompts-input');
+        const textoOriginal = input?.value || '';
+        const prompts = parsePromptsText(textoOriginal);
+        const status = (tipo, texto) => (video ? this.setVideoStatus : this.setStatus).call(this, tipo, texto);
+        const atualizarItem = video ? this.updateVideoPromptItemStatus : this.updatePromptItemStatus;
+        const atualizarProgresso = video ? this.updateVideoProgress : this.updateProgress;
+        if (!prompts.length) { status('warning', 'Insira pelo menos um prompt.'); return; }
+        const campoRetomar = document.getElementById(prefix + '-start-from');
+        if (campoRetomar?.value?.trim() === '0') {
+          status('warning', 'No Modo Continuidade, apague o 0 de “Retomar de” para começar ou informe a cena desejada.');
+          return;
+        }
+
+        // O formato e capturado uma vez. Alterar a aba Renomear no meio da fila
+        // nao mistura padroes dentro da mesma sequencia.
+        const modeloTravado = lerModelo();
+        let indiceInicial = 0;
+        let referenciaSalva = null;
+        const retomarValor = Number(campoRetomar?.value);
+        if (isFinite(retomarValor) && retomarValor > 0) {
+          const achou = prompts.findIndex(p => Number(p.promptNum) >= retomarValor);
+          indiceInicial = achou >= 0 ? achou : prompts.length;
+        } else {
+          try {
+            const salvo = JSON.parse(localStorage.getItem(this.chaveContinuidade(video)) || 'null');
+            if (salvo && salvo.ativo && salvo.textoOriginal === textoOriginal &&
+                salvo.modelo === modeloTravado && Number(salvo.total) === prompts.length) {
+              indiceInicial = Math.max(0, Math.min(prompts.length, Number(salvo.proximaCena) || 0));
+              referenciaSalva = salvo.referenciaAnterior || null;
+            }
+          } catch (_) {}
+        }
+        if (indiceInicial >= prompts.length) {
+          status('success', '🔗 Todas as cenas desta fila já foram concluídas. Use “Retomar de” para escolher outro ponto.');
+          return;
+        }
+        const antigo = {
+          imagens: this.imagesPerPrompt,
+          videos: this.videoResultsPerPrompt,
+          loteImagem: this.batchSize,
+          loteVideo: this.videoBatchSize,
+          genMode: this.genMode,
+          videoGenMode: this.videoGenMode
+        };
+
+        this._modernTaskRunning = true;
+        this._continuityRunning = true;
+        this._modernUncertain = false;
+        this.shouldStop = false;
+        this.videoShouldStop = false;
+        this.isRunning = !video;
+        this.videoIsRunning = !!video;
+        this.imagesPerPrompt = 1;
+        this.videoResultsPerPrompt = 1;
+        this.batchSize = 1;
+        this.videoBatchSize = 1;
+        if (video) this.videoGenMode = 'scenes';
+        else this.genMode = 'scenes';
+        if (video) this.videoPrompts = prompts;
+        else this.prompts = prompts;
+        this._modernActiveRecords = [];
+        this._modernRecords = new Map();
+        this._modernLateConfirmations = [];
+        this._modernLateFailedKeys = new Set();
+        this._modernBatchIndex = 0;
+
+        const start = document.getElementById(prefix + '-start-btn');
+        const stop = document.getElementById(prefix + '-stop-btn');
+        if (start) start.disabled = true;
+        if (stop) stop.disabled = false;
+        if (input) input.disabled = true;
+        try {
+          (video ? this.buildVideoPromptList : this.buildPromptList).call(this);
+          for (let anterior = 0; anterior < indiceInicial; anterior++) {
+            atualizarItem.call(this, anterior, 'done', 'já concluída');
+          }
+          atualizarProgresso.call(this, indiceInicial / prompts.length);
+          status('info', '🔗 Modo Continuidade: preparando uma cena por vez...');
+          await this.configureGeneration(video, 1);
+          await this.prepareGalleryForRun();
+
+          let referenciaAnterior = referenciaSalva || (indiceInicial > 0
+            ? montarNome(prompts[indiceInicial - 1].promptNum, 1, video, modeloTravado)
+            : null);
+          const matrizes = [];
+          for (let indice = indiceInicial; indice < prompts.length; indice++) {
+            if (this.modernStopped()) throw stopError();
+            this._modernBatchIndex = indice;
+            const prompt = prompts[indice];
+            const cena = prompt.promptNum;
+            const nomeFinal = montarNome(cena, 1, video, modeloTravado);
+            atualizarItem.call(this, indice, 'active');
+            atualizarProgresso.call(this, indice / prompts.length);
+
+            if (referenciaAnterior) {
+              status('info', '🔎 Cena ' + cena + ': confirmando referência "' + referenciaAnterior + '"...');
+              await this.esperarReferenciaContinuidade(referenciaAnterior);
+            }
+
+            const textoComContinuidade = referenciaAnterior
+              ? '[' + referenciaAnterior + '] ' + prompt.text
+              : prompt.text;
+            const promptExecucao = Object.assign({}, prompt, { text: textoComContinuidade });
+            status('info', '🎬 Gerando Cena ' + cena + (referenciaAnterior ? ' com a cena anterior...' : '...'));
+
+            const antes = this.snapshotImageUuids();
+            const enviou = await this.prepareAndSubmit(promptExecucao);
+            if (!enviou) throw new Error('A Cena ' + cena + ' não foi enviada com segurança.');
+            await this.pausa(1000);
+            const matriz = this.buildPositionMatrix([promptExecucao], 1);
+            await this.waitForMatrix(matriz, antes);
+            const resultado = matriz.find(item => item.state === 'loaded' && (item.uuid || item.workflowId));
+            if (!resultado) throw new Error('A Cena ' + cena + ' não terminou com uma mídia confirmada.');
+
+            let tile = await this.scrollToWorkflow(resultado.uuid || resultado.workflowId);
+            if (!tile) throw new Error('Não encontrei o cartão concluído da Cena ' + cena + '.');
+            status('info', '🏷️ Cena ' + cena + ': salvando como "' + nomeFinal + '"...');
+
+            let renomeou = false;
+            for (let tentativa = 1; tentativa <= 3 && !renomeou; tentativa++) {
+              renomeou = await this.renomearSelecionadoConfirmado(resultado.uuid || resultado.workflowId, nomeFinal, tile);
+              if (!renomeou) {
+                await this.sleep(700);
+                tile = await this.scrollToWorkflow(resultado.uuid || resultado.workflowId);
+              }
+            }
+            if (!renomeou) throw new Error('O Flow não confirmou o nome da Cena ' + cena + '.');
+
+            this.pintarNomeNoTile(resultado.uuid || resultado.workflowId, nomeFinal);
+            try { await this.apiFavorite(resultado.uuid || resultado.workflowId, true); } catch (_) {}
+            this.tileAssignments.set(resultado.uuid || resultado.workflowId, {
+              label: nomeFinal, type: 'scene', scene: 'Cena ' + cena,
+              imgNum: 1, isVideo: !!video
+            });
+            referenciaAnterior = nomeFinal;
+            matrizes.push(matriz);
+            atualizarItem.call(this, indice, 'done', 'renomeada');
+            atualizarProgresso.call(this, (indice + 1) / prompts.length);
+            this.salvarContinuidade(video, {
+              ativo: true,
+              proximaCena: indice + 1,
+              referenciaAnterior,
+              modelo: modeloTravado,
+              total: prompts.length,
+              textoOriginal,
+              atualizadoEm: Date.now()
+            });
+            if (campoRetomar) {
+              campoRetomar.value = indice + 1 < prompts.length ? String(prompts[indice + 1].promptNum) : '';
+            }
+            status('success', '✅ ' + nomeFinal + ' confirmada' +
+              (indice + 1 < prompts.length ? '; preparando a próxima cena.' : '.'));
+          }
+
+          this._lastMatrices = matrizes;
+          this._lastRunMedia = matrizes.flatMap(m => m.filter(s => s.state === 'loaded').map(s => ({
+            src: s.src, workflowId: s.workflowId, uuid: s.uuid, promptNum: s.promptNum, isVideo: !!video
+          })));
+          this.limparContinuidade(video);
+          status('success', '🔗 Continuidade concluída: <b>' + prompts.length + '/' + prompts.length + '</b> cenas geradas e renomeadas.');
+          try { this.gerarRelatorioDeExecucao(video ? 'videos' : 'imagens'); } catch (_) {}
+        } catch (erro) {
+          const parada = erro?.stopped || this.shouldStop || this.videoShouldStop;
+          status(parada ? 'warning' : 'error', (parada ? '⏹ Continuidade parada. ' : '❌ Continuidade interrompida. ') + (erro?.message || erro));
+        } finally {
+          this._modernObservers?.forEach(observer => observer.disconnect());
+          this._modernObservers = [];
+          this._modernGalleryObserver = null;
+          this._modernTaskRunning = false;
+          this._continuityRunning = false;
+          this.isRunning = false;
+          this.videoIsRunning = false;
+          this.imagesPerPrompt = antigo.imagens;
+          this.videoResultsPerPrompt = antigo.videos;
+          this.batchSize = antigo.loteImagem;
+          this.videoBatchSize = antigo.loteVideo;
+          this.genMode = antigo.genMode;
+          this.videoGenMode = antigo.videoGenMode;
+          if (start) start.disabled = false;
+          if (stop) stop.disabled = true;
+          if (input) input.disabled = false;
+          try { await this.closeAssetPicker(); } catch (_) {}
+          try { await this.closeMenus(); } catch (_) {}
+        }
+      },
+
       async runModern(video) {
         if (this.isRunning || this.videoIsRunning || this._modernTaskRunning) return;
+        if (this.continuidadeAtiva(video)) return this.runContinuity(video);
         const status = (type, text) => (video ? this.setVideoStatus : this.setStatus).call(this, type, text);
         this._modernTaskRunning = true; this.shouldStop = false; this.videoShouldStop = false; this._modernUncertain = false;
         this._modernActiveRecords = []; this._modernRecords = new Map(); this._modernCaptureError = null;
@@ -3663,14 +3900,102 @@
       } catch (_) {}
     }
 
+    /** Um unico resumo discreto em cada aba; fechado por padrao. */
+    function montarModoContinuidade() {
+      const montar = (video) => {
+        const prefix = video ? 'fv' : 'flow';
+        if (document.getElementById(prefix + '-continuity-card')) return;
+        const corpo = document.querySelector('.flow-tab-content[data-tab="' + (video ? 'videos' : 'images') + '"] .flow-tab-body');
+        const acoes = corpo?.querySelector('.flow-actions');
+        if (!corpo || !acoes) return;
+
+        const card = document.createElement('details');
+        card.id = prefix + '-continuity-card';
+        card.className = 'flow-card';
+        card.style.cssText = 'margin-bottom:10px;';
+        card.innerHTML =
+          '<summary style="cursor:pointer;list-style:none;padding:10px 12px;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;">' +
+            '<span>🔗 Modo Continuidade</span><span id="' + prefix + '-continuity-badge" style="margin-left:auto;font-size:10px;color:var(--cd-text-muted);">Desligado</span>' +
+          '</summary>' +
+          '<div style="padding:0 12px 12px;border-top:1px solid var(--cd-border-light);">' +
+            '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;cursor:pointer;">' +
+              '<input type="checkbox" id="' + prefix + '-continuity-enabled" style="margin-top:2px;">' +
+              '<span style="font-size:12px;"><b>Gerar com continuidade automática</b><br>' +
+                '<span style="font-size:11px;color:var(--cd-text-light);">Uma cena por vez: confirma, renomeia e usa a anterior como referência.</span></span>' +
+            '</label>' +
+            '<label style="display:block;margin-top:10px;font-size:11px;color:var(--cd-text-muted);">Formato do nome</label>' +
+            '<select id="' + prefix + '-continuity-model" class="flow-select-imgs" style="width:100%;margin-top:4px;">' +
+              '<option value="Cena {n} - {tipo} {g}">Cena 7 - ' + (video ? 'Vídeo' : 'Imagem') + ' 1</option>' +
+              '<option value="cena_{n}_{g}_">cena_7_1_</option>' +
+              '<option value="cena_M_{n}_{g}_">cena_M_7_1_</option>' +
+              '<option value="cena_{nn}_{gg}_">cena_07_01_</option>' +
+            '</select>' +
+            '<div id="' + prefix + '-continuity-preview" style="font-size:11px;margin-top:7px;padding:7px 9px;border-radius:7px;background:var(--cd-bg-secondary);color:var(--cd-text);"></div>' +
+            '<div style="font-size:10px;color:var(--cd-text-light);margin-top:6px;line-height:1.4;">Desligado, o botão Iniciar usa exatamente o fluxo normal.</div>' +
+          '</div>';
+        acoes.parentElement.insertBefore(card, acoes);
+
+        const caixa = card.querySelector('#' + prefix + '-continuity-enabled');
+        const modelo = card.querySelector('#' + prefix + '-continuity-model');
+        const badge = card.querySelector('#' + prefix + '-continuity-badge');
+        const preview = card.querySelector('#' + prefix + '-continuity-preview');
+        const chave = 'flow_continuidade_ligada_' + prefix;
+        try { caixa.checked = localStorage.getItem(chave) === '1'; } catch (_) {}
+
+        const atual = lerModelo();
+        if (![...modelo.options].some(o => o.value === atual)) {
+          const personalizada = document.createElement('option');
+          personalizada.value = atual;
+          personalizada.textContent = 'Personalizado: ' + atual;
+          modelo.appendChild(personalizada);
+        }
+        modelo.value = atual;
+
+        const atualizar = () => {
+          badge.textContent = caixa.checked ? 'Ligado' : 'Desligado';
+          badge.style.color = caixa.checked ? '#059669' : 'var(--cd-text-muted)';
+          preview.textContent = 'Exemplo: ' + montarNome(7, 1, video, modelo.value);
+        };
+        caixa.addEventListener('change', () => {
+          try { localStorage.setItem(chave, caixa.checked ? '1' : '0'); } catch (_) {}
+          atualizar();
+        });
+        modelo.addEventListener('change', () => {
+          try { localStorage.setItem(CHAVE_MODELO, modelo.value); } catch (_) {}
+          const campo = document.getElementById('rn-modelo');
+          if (campo) { campo.value = modelo.value; campo.dispatchEvent(new Event('change', { bubbles: true })); }
+          for (const outroPrefix of ['flow', 'fv']) {
+            const outro = document.getElementById(outroPrefix + '-continuity-model');
+            if (!outro || outro === modelo) continue;
+            if (![...outro.options].some(o => o.value === modelo.value)) {
+              const op = document.createElement('option');
+              op.value = modelo.value;
+              op.textContent = 'Personalizado: ' + modelo.value;
+              outro.appendChild(op);
+            }
+            outro.value = modelo.value;
+            const prev = document.getElementById(outroPrefix + '-continuity-preview');
+            if (prev) prev.textContent = 'Exemplo: ' + montarNome(7, 1, outroPrefix === 'fv', modelo.value);
+          }
+          atualizar();
+        });
+        card.addEventListener('toggle', atualizar);
+        atualizar();
+      };
+      montar(false);
+      montar(true);
+    }
+
     // Tenta cedo e insiste: o painel do Flow demora a montar em máquina lenta.
     [300, 800, 1500, 2500, 4000].forEach(ms => {
       setTimeout(montarAbaRenomear, ms);
       setTimeout(montarAbaRelatorio, ms);
+      setTimeout(montarModoContinuidade, ms);
     });
     setInterval(() => {
       montarAbaRenomear();
       montarAbaRelatorio();
+      montarModoContinuidade();
     }, 4000);
 
     // Diagnostico do hover: descobre O QUE abre o painel de prompt.
@@ -3728,10 +4053,10 @@
     // Autoteste: cole __flowCheck() no console para ver o que esta carregado.
     root.__flowCheck = function () {
       const i = root.__flowInstance;
-      const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','promptDoComponente','promptDoContexto','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
+      const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','runContinuity','esperarReferenciaContinuidade','baixarCenasPorSelecaoMultipla','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v7.19 (download por seleção múltipla + limpeza das caixas + Relatório)',
+        versao: 'Flow NOVO v8.0 (continuidade opcional + download múltiplo + renomeação exata)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
