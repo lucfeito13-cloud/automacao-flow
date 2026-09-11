@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v8.3  -   2026-09-11
+//  Flow NOVO v8.4  -   2026-09-11
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -39,6 +39,8 @@
 //        e restaurar permanecem visiveis tambem no painel vertical.
 //  v8.3: adiciona Limpar memoria no painel Atribuir para apagar somente caixas
 //        e pendencias locais, sem alterar nomes ja confirmados no Flow.
+//  v8.4: reduz travamentos desligando a varredura de etiquetas quando nao ha
+//        pendencias e agrupando mudancas de miniaturas antes de processa-las.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -126,7 +128,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.3 (limpeza da memória de atribuição)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.4 (observadores otimizados)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1369,6 +1371,9 @@
         }
         marcas[id] = Object.assign({ original, estado: 'pending' }, dados);
         this.salvarMarcas(marcas);
+        // assignScene/assignReference chamam o observador antes de salvar a
+        // marca; com a pausa inteligente, garantimos a ativacao depois dela.
+        this.startLabelObserver?.();
       },
       desmarcar(id) {
         const marcas = this.lerMarcas();
@@ -1411,6 +1416,7 @@
           this.removeLabelFromTile?.(id);
         }
         try { localStorage.removeItem(this.chaveDasMarcas()); } catch (_) {}
+        this.stopLabelObserver?.();
 
         for (const chave of afetadas) {
           const confirmadoComoRef = !!this.refAssignments?.get(chave);
@@ -1627,7 +1633,12 @@
       },
       startLabelObserver() {
         const render = () => {
+          // A aba em segundo plano nao precisa redesenhar etiquetas.
+          if (document.hidden) return true;
           const marcas = this.lerMarcas();
+          // Sem caixas pendentes nao ha nada para observar. Antes esta rotina
+          // continuava varrendo a galeria inteira a cada 800 ms para sempre.
+          if (!Object.keys(marcas).length) return false;
           let limpouConfirmadas = false;
           for (const tile of this.getTiles()) {
             const id = this.getUuidFromTile(tile);
@@ -1674,9 +1685,13 @@
           }
           if (limpouConfirmadas) this.salvarMarcas(marcas);
           this.atualizarBotaoRenomearMarcadas();
+          return Object.keys(marcas).length > 0;
         };
-        render();
-        if (!this._labelObserverId) this._labelObserverId = setInterval(render, 800);
+        if (this._labelObserverId) return;
+        if (!render()) return;
+        this._labelObserverId = setInterval(() => {
+          if (!render()) this.stopLabelObserver?.();
+        }, 1800);
       },
       saveDownload(blob, filename) {
         const link = document.createElement('a'), url = URL.createObjectURL(blob);
@@ -4168,7 +4183,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','limparMemoriaAtribuir','runContinuity','esperarReferenciaContinuidade','baixarCenasPorSelecaoMultipla','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v8.3 (limpar memória de atribuição)',
+        versao: 'Flow NOVO v8.4 (observadores otimizados)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -4524,9 +4539,38 @@
 
       // Hover replaces a video's thumbnail with a signed playback URL. Preserve
       // its observed identity before that change, including virtualized rows.
-      const rememberVideos = () => this.getTiles().filter(tile => $('flow-video-tile', tile)).forEach(tile => this.getUuidFromTile(tile));
-      rememberVideos();
-      this._modernIdentityObserver = new MutationObserver(rememberVideos);
+      const rememberVideoTile = tile => {
+        if (tile && $('flow-video-tile,video', tile)) this.getUuidFromTile(tile);
+      };
+      // Uma unica leitura inicial. Depois processamos apenas os cartoes tocados
+      // pela mutacao, em vez de reler toda a galeria a cada mudanca de src.
+      this.getTiles().forEach(rememberVideoTile);
+      const identityPending = new Set();
+      let identityTimer = null;
+      const scheduleIdentity = mutations => {
+        if (document.hidden) return;
+        for (const mutation of mutations) {
+          const incluir = node => {
+            if (!node || node.nodeType !== 1) return;
+            const tile = this.resolveMediaTileFromElement(node);
+            if (tile) identityPending.add(tile);
+            node.querySelectorAll?.('flow-video-tile,video,img.thumbnail').forEach(child => {
+              const childTile = this.resolveMediaTileFromElement(child);
+              if (childTile) identityPending.add(childTile);
+            });
+          };
+          incluir(mutation.target);
+          mutation.addedNodes?.forEach(incluir);
+        }
+        if (!identityPending.size || identityTimer) return;
+        identityTimer = setTimeout(() => {
+          identityTimer = null;
+          const tiles = [...identityPending];
+          identityPending.clear();
+          tiles.forEach(rememberVideoTile);
+        }, 250);
+      };
+      this._modernIdentityObserver = new MutationObserver(scheduleIdentity);
       this._modernIdentityObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] });
       for (const prefix of ['flow', 'fv']) {
       const test = document.createElement('button');
