@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v8.5  -   2026-09-11
+//  Flow NOVO v8.6  -   2026-09-11
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -43,6 +43,8 @@
 //        pendencias e agrupando mudancas de miniaturas antes de processa-las.
 //  v8.5: conclui o download multiplo clicando tambem na opcao localizada
 //        "Fazer o download" exibida pelo menu atual do Flow em portugues.
+//  v8.6: limita observadores ao cartao alterado, pausa etiquetas durante video
+//        e baixa somente as midias realmente atribuidas como Cena no painel.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -130,7 +132,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.5 (download múltiplo confirmado)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.6 (desempenho e seleção exata)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1641,6 +1643,9 @@
           // Sem caixas pendentes nao ha nada para observar. Antes esta rotina
           // continuava varrendo a galeria inteira a cada 800 ms para sempre.
           if (!Object.keys(marcas).length) return false;
+          // Durante reproducao/preview, o Flow ja usa bastante CPU para video.
+          // As caixas voltam a ser conferidas no ciclo seguinte, sem perder dado.
+          if ($$('video').some(video => visible(video) && !video.paused && !video.ended)) return true;
           let limpouConfirmadas = false;
           for (const tile of this.getTiles()) {
             const id = this.getUuidFromTile(tile);
@@ -1693,7 +1698,7 @@
         if (!render()) return;
         this._labelObserverId = setInterval(() => {
           if (!render()) this.stopLabelObserver?.();
-        }, 1800);
+        }, 2500);
       },
       saveDownload(blob, filename) {
         const link = document.createElement('a'), url = URL.createObjectURL(blob);
@@ -1972,14 +1977,16 @@
           await this.scanGallery(async (entry, tile) => {
             if (!entry.uuid || !entry.loaded || entry.isVideo !== somenteVideos) return;
             const atrib = this.tileAssignments.get(entry.uuid);
-            const identificada = !!(sceneInfo(entry.name) || lerNomeModelo(entry.name) || atrib?.type === 'scene');
-            if (!identificada) return;
+            // So entra no lote quem recebeu uma caixa de Cena neste painel.
+            // Ler apenas o texto do prompt/nome selecionava indevidamente todas
+            // as geracoes semelhantes, mesmo sem o usuario marca-las.
+            if (atrib?.type !== 'scene') return;
 
             const alvo = alvoDoCard(tile);
             clicarComCtrl(alvo);
             selecionadas++;
             ultima = { tile, alvo, uuid: entry.uuid };
-            status('info', '☑️ Selecionando cenas: <b>' + selecionadas + '</b>');
+            status('info', '☑️ Selecionando caixas de cena: <b>' + selecionadas + '</b>');
             await this.pausa(90);
           }, { restore: false, completo: true });
 
@@ -1991,7 +1998,7 @@
           } catch (_) {}
 
           if (!selecionadas || !ultima) {
-            throw new Error('Nenhuma mídia identificada como Cena foi encontrada para selecionar.');
+            throw new Error('Nenhuma mídia com caixa de Cena foi encontrada para selecionar.');
           }
 
           const tileFinal = this.getTiles().find(t => this.getUuidFromTile(t) === ultima.uuid) || ultima.tile;
@@ -4196,7 +4203,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','limparMemoriaAtribuir','runContinuity','esperarReferenciaContinuidade','baixarCenasPorSelecaoMultipla','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v8.5 (download múltiplo confirmado)',
+        versao: 'Flow NOVO v8.6 (desempenho e seleção exata)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -4563,17 +4570,21 @@
       const scheduleIdentity = mutations => {
         if (document.hidden) return;
         for (const mutation of mutations) {
-          const incluir = node => {
+          const incluir = (node, procurarFilhos = false) => {
             if (!node || node.nodeType !== 1) return;
             const tile = this.resolveMediaTileFromElement(node);
             if (tile) identityPending.add(tile);
-            node.querySelectorAll?.('flow-video-tile,video,img.thumbnail').forEach(child => {
-              const childTile = this.resolveMediaTileFromElement(child);
-              if (childTile) identityPending.add(childTile);
-            });
+            // So procura descendentes quando o proprio bloco acabou de entrar
+            // no DOM. Nunca varre document.body por causa de uma unica mudanca.
+            if (procurarFilhos) {
+              node.querySelectorAll?.('flow-video-tile,video,img.thumbnail').forEach(child => {
+                const childTile = this.resolveMediaTileFromElement(child);
+                if (childTile) identityPending.add(childTile);
+              });
+            }
           };
-          incluir(mutation.target);
-          mutation.addedNodes?.forEach(incluir);
+          incluir(mutation.target, false);
+          mutation.addedNodes?.forEach(node => incluir(node, true));
         }
         if (!identityPending.size || identityTimer) return;
         identityTimer = setTimeout(() => {
