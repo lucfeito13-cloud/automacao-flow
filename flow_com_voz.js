@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v8.6  -   2026-09-11
+//  Flow NOVO v8.7  -   2026-09-11
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -45,6 +45,8 @@
 //        "Fazer o download" exibida pelo menu atual do Flow em portugues.
 //  v8.6: limita observadores ao cartao alterado, pausa etiquetas durante video
 //        e baixa somente as midias realmente atribuidas como Cena no painel.
+//  v8.7: mudancas de src provocadas pelo hover sao ignoradas quando o cartao
+//        ja foi identificado; cartoes novos sao processados somente em idle.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -132,7 +134,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.6 (desempenho e seleção exata)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.7 (hover de vídeo otimizado)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -4203,7 +4205,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','limparMemoriaAtribuir','runContinuity','esperarReferenciaContinuidade','baixarCenasPorSelecaoMultipla','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v8.6 (desempenho e seleção exata)',
+        versao: 'Flow NOVO v8.7 (hover de vídeo otimizado)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -4560,7 +4562,14 @@
       // Hover replaces a video's thumbnail with a signed playback URL. Preserve
       // its observed identity before that change, including virtualized rows.
       const rememberVideoTile = tile => {
-        if (tile && $('flow-video-tile,video', tile)) this.getUuidFromTile(tile);
+        if (!tile || !$('flow-video-tile,video', tile)) return;
+        // O hover troca thumbnail/player/src varias vezes, mas continua sendo o
+        // mesmo cartao. Se nome e elemento nao mudaram, a identidade ja esta
+        // guardada no WeakMap e nao ha qualquer trabalho a repetir.
+        const lembrado = this._modernVideoIds?.get(tile);
+        const nomeAtual = this.getTileName(tile);
+        if (lembrado && lembrado.name === nomeAtual) return;
+        this.getUuidFromTile(tile);
       };
       // Uma unica leitura inicial. Depois processamos apenas os cartoes tocados
       // pela mutacao, em vez de reler toda a galeria a cada mudanca de src.
@@ -4573,13 +4582,18 @@
           const incluir = (node, procurarFilhos = false) => {
             if (!node || node.nodeType !== 1) return;
             const tile = this.resolveMediaTileFromElement(node);
-            if (tile) identityPending.add(tile);
+            if (tile) {
+              const lembrado = this._modernVideoIds?.get(tile);
+              if (!lembrado || lembrado.name !== this.getTileName(tile)) identityPending.add(tile);
+            }
             // So procura descendentes quando o proprio bloco acabou de entrar
             // no DOM. Nunca varre document.body por causa de uma unica mudanca.
             if (procurarFilhos) {
               node.querySelectorAll?.('flow-video-tile,video,img.thumbnail').forEach(child => {
                 const childTile = this.resolveMediaTileFromElement(child);
-                if (childTile) identityPending.add(childTile);
+                if (!childTile) return;
+                const lembrado = this._modernVideoIds?.get(childTile);
+                if (!lembrado || lembrado.name !== this.getTileName(childTile)) identityPending.add(childTile);
               });
             }
           };
@@ -4587,12 +4601,17 @@
           mutation.addedNodes?.forEach(node => incluir(node, true));
         }
         if (!identityPending.size || identityTimer) return;
-        identityTimer = setTimeout(() => {
+        const executar = () => {
           identityTimer = null;
           const tiles = [...identityPending];
           identityPending.clear();
           tiles.forEach(rememberVideoTile);
-        }, 250);
+        };
+        // Nao disputa CPU com o player do Flow: espera um momento ocioso do
+        // navegador. O timeout garante que uma linha nova nao fique esquecida.
+        identityTimer = typeof requestIdleCallback === 'function'
+          ? requestIdleCallback(executar, { timeout: 1200 })
+          : setTimeout(executar, 500);
       };
       this._modernIdentityObserver = new MutationObserver(scheduleIdentity);
       this._modernIdentityObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] });
