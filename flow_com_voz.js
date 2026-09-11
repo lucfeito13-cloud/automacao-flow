@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v8.2  -   2026-09-10
+//  Flow NOVO v8.3  -   2026-09-11
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -37,6 +37,8 @@
 //        renomeacao confirmada em verde-escuro com o simbolo de concluido.
 //  v8.2: falhas de renomeacao recebem aviso visual e os controles de minimizar
 //        e restaurar permanecem visiveis tambem no painel vertical.
+//  v8.3: adiciona Limpar memoria no painel Atribuir para apagar somente caixas
+//        e pendencias locais, sem alterar nomes ja confirmados no Flow.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -124,7 +126,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.2 (confirmação, falhas e painel vertical)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.3 (limpeza da memória de atribuição)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1374,6 +1376,55 @@
         delete marcas[id];
         this.salvarMarcas(marcas);
         return marca || null;
+      },
+      limparMemoriaAtribuir() {
+        if (this._aplicandoMarcas) {
+          this.logDebug('Aguarde a renomeação atual terminar antes de limpar.', 'warning');
+          return false;
+        }
+        const marcas = this.lerMarcas();
+        const entradas = Object.entries(marcas);
+        if (!entradas.length) {
+          this.logDebug('A memória de atribuição já está vazia.', 'info');
+          return true;
+        }
+        const confirmou = window.confirm(
+          `Limpar ${entradas.length} seleção(ões) pendente(s)?\n\n` +
+          'Isso apaga somente as caixas e a memória local. Os nomes já confirmados no Flow não serão alterados.'
+        );
+        if (!confirmou) return false;
+
+        const afetadas = new Set();
+        for (const [id, marca] of entradas) {
+          const chave = marca.tipo === 'ref' ? marca.referencia : marca.cena;
+          if (chave) afetadas.add(chave);
+          this.tileAssignments?.delete(id);
+          this.tileOriginalNames?.delete(id);
+          if (marca.tipo === 'ref' && this.refAssignments?.get(marca.referencia) === id) {
+            this.refAssignments.delete(marca.referencia);
+          }
+          for (const mapa of [this.sceneAssignments, this.videoSceneAssignments]) {
+            if (!mapa || !marca.cena) continue;
+            const restantes = (mapa.get(marca.cena) || []).filter(item => item.workflowId !== id);
+            mapa.set(marca.cena, restantes);
+          }
+          this.removeLabelFromTile?.(id);
+        }
+        try { localStorage.removeItem(this.chaveDasMarcas()); } catch (_) {}
+
+        for (const chave of afetadas) {
+          const confirmadoComoRef = !!this.refAssignments?.get(chave);
+          const confirmadoComoCena = !!(
+            (this.sceneAssignments?.get(chave) || []).length ||
+            (this.videoSceneAssignments?.get(chave) || []).length
+          );
+          this.atualizarEstadoItemAtribuir(chave, confirmadoComoRef || confirmadoComoCena ? 'confirmed' : 'empty');
+        }
+        this.mostrarBarraDeAtualizar();
+        this.atualizarBotaoRenomearMarcadas();
+        this.updateAssignCount();
+        this.logDebug(`🧹 Memória limpa: ${entradas.length} seleção(ões) pendente(s) removida(s).`, 'success');
+        return true;
       },
       /** Avisa que ha marcacoes esperando a atualizacao da pagina. */
       mostrarBarraDeAtualizar() {
@@ -4114,10 +4165,10 @@
     // Autoteste: cole __flowCheck() no console para ver o que esta carregado.
     root.__flowCheck = function () {
       const i = root.__flowInstance;
-      const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','runContinuity','esperarReferenciaContinuidade','baixarCenasPorSelecaoMultipla','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
+      const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','limparMemoriaAtribuir','runContinuity','esperarReferenciaContinuidade','baixarCenasPorSelecaoMultipla','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v8.2 (confirmação, alerta de falha e painel vertical)',
+        versao: 'Flow NOVO v8.3 (limpar memória de atribuição)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
@@ -4155,6 +4206,7 @@
         '#flow-assign-panel.canto #flow-assign-rename,',
         '#flow-assign-panel.canto #flow-assign-download,',
         '#flow-assign-panel.canto #flow-assign-auto,',
+        '#flow-assign-panel.canto #flow-assign-clear,',
         '#flow-assign-panel.canto #flow-assign-layout{display:none!important;}',
         '#flow-assign-panel.canto .flow-assign-header-btns{flex:0 0 auto;flex-wrap:nowrap;margin-left:auto;}',
         '#flow-assign-panel.canto #flow-assign-toggle,',
@@ -4390,6 +4442,11 @@
         this.atualizarBotaoRenomearMarcadas();
       };
       for (const ms of [100, 500, 1500]) setTimeout(ligarBotaoRenomearMarcadas, ms);
+      const botaoLimparMemoria = document.getElementById('flow-assign-clear');
+      if (botaoLimparMemoria && !botaoLimparMemoria._flowLigado) {
+        botaoLimparMemoria._flowLigado = true;
+        botaoLimparMemoria.addEventListener('click', () => this.limparMemoriaAtribuir());
+      }
       setTimeout(() => this.startLabelObserver(), 700);
 
       // As caixas ficam salvas por projeto até serem confirmadas ou removidas no X.
@@ -5535,6 +5592,7 @@ function triggerTrustedClick(el) {
       <button class="flow-assign-dl-btn" id="flow-assign-rename" disabled title="Arraste uma cena para uma mídia antes de iniciar" style="display:inline-flex;background:#2563eb;color:#fff;border-color:#2563eb;">🏷️ Renomear selecionadas (0)</button>
       <button class="flow-assign-dl-btn" id="flow-assign-download" style="display:none;">⬇️ Baixar Cenas</button>
       <button class="flow-assign-hbtn" id="flow-assign-auto" title="Lê os prompts e monta automaticamente as caixas de renomeação">⚡ Auto</button>
+      <button class="flow-assign-hbtn" id="flow-assign-clear" title="Limpar caixas e pendências salvas neste projeto">🧹 Limpar</button>
       <button class="flow-assign-hbtn" id="flow-assign-layout" title="Alternar Horizontal/Vertical">↔</button>
       <button class="flow-assign-hbtn" id="flow-assign-toggle" title="Minimizar">▲</button>
       <button class="flow-assign-hbtn close-btn" id="flow-assign-close" title="Fechar">✕</button>
