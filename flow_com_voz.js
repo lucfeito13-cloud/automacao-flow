@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v8.4  -   2026-09-11
+//  Flow NOVO v8.5  -   2026-09-11
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -41,6 +41,8 @@
 //        e pendencias locais, sem alterar nomes ja confirmados no Flow.
 //  v8.4: reduz travamentos desligando a varredura de etiquetas quando nao ha
 //        pendencias e agrupando mudancas de miniaturas antes de processa-las.
+//  v8.5: conclui o download multiplo clicando tambem na opcao localizada
+//        "Fazer o download" exibida pelo menu atual do Flow em portugues.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -128,7 +130,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.4 (observadores otimizados)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.5 (download múltiplo confirmado)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1999,8 +2001,19 @@
           const alvoFinal = alvoDoCard(tileFinal) || ultima.alvo;
           mouse(alvoFinal, 'contextmenu', false, 2);
 
-          const baixar = await this.modernWait(() => menuItem(['Download', 'Baixar']), 6000);
-          if (!baixar) throw new Error('A opção Baixar não apareceu no clique direito da última mídia.');
+          const baixar = await this.modernWait(() => {
+            // O menu atual em português usa "Fazer o download", não apenas
+            // "Baixar". Mantemos as outras traduções para versões/contas
+            // diferentes do Flow.
+            const exato = menuItem(['Fazer o download', 'Download', 'Baixar', 'Fazer download']);
+            if (exato) return exato;
+            return $$('[role="menuitem"],.cdk-overlay-pane button').find(el => {
+              if (!visible(el) || own(el) || el.disabled) return false;
+              return /^(?:fazer\s+(?:o\s+)?)?(?:download|baixar)$/i.test(controlText(el));
+            });
+          }, 6000);
+          if (!baixar) throw new Error('A opção Fazer o download não apareceu no clique direito da última mídia.');
+          baixar.focus?.();
           baixar.click();
 
           // Algumas contas mostram um segundo menu de qualidade; se existir,
@@ -4183,7 +4196,7 @@
       const metodos = ['montarNome','renomearGaleria','promptPorHover','lerPainelDePrompt','scanGallery','apiRename','autoEnumerarCenas','limparMemoriaAtribuir','runContinuity','esperarReferenciaContinuidade','baixarCenasPorSelecaoMultipla','gerarRelatorioDeExecucao','renderizarRelatorioUI','executarPromptsDoRelatorio'];
       const tiles = i ? i.getTiles() : [];
       return {
-        versao: 'Flow NOVO v8.4 (observadores otimizados)',
+        versao: 'Flow NOVO v8.5 (download múltiplo confirmado)',
         instancia: !!i,
         abaRenomear: !!document.querySelector('.flow-tab[data-tab="renomear"]'),
         abaRelatorio: !!document.querySelector('.flow-tab[data-tab="relatorio"]'),
