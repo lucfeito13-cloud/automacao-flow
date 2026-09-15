@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v9.0  -   2026-09-15
+//  Flow NOVO v9.1  -   2026-09-15
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -48,9 +48,10 @@
 //  v8.7: mudancas de src provocadas pelo hover sao ignoradas quando o cartao
 //        ja foi identificado; cartoes novos sao processados somente em idle.
 //  v9.0: adiciona geracao individual sem conferencia, com uma linha e um botao
-//        Gerar por prompt. O primeiro [colchete] pode ser Cena 1A, Matriz B ou
-//        qualquer outro identificador e segue ate o painel Atribuir/Renomear.
+//        Gerar por prompt e integracao com o painel Atribuir/Renomear.
 //        O cartao flutuante inferior foi ocultado sem remover sua estrutura.
+//  v9.1: corrige o marcador do modo individual: o primeiro {conteudo} e o
+//        identificador; [conteudo] permanece sempre como referencia visual.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -146,25 +147,13 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.0 (geração individual por identificador)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
-    const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.1 (identificador entre chaves)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
     // Leitor isolado do modo individual. O parser antigo continua intocado:
-    // somente aqui o PRIMEIRO [colchete] e o identificador da geracao.
-    const parseIndividualPrompts = text => parsePromptsText(text).map((prompt, index) => {
-      const source = String(prompt.text || '').trim();
-      const marker = source.match(/^\[([^\]\r\n]+)\]\s*/);
-      const sceneName = norm(marker ? marker[1] : `Cena ${prompt.promptNum}`);
-      const cleanText = marker ? source.slice(marker[0].length).trim() : source;
-      return {
-        text: cleanText,
-        promptNum: prompt.promptNum,
-        sceneName: sceneName || `Cena ${index + 1}`,
-        explicitLabel: !!marker,
-        sourceIndex: index
-      };
-    }).filter(prompt => prompt.text);
+    // aqui o primeiro {conteudo} e o identificador; [conteudo] segue como ref.
+    const parseIndividualPrompts = text => parseIndividualPromptsText(text);
     const labels = {
       'Search assets': 'Pesquisar recursos', 'Add ingredients to the prompt box': 'Adicionar elementos à caixa de comando',
       'Settings trigger': 'Gatilho de configurações', 'Start generation': 'Iniciar geração', 'Clear prompt': 'Apagar comando',
@@ -4509,8 +4498,8 @@
         box.innerHTML = `
           <summary>▶ Gerar um prompt por vez <span class="flow-individual-total"></span></summary>
           <div class="flow-individual-help">
-            O primeiro <b>[colchete]</b> vira o nome da geração e não é enviado como referência.
-            Ex.: <b>[Cena 1A]</b>, <b>[Matriz B]</b>. Os próximos colchetes continuam sendo referências.
+            O primeiro <b>{conteúdo entre chaves}</b> vira o nome da geração e não é enviado ao Flow.
+            Ex.: <b>{Cena 1A}</b>, <b>{Matriz B}</b>. Todos os <b>[colchetes]</b> continuam sendo referências.
             Cada botão apenas envia aquele prompt, sem esperar ou conferir a geração.
           </div>
           <div class="flow-individual-toolbar">
@@ -5148,6 +5137,30 @@ function triggerTrustedClick(el) {
             } else {
                 result.push({ text: line, promptNum: nextNum++ });
             }
+        }
+        return result;
+    }
+
+    /**
+     * Leitor exclusivo da geração individual.
+     * O primeiro {conteúdo} identifica a cena e não entra no comando.
+     * Todos os [conteúdos] permanecem no texto para o seletor de referências.
+     */
+    function parseIndividualPromptsText(text, startFrom = 1) {
+        const lines = dividirEmPrompts(text).map(line => line.trim()).filter(Boolean);
+        const result = [];
+        let nextNum = startFrom;
+        for (let index = 0; index < lines.length; index++) {
+            const source = lines[index];
+            const marker = source.match(/^\{([^}\r\n]+)\}\s*/);
+            const fallback = `Cena ${nextNum}`;
+            const sceneName = String(marker ? marker[1] : fallback).replace(/\s+/g, ' ').trim() || fallback;
+            const cleanText = marker ? source.slice(marker[0].length).trim() : source;
+            if (!cleanText) continue;
+            const numeric = sceneName.match(/\d+(?:[.,]\d+)?/);
+            const promptNum = numeric ? Number(numeric[0].replace(',', '.')) : nextNum;
+            result.push({ text: cleanText, promptNum, sceneName, explicitLabel: !!marker, sourceIndex: index });
+            nextNum = Number.isFinite(promptNum) ? Math.floor(promptNum) + 1 : nextNum + 1;
         }
         return result;
     }
@@ -11058,7 +11071,7 @@ async scrollToWorkflow(wfId) {
     // INICIALIZA
     // ============================================================
     if (window.__installFlowModern) {
-        window.__installFlowModern(FlowAutomation, { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader });
+        window.__installFlowModern(FlowAutomation, { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader });
         delete window.__installFlowModern;
     }
     new FlowAutomation();
