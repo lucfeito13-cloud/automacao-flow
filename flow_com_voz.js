@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v9.1  -   2026-09-15
+//  Flow NOVO v9.2  -   2026-09-15
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -52,6 +52,8 @@
 //        O cartao flutuante inferior foi ocultado sem remover sua estrutura.
 //  v9.1: corrige o marcador do modo individual: o primeiro {conteudo} e o
 //        identificador; [conteudo] permanece sempre como referencia visual.
+//  v9.2: restaura o painel pequeno somente durante operacoes e impede que uma
+//        API/favorito sem resposta segure por muitos segundos cada renomeacao.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -147,7 +149,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.1 (identificador entre chaves)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.2 (status e renomeação ágil)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1107,11 +1109,22 @@
        * Se a API não responder, usa o menu da mídia confirmando sozinho.
        */
       idServeNaApi(id) { return !!id && !/^video-/i.test(String(id)); },
+      async apiComLimite(promise, timeout = 3500) {
+        let timer = null;
+        try {
+          return await Promise.race([
+            promise,
+            new Promise(resolve => { timer = setTimeout(() => resolve(false), timeout); })
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      },
       async apiRename(id, name, tileOptional = null) {
         const podeRetentarApi = !this._apiRenomearFalhouEm || Date.now() - this._apiRenomearFalhouEm >= 15000;
         if (this.idServeNaApi(id) && podeRetentarApi && old.apiRename) {
           try {
-            const deu = await old.apiRename.call(this, id, name);
+            const deu = await this.apiComLimite(old.apiRename.call(this, id, name));
             if (deu) {
               this._apiRenomearFalhouEm = 0;
               this._apiRenomearAvisada = false;
@@ -1160,23 +1173,20 @@
         if (!tile) return false;
 
         const realId = this.workflowIdReal(tile, id);
-        if (realId && old.apiRename) {
-          try {
-            const confirmado = await old.apiRename.call(this, realId, name);
-            if (confirmado) {
-              this.pintarNomeNoTile(id, name);
-              return true;
-            }
-          } catch (_) {}
-        }
-
+        // Usa o mesmo caminho rápido/cooldown de todas as outras renomeações.
+        // Antes este botão chamava a API antiga diretamente, sem limite de
+        // tempo, e podia ficar preso entre uma mídia e a próxima.
+        if (realId) return this.apiRename(realId, name, tile);
         return this.renomearPeloMenu(id, name, tile);
       },
 
       async renomearPeloMenu(id, name, tileOptional = null) {
         document.documentElement.classList.add('flow-rename-silent');
         try {
-          const tileValido = tileOptional && tileOptional.isConnected && this.getUuidFromTile(tileOptional) === id;
+          const tileId = tileOptional?.isConnected ? this.getUuidFromTile(tileOptional) : '';
+          const tileValido = tileOptional && tileOptional.isConnected && (
+            tileId === id || this.workflowIdReal(tileOptional, tileId) === id
+          );
           const tile = tileValido ? tileOptional : (await this.scrollToWorkflow(id));
           if (!tile) throw new Error('Mídia não encontrada para renomear.');
           if (this.getTileName(tile) === name) return true;
@@ -1272,7 +1282,7 @@
       async apiFavorite(id, value) {
         if (this.idServeNaApi(id) && this._apiFavoritarVale !== false && old.apiFavorite) {
           try {
-            const deu = await old.apiFavorite.call(this, id, value);
+            const deu = await this.apiComLimite(old.apiFavorite.call(this, id, value), 2500);
             if (deu) { this._apiFavoritarVale = true; return true; }
           } catch (_) {}
           if (this._apiFavoritarVale === undefined) this._apiFavoritarVale = false;
@@ -1289,7 +1299,10 @@
           const before = target.getAttribute('aria-label');
           if (/remove|remover/i.test(before) === !!value) return true;
           target.click();
-          await this.modernWait(() => $$('button[aria-label]', tile).some(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')) && b.getAttribute('aria-label') !== before));
+          await this.modernWait(
+            () => $$('button[aria-label]', tile).some(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')) && b.getAttribute('aria-label') !== before),
+            2500
+          );
           return true;
         } catch (error) { this.logDebug(`Favoritar: ${error.message}`, 'error'); return false; }
       },
@@ -1548,11 +1561,21 @@
         if (!ids.length || this._aplicandoMarcas) return;
         this._aplicandoMarcas = true;
         this.atualizarBotaoRenomearMarcadas();
+        const mini = document.getElementById('flow-mini');
+        const miniStatus = document.getElementById('flow-mini-status');
+        const miniSub = document.getElementById('flow-mini-sub');
+        const miniBar = document.getElementById('flow-mini-progress-bar');
+        if (miniStatus) miniStatus.textContent = 'Renomeando selecionadas';
+        if (miniSub) miniSub.textContent = `0 de ${ids.length}`;
+        if (miniBar) miniBar.style.width = '0%';
+        if (mini && !document.getElementById('flow-panel')?.classList.contains('active')) mini.style.display = 'flex';
         let ok = 0, falhou = 0;
         try {
           for (let i = 0; i < ids.length; i++) {
             const id = ids[i], marca = marcas[id];
             try {
+              if (miniSub) miniSub.textContent = `${i + 1} de ${ids.length} · ${marca.nome}`;
+              if (miniBar) miniBar.style.width = `${Math.round((i / ids.length) * 100)}%`;
               marca.estado = 'pending';
               this.atualizarEstadoItemAtribuir(marca.tipo === 'ref' ? marca.referencia : marca.cena, 'pending');
               const tile = await this.scrollToWorkflow(id);
@@ -1590,6 +1613,8 @@
           );
         } finally {
           this._aplicandoMarcas = false;
+          if (miniBar) miniBar.style.width = '100%';
+          if (mini) mini.style.display = 'none';
           this.mostrarBarraDeAtualizar();
           this.atualizarBotaoRenomearMarcadas();
         }
@@ -4401,8 +4426,6 @@
         '.flow-assign-item.missing{opacity:.85!important;}',
         /* quantos prompts foram lidos, nas duas abas */
         '#flow-prompt-count,#fv-prompt-count{color:#0f172a!important;font-weight:700!important;font-size:12px!important;}',
-        /* v9.0: o cartao inferior continua no DOM para compatibilidade, mas nao aparece. */
-        '#flow-mini{display:none!important;}',
         '.flow-individual{margin-top:10px;border-top:1px solid var(--cd-border-light);padding-top:9px;}',
         '.flow-individual>summary{cursor:pointer;color:#0f766e;font-size:12px;font-weight:800;list-style:none;}',
         '.flow-individual>summary::-webkit-details-marker{display:none;}',
@@ -4719,19 +4742,14 @@
       }, true);
 
 
-      // Fechar o painel principal passa a deixar o cartao no canto inferior
-      // direito, e nao so durante uma execucao. O X do proprio cartao dispensa.
+      // O cartão pequeno aparece apenas se o painel for fechado durante uma
+      // operação. Fora de uso ele fica oculto, como no comportamento original.
       const fechar = document.getElementById('flow-close');
       if (fechar) fechar.addEventListener('click', () => {
         const mini = document.getElementById('flow-mini');
         if (!mini) return;
-        mini.style.display = 'flex';
-        if (!this.isRunning && !this.videoIsRunning) {
-          const st = document.getElementById('flow-mini-status');
-          const sub = document.getElementById('flow-mini-sub');
-          if (st) st.textContent = 'Criadores Dark';
-          if (sub) sub.textContent = 'Clique para abrir o painel';
-        }
+        const emOperacao = !!(this.isRunning || this.videoIsRunning || this._modernTaskRunning || this._aplicandoMarcas);
+        mini.style.display = emOperacao ? 'flex' : 'none';
       });
 
       // Hover replaces a video's thumbnail with a signed playback URL. Preserve
