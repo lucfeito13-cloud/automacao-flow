@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v8.7  -   2026-09-11
+//  Flow NOVO v9.0  -   2026-09-15
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -47,6 +47,10 @@
 //        e baixa somente as midias realmente atribuidas como Cena no painel.
 //  v8.7: mudancas de src provocadas pelo hover sao ignoradas quando o cartao
 //        ja foi identificado; cartoes novos sao processados somente em idle.
+//  v9.0: adiciona geracao individual sem conferencia, com uma linha e um botao
+//        Gerar por prompt. O primeiro [colchete] pode ser Cena 1A, Matriz B ou
+//        qualquer outro identificador e segue ate o painel Atribuir/Renomear.
+//        O cartao flutuante inferior foi ocultado sem remover sua estrutura.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -63,8 +67,16 @@
   const norm = value => String(value || '').replace(/\s+/g, ' ').trim();
   const refKey = value => norm(value).replace(/ _$/, '').replace(/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i, '').toLocaleLowerCase();
   const sceneInfo = name => {
-    const m = norm(name).match(/^Cena\s+(\d+(?:\.\d+)?)\s*-\s*(Imagem|V[ií]deo)\s+(\d+)$/i);
-    return m ? { scene: `Cena ${m[1]}`, sceneNum: Number(m[1]), imgNum: Number(m[3]), isVideo: /^v/i.test(m[2]) } : null;
+    const m = norm(name).match(/^(.+?)\s*-\s*(Imagem|V[ií]deo)\s+(\d+)$/i);
+    if (!m) return null;
+    const scene = norm(m[1]);
+    const numeric = scene.match(/\d+(?:[.,]\d+)?/);
+    return {
+      scene,
+      sceneNum: numeric ? Number(numeric[0].replace(',', '.')) : 0,
+      imgNum: Number(m[3]),
+      isVideo: /^v/i.test(m[2])
+    };
   };
   const unique = entries => [...new Map(entries.filter(e => e && e.uuid).map(e => [e.uuid, e])).values()];
   const cleanEditorText = editor => {
@@ -134,10 +146,25 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v8.7 (hover de vídeo otimizado)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.0 (geração individual por identificador)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
+    // Leitor isolado do modo individual. O parser antigo continua intocado:
+    // somente aqui o PRIMEIRO [colchete] e o identificador da geracao.
+    const parseIndividualPrompts = text => parsePromptsText(text).map((prompt, index) => {
+      const source = String(prompt.text || '').trim();
+      const marker = source.match(/^\[([^\]\r\n]+)\]\s*/);
+      const sceneName = norm(marker ? marker[1] : `Cena ${prompt.promptNum}`);
+      const cleanText = marker ? source.slice(marker[0].length).trim() : source;
+      return {
+        text: cleanText,
+        promptNum: prompt.promptNum,
+        sceneName: sceneName || `Cena ${index + 1}`,
+        explicitLabel: !!marker,
+        sourceIndex: index
+      };
+    }).filter(prompt => prompt.text);
     const labels = {
       'Search assets': 'Pesquisar recursos', 'Add ingredients to the prompt box': 'Adicionar elementos à caixa de comando',
       'Settings trigger': 'Gatilho de configurações', 'Start generation': 'Iniciar geração', 'Clear prompt': 'Apagar comando',
@@ -1460,7 +1487,10 @@
         const known = existing.find(item => item.workflowId === id);
         const imgNum = known?.imgNum || Math.max(0, ...existing.map(item => item.imgNum)) + 1;
         const isVid = (tile && this.isVideoTile(tile)) || !!this._videoAssignActive;
-        const label = `Cena ${sceneNum} - ${isVid ? 'Vídeo' : 'Imagem'} ${imgNum}`;
+        // sceneName ja chega completo ("Cena 1A", "Matriz B", ...). Para os
+        // lotes antigos ele continua sendo exatamente "Cena X".
+        const labelBase = norm(sceneName) || `Cena ${sceneNum}`;
+        const label = `${labelBase} - ${isVid ? 'Vídeo' : 'Imagem'} ${imgNum}`;
         for (const list of assignments.values()) {
           const index = list.findIndex(item => item.workflowId === id);
           if (index >= 0) list.splice(index, 1);
@@ -2074,6 +2104,69 @@
     Object.assign(proto, {
       chaveDoPrompt(promptNum) {
         return String(promptNum ?? '').trim().replace(',', '.');
+      },
+      registrarPromptsIndividuais(prompts, isVideo) {
+        const target = isVideo ? 'videoPrompts' : 'prompts';
+        const mapTarget = isVideo ? 'videoSceneAssignments' : 'sceneAssignments';
+        const previous = this[mapTarget] instanceof Map ? this[mapTarget] : new Map();
+        this[target] = prompts.map(prompt => ({ ...prompt }));
+        this[mapTarget] = new Map(prompts.map(prompt => [
+          prompt.sceneName,
+          previous.get(prompt.sceneName) || []
+        ]));
+      },
+      abrirAtribuicaoIndividual(isVideo = false) {
+        const prefix = isVideo ? 'fv' : 'flow';
+        const input = document.getElementById(`${prefix}-prompts-input`);
+        const prompts = parseIndividualPrompts(input?.value || '');
+        if (!prompts.length) {
+          (isVideo ? this.setVideoStatus : this.setStatus).call(
+            this, 'warning', 'Cole pelo menos um prompt para montar os identificadores.'
+          );
+          return;
+        }
+        this.registrarPromptsIndividuais(prompts, isVideo);
+        if (isVideo) {
+          this.videoGenMode = 'scenes';
+          this._videoAssignActive = true;
+          this.showVideoAssignPanel([]);
+          this.setVideoStatus('success', `🏷️ ${this.videoSceneAssignments.size} identificador(es) aberto(s) para atribuir e renomear.`);
+        } else {
+          this.genMode = 'scenes';
+          this._videoAssignActive = false;
+          this.showAssignPanel([]);
+          this.setStatus('success', `🏷️ ${this.sceneAssignments.size} identificador(es) aberto(s) para atribuir e renomear.`);
+        }
+      },
+      async gerarPromptIndividual(prompt, isVideo, button) {
+        if (this.isRunning || this.videoIsRunning || this._modernTaskRunning) {
+          throw new Error('Há outra operação em andamento. Aguarde ou pare antes de enviar este prompt.');
+        }
+        this._modernTaskRunning = true;
+        this.shouldStop = false;
+        this.videoShouldStop = false;
+        if (button) button.disabled = true;
+        const statusFn = isVideo ? this.setVideoStatus : this.setStatus;
+        try {
+          // Guarda o identificador para ele aparecer depois em Atribuir/Renomear,
+          // sem ligar a fila, a conferencia ou as retentativas de geracao.
+          const current = parseIndividualPrompts(
+            document.getElementById(`${isVideo ? 'fv' : 'flow'}-prompts-input`)?.value || ''
+          );
+          this.registrarPromptsIndividuais(current, isVideo);
+          statusFn.call(this, 'info', `▶️ Enviando ${this.esc(prompt.sceneName)}...`);
+          const sent = await prepare.call(this, {
+            text: prompt.text,
+            promptNum: prompt.sceneName,
+            sceneName: prompt.sceneName
+          });
+          if (sent === false) throw new Error('O Flow não confirmou o clique de gerar.');
+          statusFn.call(this, 'success', `✅ ${this.esc(prompt.sceneName)} enviado ao Flow. Sem espera de conferência.`);
+          return true;
+        } finally {
+          this._modernTaskRunning = false;
+          if (button) button.disabled = false;
+        }
       },
       async prepareAndSubmit(prompt) {
         this._modernCurrentPrompt = prompt.promptNum;
@@ -4319,6 +4412,23 @@
         '.flow-assign-item.missing{opacity:.85!important;}',
         /* quantos prompts foram lidos, nas duas abas */
         '#flow-prompt-count,#fv-prompt-count{color:#0f172a!important;font-weight:700!important;font-size:12px!important;}',
+        /* v9.0: o cartao inferior continua no DOM para compatibilidade, mas nao aparece. */
+        '#flow-mini{display:none!important;}',
+        '.flow-individual{margin-top:10px;border-top:1px solid var(--cd-border-light);padding-top:9px;}',
+        '.flow-individual>summary{cursor:pointer;color:#0f766e;font-size:12px;font-weight:800;list-style:none;}',
+        '.flow-individual>summary::-webkit-details-marker{display:none;}',
+        '.flow-individual-help{font-size:11px;line-height:1.45;color:var(--cd-text-muted);margin:7px 0;}',
+        '.flow-individual-toolbar{display:flex;gap:6px;margin-bottom:7px;}',
+        '.flow-individual-list{display:flex;flex-direction:column;gap:6px;max-height:310px;overflow:auto;}',
+        '.flow-individual-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:center;padding:7px;border:1px solid #dbe5ef;border-radius:9px;background:#f8fafc;}',
+        '.flow-individual-copy{min-width:0;}',
+        '.flow-individual-id{font-size:11px;font-weight:800;color:#0f766e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+        '.flow-individual-text{font-size:11px;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}',
+        '.flow-individual-generate{border:0;border-radius:8px;background:#10b981;color:#fff;font-size:11px;font-weight:800;padding:7px 9px;cursor:pointer;}',
+        '.flow-individual-generate:disabled{opacity:.55;cursor:wait;}',
+        '.flow-individual-row.sent{background:#ecfdf5;border-color:#6ee7b7;}',
+        '.flow-individual-row.error{background:#fff7ed;border-color:#fb923c;}',
+        '.flow-individual-empty{font-size:11px;color:var(--cd-text-light);padding:6px 0;}',
         /* resumo dos tempos */
         '#flow-t-info,#fv-t-info{color:#334155!important;font-weight:600!important;}',
         /* aba Renomear: situacao, previa e a lista de nomes */
@@ -4386,6 +4496,82 @@
     proto.initUI = function () {
       old.initUI.call(this);
       root.__flowInstance = this;   // a aba Renomear precisa da instância
+
+      // ── v9.0: geração individual, isolada da fila principal ─────────────
+      const instalarIndividual = (prefix, isVideo) => {
+        const input = document.getElementById(`${prefix}-prompts-input`);
+        const count = document.getElementById(`${prefix}-prompt-count`);
+        if (!input || !count || document.getElementById(`${prefix}-individual`)) return;
+
+        const box = document.createElement('details');
+        box.id = `${prefix}-individual`;
+        box.className = 'flow-individual';
+        box.innerHTML = `
+          <summary>▶ Gerar um prompt por vez <span class="flow-individual-total"></span></summary>
+          <div class="flow-individual-help">
+            O primeiro <b>[colchete]</b> vira o nome da geração e não é enviado como referência.
+            Ex.: <b>[Cena 1A]</b>, <b>[Matriz B]</b>. Os próximos colchetes continuam sendo referências.
+            Cada botão apenas envia aquele prompt, sem esperar ou conferir a geração.
+          </div>
+          <div class="flow-individual-toolbar">
+            <button type="button" class="flow-validate-btn flow-individual-assign" style="margin:0;">🏷️ Abrir em Atribuir/Renomear</button>
+          </div>
+          <div class="flow-individual-list"></div>`;
+        count.after(box);
+
+        const list = box.querySelector('.flow-individual-list');
+        const total = box.querySelector('.flow-individual-total');
+        const sent = new Set();
+        const render = () => {
+          const prompts = parseIndividualPrompts(input.value);
+          total.textContent = prompts.length ? `(${prompts.length})` : '';
+          if (!box.open) return;
+          if (!prompts.length) {
+            list.innerHTML = '<div class="flow-individual-empty">Cole os prompts acima para criar uma linha por geração.</div>';
+            return;
+          }
+          list.innerHTML = prompts.map((prompt, index) => `
+            <div class="flow-individual-row${sent.has(index) ? ' sent' : ''}" data-index="${index}">
+              <div class="flow-individual-copy">
+                <div class="flow-individual-id">${this.esc(prompt.sceneName)}${prompt.explicitLabel ? '' : ' · nome automático'}</div>
+                <div class="flow-individual-text">${this.esc(prompt.text)}</div>
+              </div>
+              <button type="button" class="flow-individual-generate">${sent.has(index) ? 'Gerar novamente' : 'Gerar'}</button>
+            </div>`).join('');
+        };
+
+        let timer = null;
+        input.addEventListener('input', () => {
+          clearTimeout(timer);
+          timer = setTimeout(render, 220);
+        });
+        box.addEventListener('toggle', render);
+        box.querySelector('.flow-individual-assign').addEventListener('click', () => this.abrirAtribuicaoIndividual(isVideo));
+        list.addEventListener('click', async event => {
+          const button = event.target.closest('.flow-individual-generate');
+          if (!button) return;
+          const row = button.closest('.flow-individual-row');
+          const index = Number(row?.dataset.index);
+          const prompt = parseIndividualPrompts(input.value)[index];
+          if (!prompt) return;
+          row.classList.remove('error');
+          button.textContent = 'Enviando…';
+          try {
+            await this.gerarPromptIndividual(prompt, isVideo, button);
+            sent.add(index);
+            row.classList.add('sent');
+            button.textContent = 'Gerar novamente';
+          } catch (error) {
+            row.classList.add('error');
+            button.textContent = 'Tentar novamente';
+            (isVideo ? this.setVideoStatus : this.setStatus).call(this, 'error', `❌ ${this.esc(prompt.sceneName)}: ${this.esc(error?.message || error)}`);
+          }
+        });
+        render();
+      };
+      instalarIndividual('flow', false);
+      instalarIndividual('fv', true);
+
       // Um unico Modo de seguranca, espelhado nas duas abas e salvo. O padrao
       // e desligado para que o lote seja realmente enviado em paralelo.
       const CHAVE_SEGURANCA = 'flow_modo_seguranca_sequencial';
@@ -8326,7 +8512,8 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                 // INJEÇÃO ADD-ON: Numeração Fiel
                 for (const [sceneName] of this.sceneAssignments) {
                     const sceneNum = parseFloat(sceneName.match(/[\d.]+/)?.[0] || 0);
-                    const prompt = this.prompts.find(p => p.promptNum === sceneNum);
+                    const prompt = this.prompts.find(p => p.sceneName === sceneName) ||
+                        this.prompts.find(p => p.promptNum === sceneNum);
                     const promptText = prompt?.text || '';
 
                     const item = document.createElement('div');
@@ -9736,7 +9923,8 @@ if (this.videoGenMode === 'scenes') {
             // INJEÇÃO ADD-ON: Numeração Fiel
             for (const [sceneName] of this.videoSceneAssignments) {
                 const sceneNum = parseFloat(sceneName.match(/[\d.]+/)?.[0] || 0);
-                const prompt = this.videoPrompts.find(p => p.promptNum === sceneNum);
+                const prompt = this.videoPrompts.find(p => p.sceneName === sceneName) ||
+                    this.videoPrompts.find(p => p.promptNum === sceneNum);
                 const promptText = prompt?.text || '';
 
                 const item = document.createElement('div');
