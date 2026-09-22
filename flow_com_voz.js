@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v9.4  -   2026-09-22
+//  Flow NOVO v9.5  -   2026-09-22
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -58,6 +58,8 @@
 //        proximidade do editor, preservando o clique de videos que ja funciona.
 //  v9.4: imagens sao enviadas com Enter depois do prompt pronto; o clique no
 //        botao fica apenas como alternativa. O envio de videos nao foi alterado.
+//  v9.5: o Flow ignora Enter sintetico em imagens; o clique agora e feito no
+//        componente correto flow-generate-icon-button, nao no button interno.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -153,7 +155,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.4 (imagens enviadas com Enter)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.5 (clique no gerador de imagens)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -603,26 +605,34 @@
           return false;
         };
 
-        // No modo Imagem, o Flow atual finaliza o comando com Enter. Fazemos
-        // isso uma unica vez e so procuramos o botao se o Enter nao responder.
-        // Video continua usando diretamente o clique que ja funciona.
+        // No modo Imagem, o listener de clique pertence ao Web Component
+        // flow-generate-icon-button. Clicar no button interno (o que tem
+        // aria-label="Start generation") nao dispara a acao nesta versao.
+        // Video continua usando diretamente o caminho que ja funciona.
         if (!this.videoIsRunning) {
-          editor.focus();
+          const imageGenerate = await this.modernWait(() => {
+            const exact = document.querySelector(
+              '#main-content > flow-project-shell > flow-project-page > flow-prompt-box ' +
+              '> flow-prompt-box-instruction-card-wrapper > div > div > flow-base-prompt-box ' +
+              '> div > div.bottom-controls > div > flow-generate-icon-button'
+            );
+            const fallback = document.querySelector('flow-prompt-box flow-generate-icon-button');
+            const component = exact || fallback;
+            if (!component || !visible(component) || own(component)) return null;
+            const internalButton = $('button', component);
+            if (internalButton?.disabled || internalButton?.getAttribute('aria-disabled') === 'true') return null;
+            return component;
+          });
+          this.logDebug('Imagem: clicando diretamente em flow-generate-icon-button.', 'info');
+          imageGenerate.click();
           try {
-            const range = document.createRange();
-            range.selectNodeContents(editor); range.collapse(false);
-            const selection = window.getSelection();
-            selection.removeAllRanges(); selection.addRange(range);
-          } catch (_) {}
-          const enter = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true, view: window };
-          editor.dispatchEvent(new KeyboardEvent('keydown', enter));
-          editor.dispatchEvent(new KeyboardEvent('keyup', enter));
-          this.logDebug('Imagem: Enter enviado para finalizar o prompt.', 'info');
-          try {
-            await this.modernWait(aceitou, 1800);
+            await this.modernWait(aceitou, 15000);
             return true;
-          } catch (_) {
-            this.logDebug('Enter não confirmou em 1,8 s; tentando o botão Gerar como alternativa.', 'warning');
+          } catch (error) {
+            // O clique ja foi feito no alvo correto. Nao tentamos outro botao,
+            // pois uma segunda tentativa poderia gastar credito em duplicidade.
+            this._modernUncertain = true;
+            throw new Error('Clique feito no gerador de imagens, mas o Flow não confirmou o envio.');
           }
         }
 
