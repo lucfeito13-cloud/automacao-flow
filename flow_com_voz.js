@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v9.3  -   2026-09-22
+//  Flow NOVO v9.4  -   2026-09-22
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -56,6 +56,8 @@
 //        API/favorito sem resposta segure por muitos segundos cada renomeacao.
 //  v9.3: reforca a localizacao do botao Gerar de imagens por rotulo, icone e
 //        proximidade do editor, preservando o clique de videos que ja funciona.
+//  v9.4: imagens sao enviadas com Enter depois do prompt pronto; o clique no
+//        botao fica apenas como alternativa. O envio de videos nao foi alterado.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -151,7 +153,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.3 (envio de imagens reforçado)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.4 (imagens enviadas com Enter)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -586,20 +588,6 @@
           return candidates[0];
         };
 
-        const btn = await this.modernWait(() => {
-          const candidate = findSubmitButton();
-          return candidate && !candidate.disabled && candidate.getAttribute('aria-disabled') !== 'true' ? candidate : null;
-        });
-        this.logDebug(
-          'Botão Gerar localizado: ' + JSON.stringify({
-            aria: btn.getAttribute('aria-label') || '',
-            title: btn.getAttribute('title') || '',
-            icon: norm($('i.google-symbols,mat-icon,[class*="google-symbol"]', btn)?.textContent)
-          }),
-          'info'
-        );
-        btn.click();
-
         // O Flow ACEITOU se qualquer um destes acontecer. Exigir o editor vazio
         // dava falso negativo em TODO prompt com referencia, porque o chip fica
         // no editor depois do envio e o texto nunca chegava a ser vazio.
@@ -614,6 +602,44 @@
           if (this.getTiles().filter(t => this.tileHasProgress(t)).length > gerandoAntes) return true;
           return false;
         };
+
+        // No modo Imagem, o Flow atual finaliza o comando com Enter. Fazemos
+        // isso uma unica vez e so procuramos o botao se o Enter nao responder.
+        // Video continua usando diretamente o clique que ja funciona.
+        if (!this.videoIsRunning) {
+          editor.focus();
+          try {
+            const range = document.createRange();
+            range.selectNodeContents(editor); range.collapse(false);
+            const selection = window.getSelection();
+            selection.removeAllRanges(); selection.addRange(range);
+          } catch (_) {}
+          const enter = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true, view: window };
+          editor.dispatchEvent(new KeyboardEvent('keydown', enter));
+          editor.dispatchEvent(new KeyboardEvent('keyup', enter));
+          this.logDebug('Imagem: Enter enviado para finalizar o prompt.', 'info');
+          try {
+            await this.modernWait(aceitou, 1800);
+            return true;
+          } catch (_) {
+            this.logDebug('Enter não confirmou em 1,8 s; tentando o botão Gerar como alternativa.', 'warning');
+          }
+        }
+
+        const btn = await this.modernWait(() => {
+          const candidate = findSubmitButton();
+          return candidate && !candidate.disabled && candidate.getAttribute('aria-disabled') !== 'true' ? candidate : null;
+        });
+        this.logDebug(
+          'Botão Gerar localizado: ' + JSON.stringify({
+            aria: btn.getAttribute('aria-label') || '',
+            title: btn.getAttribute('title') || '',
+            icon: norm($('i.google-symbols,mat-icon,[class*="google-symbol"]', btn)?.textContent)
+          }),
+          'info'
+        );
+        btn.click();
+
         try {
           await this.modernWait(aceitou, 15000);
         } catch (error) {
