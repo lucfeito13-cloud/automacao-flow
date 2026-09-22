@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Criadores Dark - Ferramentas IA",
+  "version": "1.2.0",
+  "description": "Ferramentas de automação para Whisk e Flow — compatibilidade Flow setembro/2026",
+  "permissions": [
+    "scripting",
+    "tabs",
+    "storage",
+    "webNavigation",
+    "declarativeNetRequest",
+    "debugger"
+  ],
+  "host_permissions": [
+    "https://flow.google.com/*",
+    "https://*.flow.google.com/*",
+    "https://labs.google/*",
+    "https://*.meta.ai/*",
+    "https://meta.ai/*",
+    "https://*.grok.com/*",
+    "https://grok.com/*",
+    "https://*.lmnt.com/*",
+    "https://lmnt.com/*",
+    "https://fixa.tech/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
+}

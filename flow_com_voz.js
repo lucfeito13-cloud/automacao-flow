@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v9.6  -   2026-09-22
+//  Flow NOVO v9.7  -   2026-09-22
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -62,6 +62,8 @@
 //        componente correto flow-generate-icon-button, nao no button interno.
 //  v9.6: antes de gerar, confirma e fecha de verdade o seletor de referencias;
 //        a janela Add to prompt aberta era quem bloqueava o clique de imagem.
+//  v9.7: imagens e videos usam Enter confiavel pelo servico da extensao. O Flow
+//        atual ignora click()/KeyboardEvent sinteticos, mas aceita a tecla real.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -157,7 +159,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.6 (fecha referências antes de gerar)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.7 (Enter confiável para imagens e vídeos)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -640,37 +642,6 @@
           return false;
         };
 
-        // No modo Imagem, o listener de clique pertence ao Web Component
-        // flow-generate-icon-button. Clicar no button interno (o que tem
-        // aria-label="Start generation") nao dispara a acao nesta versao.
-        // Video continua usando diretamente o caminho que ja funciona.
-        if (!this.videoIsRunning) {
-          const imageGenerate = await this.modernWait(() => {
-            const exact = document.querySelector(
-              '#main-content > flow-project-shell > flow-project-page > flow-prompt-box ' +
-              '> flow-prompt-box-instruction-card-wrapper > div > div > flow-base-prompt-box ' +
-              '> div > div.bottom-controls > div > flow-generate-icon-button'
-            );
-            const fallback = document.querySelector('flow-prompt-box flow-generate-icon-button');
-            const component = exact || fallback;
-            if (!component || !visible(component) || own(component)) return null;
-            const internalButton = $('button', component);
-            if (internalButton?.disabled || internalButton?.getAttribute('aria-disabled') === 'true') return null;
-            return component;
-          });
-          this.logDebug('Imagem: clicando diretamente em flow-generate-icon-button.', 'info');
-          imageGenerate.click();
-          try {
-            await this.modernWait(aceitou, 15000);
-            return true;
-          } catch (error) {
-            // O clique ja foi feito no alvo correto. Nao tentamos outro botao,
-            // pois uma segunda tentativa poderia gastar credito em duplicidade.
-            this._modernUncertain = true;
-            throw new Error('Clique feito no gerador de imagens, mas o Flow não confirmou o envio.');
-          }
-        }
-
         const btn = await this.modernWait(() => {
           const candidate = findSubmitButton();
           return candidate && !candidate.disabled && candidate.getAttribute('aria-disabled') !== 'true' ? candidate : null;
@@ -683,7 +654,44 @@
           }),
           'info'
         );
-        btn.click();
+
+        // O Flow passou a ignorar eventos criados por JavaScript. O servico de
+        // fundo da extensao usa a API de entrada do Chrome para pressionar Enter
+        // de verdade no botao ja focado. Uma requisicao gera UMA tecla e UMA
+        // tentativa; nunca repetimos automaticamente um envio sem confirmacao.
+        const requestId = 'flow-enter-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        const trustedEnter = new Promise((resolve, reject) => {
+          let finished = false;
+          const finish = (fn, value) => {
+            if (finished) return;
+            finished = true;
+            window.removeEventListener('message', onResult);
+            clearTimeout(timer);
+            fn(value);
+          };
+          const onResult = event => {
+            if (event.source !== window || event.origin !== location.origin) return;
+            const data = event.data;
+            if (!data || data.source !== 'criadores-dark-extension-bridge' ||
+                data.type !== 'FLOW_TRUSTED_ENTER_RESULT' || data.requestId !== requestId) return;
+            if (data.ok) finish(resolve, true);
+            else finish(reject, new Error(data.error || 'O Chrome não conseguiu enviar Enter.'));
+          };
+          const timer = setTimeout(() => finish(reject, new Error(
+            'Canal de envio confiável indisponível. Recarregue a extensão e a página do Flow.'
+          )), 7000);
+          window.addEventListener('message', onResult);
+          window.postMessage({
+            source: 'criadores-dark-flow-main',
+            type: 'FLOW_TRUSTED_ENTER_REQUEST',
+            requestId
+          }, location.origin);
+        });
+
+        try { btn.focus({ preventScroll: true }); }
+        catch (_) { try { btn.focus(); } catch (_) {} }
+        this.logDebug((this.videoIsRunning ? 'Vídeo' : 'Imagem') + ': enviando Enter confiável ao botão Gerar.', 'info');
+        await trustedEnter;
 
         try {
           await this.modernWait(aceitou, 15000);
