@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v9.5  -   2026-09-22
+//  Flow NOVO v9.6  -   2026-09-22
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -60,6 +60,8 @@
 //        botao fica apenas como alternativa. O envio de videos nao foi alterado.
 //  v9.5: o Flow ignora Enter sintetico em imagens; o clique agora e feito no
 //        componente correto flow-generate-icon-button, nao no button interno.
+//  v9.6: antes de gerar, confirma e fecha de verdade o seletor de referencias;
+//        a janela Add to prompt aberta era quem bloqueava o clique de imagem.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -155,7 +157,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.5 (clique no gerador de imagens)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.6 (fecha referências antes de gerar)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -288,11 +290,41 @@
         }
         throw new Error('O Flow não aceitou a inserção de texto.');
       },      async closeAssetPicker() {
-        const trigger = $('button[aria-label="Add ingredients to the prompt box"]');
-        if (trigger?.getAttribute('aria-expanded') === 'true') {
-          trigger.click();
-          await this.modernWait(() => !visible($('input[aria-label="Search assets"]')));
+        const isOpen = () => visible($('input[aria-label="Search assets"]'));
+        if (!isOpen()) return true;
+
+        // Quando ha itens selecionados, o Flow exige confirmar este botao antes
+        // de fechar. Era exatamente a janela que permanecia aberta na captura.
+        const add = textButton(['Add to prompt', 'Adicionar ao prompt', 'Incluir no comando'], 'button,[role="button"]');
+        if (add && !add.disabled && add.getAttribute('aria-disabled') !== 'true') {
+          add.click();
+          try { await this.modernWait(() => !isOpen(), 2200); } catch (_) {}
+          if (!isOpen()) return true;
         }
+
+        const trigger = $('button[aria-label="Add ingredients to the prompt box"]');
+        if (trigger) {
+          trigger.click();
+          try { await this.modernWait(() => !isOpen(), 1600); } catch (_) {}
+          if (!isOpen()) return true;
+        }
+
+        const dialog = $('input[aria-label="Search assets"]')?.closest('[role="dialog"],.cdk-overlay-pane,flow-asset-picker');
+        const close = dialog && $$('button,[role="button"]', dialog).find(button => {
+          const label = norm(button.getAttribute('aria-label') || button.getAttribute('title') || button.textContent);
+          return /^(close|fechar|cancel|cancelar|×)$/i.test(label);
+        });
+        if (close) {
+          close.click();
+          try { await this.modernWait(() => !isOpen(), 1200); } catch (_) {}
+          if (!isOpen()) return true;
+        }
+
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
+        }));
+        await this.modernWait(() => !isOpen(), 1800);
+        return true;
       },
       async openAtSelector() {
         if (visible($('input[aria-label="Search assets"]'))) return;
@@ -551,7 +583,10 @@
       },
       async clickSubmit() {
         // Com o painel de ingredientes aberto o envio nao acontece.
-        try { await this.closeAssetPicker(); } catch (_) {}
+        await this.closeAssetPicker();
+        if (visible($('input[aria-label="Search assets"]'))) {
+          throw new Error('O seletor de referências continua aberto e está bloqueando o envio.');
+        }
         const editor = this.getEditor();
         if (!editor || !cleanEditorText(editor)) throw new Error('O prompt está vazio; nenhum envio foi feito.');
         this._modernPreparedText = cleanEditorText(editor);
