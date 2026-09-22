@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v9.2  -   2026-09-15
+//  Flow NOVO v9.3  -   2026-09-22
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -54,6 +54,8 @@
 //        identificador; [conteudo] permanece sempre como referencia visual.
 //  v9.2: restaura o painel pequeno somente durante operacoes e impede que uma
 //        API/favorito sem resposta segure por muitos segundos cada renomeacao.
+//  v9.3: reforca a localizacao do botao Gerar de imagens por rotulo, icone e
+//        proximidade do editor, preservando o clique de videos que ja funciona.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -149,7 +151,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.2 (status e renomeação ágil)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.3 (envio de imagens reforçado)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -552,10 +554,50 @@
         const textoAntes = this.textoSemChips(editor);
         const gerandoAntes = this.getTiles().filter(t => this.tileHasProgress(t)).length;
 
+        const findSubmitButton = () => {
+          const exact = $('button[aria-label="Start generation"]');
+          if (exact && visible(exact) && !own(exact)) return exact;
+
+          const er = editor.getBoundingClientRect();
+          const candidates = $$('button').filter(button => {
+            if (!visible(button) || own(button)) return false;
+            const aria = norm(button.getAttribute('aria-label')).toLocaleLowerCase();
+            const title = norm(button.getAttribute('title')).toLocaleLowerCase();
+            const text = norm(button.textContent).toLocaleLowerCase();
+            const icon = norm($('i.google-symbols,mat-icon,[class*="google-symbol"]', button)?.textContent).toLocaleLowerCase();
+            const named = /(start generation|iniciar gera[cç][aã]o|generate|gerar|create|criar|send|enviar)/i.test(aria) ||
+              /(start generation|iniciar gera[cç][aã]o|generate|gerar|create|criar|send|enviar)/i.test(title) ||
+              /^(generate|gerar|create|criar|send|enviar)$/i.test(text);
+            const iconic = /^(arrow_forward|arrow_upward|send|play_arrow)$/i.test(icon);
+            if (!named && !iconic) return false;
+            const r = button.getBoundingClientRect();
+            // O botão verdadeiro fica junto do editor. Esta margem cobre os
+            // layouts largo e compacto sem alcançar os controles da galeria.
+            return r.left >= er.left - 80 && r.right <= er.right + 180 &&
+              r.top >= er.top - 140 && r.bottom <= er.bottom + 140;
+          });
+          if (!candidates.length) return null;
+          candidates.sort((a, b) => {
+            const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+            const ad = Math.abs(ar.right - er.right) + Math.abs((ar.top + ar.bottom) / 2 - (er.top + er.bottom) / 2);
+            const bd = Math.abs(br.right - er.right) + Math.abs((br.top + br.bottom) / 2 - (er.top + er.bottom) / 2);
+            return ad - bd;
+          });
+          return candidates[0];
+        };
+
         const btn = await this.modernWait(() => {
-          const b = $('button[aria-label="Start generation"]');
-          return b && !b.disabled ? b : null;
+          const candidate = findSubmitButton();
+          return candidate && !candidate.disabled && candidate.getAttribute('aria-disabled') !== 'true' ? candidate : null;
         });
+        this.logDebug(
+          'Botão Gerar localizado: ' + JSON.stringify({
+            aria: btn.getAttribute('aria-label') || '',
+            title: btn.getAttribute('title') || '',
+            icon: norm($('i.google-symbols,mat-icon,[class*="google-symbol"]', btn)?.textContent)
+          }),
+          'info'
+        );
         btn.click();
 
         // O Flow ACEITOU se qualquer um destes acontecer. Exigir o editor vazio
@@ -567,7 +609,7 @@
           if (cleanEditorText(ed) === '') return true;
           const agora = this.textoSemChips(ed);
           if (textoAntes && agora.length <= Math.max(2, Math.round(textoAntes.length * 0.4))) return true;
-          const b = $('button[aria-label="Start generation"]');
+          const b = findSubmitButton();
           if (b && b.disabled) return true;
           if (this.getTiles().filter(t => this.tileHasProgress(t)).length > gerandoAntes) return true;
           return false;
