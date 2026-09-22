@@ -1,6 +1,6 @@
 /**
  * Criadores Dark - Background Service Worker (Inscritos)
- * Versão 1.2.0 - Enter confiável para o Flow atual
+ * Versão 1.2.3 - vídeo v9.2 e clique físico apenas para imagens
  */
 
 // Servidor original para Whisk, Meta, etc.
@@ -154,8 +154,8 @@ function injectViaBlobURL(code) {
 // ENTER CONFIAVEL PARA O FLOW ATUAL
 // =====================================================
 // O codigo principal roda no mundo MAIN e, por seguranca, nao enxerga as APIs
-// chrome.*. Esta ponte roda no mundo ISOLATED, recebe somente o pedido de Enter
-// desta pagina e o encaminha ao service worker.
+// chrome.*. Esta ponte roda no mundo ISOLATED, recebe somente pedidos de entrada
+// desta pagina e os encaminha ao service worker.
 function installTrustedInputBridge() {
     if (window.__criadoresDarkTrustedInputBridge) return;
     window.__criadoresDarkTrustedInputBridge = true;
@@ -163,14 +163,18 @@ function installTrustedInputBridge() {
     window.addEventListener('message', async (event) => {
         if (event.source !== window || event.origin !== location.origin) return;
         const data = event.data;
-        if (!data || data.source !== 'criadores-dark-flow-main' ||
-            data.type !== 'FLOW_TRUSTED_ENTER_REQUEST' || !data.requestId) return;
+        if (!data || data.source !== 'criadores-dark-flow-main' || !data.requestId) return;
+        const isClick = data.type === 'FLOW_TRUSTED_CLICK_REQUEST';
+        const isEnter = data.type === 'FLOW_TRUSTED_ENTER_REQUEST';
+        if (!isClick && !isEnter) return;
 
         let response;
         try {
             response = await chrome.runtime.sendMessage({
-                type: 'FLOW_TRUSTED_ENTER',
-                requestId: String(data.requestId)
+                type: isClick ? 'FLOW_TRUSTED_CLICK' : 'FLOW_TRUSTED_ENTER',
+                requestId: String(data.requestId),
+                x: Number(data.x),
+                y: Number(data.y)
             });
         } catch (error) {
             response = { ok: false, error: error?.message || String(error) };
@@ -178,7 +182,7 @@ function installTrustedInputBridge() {
 
         window.postMessage({
             source: 'criadores-dark-extension-bridge',
-            type: 'FLOW_TRUSTED_ENTER_RESULT',
+            type: isClick ? 'FLOW_TRUSTED_CLICK_RESULT' : 'FLOW_TRUSTED_ENTER_RESULT',
             requestId: String(data.requestId),
             ok: !!response?.ok,
             error: response?.error || ''
@@ -219,9 +223,16 @@ async function sendTrustedEnter(tabId) {
             key: 'Enter', code: 'Enter',
             windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13
         };
+        // O Chrome diferencia rawKeyDown de uma tecla que produz caractere.
+        // Enter em um <button> precisa do texto "\r" para executar a ativacao
+        // padrao, exatamente como keyboard.press('Enter') do navegador.
         await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
-            ...key, type: 'rawKeyDown'
+            ...key,
+            type: 'keyDown',
+            text: '\r',
+            unmodifiedText: '\r'
         });
+        await new Promise(resolve => setTimeout(resolve, 35));
         await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
             ...key, type: 'keyUp'
         });
@@ -234,6 +245,32 @@ async function sendTrustedEnter(tabId) {
     }
 }
 
+async function sendTrustedClick(tabId, x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+        throw new Error('A posição do botão Gerar é inválida.');
+    }
+    await ensureTrustedDebugger(tabId);
+    try {
+        const base = { x, y, button: 'left', clickCount: 1 };
+        await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+            ...base, type: 'mouseMoved', button: 'none', buttons: 0
+        });
+        await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+            ...base, type: 'mousePressed', buttons: 1
+        });
+        await new Promise(resolve => setTimeout(resolve, 45));
+        await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+            ...base, type: 'mouseReleased', buttons: 0
+        });
+        scheduleTrustedDetach(tabId);
+        return { ok: true };
+    } catch (error) {
+        try { await chrome.debugger.detach({ tabId }); } catch (_) {}
+        trustedDebuggerTabs.delete(tabId);
+        throw new Error('Falha ao clicar no botão Gerar: ' + (error?.message || String(error)));
+    }
+}
+
 chrome.debugger.onDetach.addListener((source) => {
     if (source?.tabId != null) {
         const timer = trustedDebuggerTabs.get(source.tabId);
@@ -243,7 +280,7 @@ chrome.debugger.onDetach.addListener((source) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type !== 'FLOW_TRUSTED_ENTER') return false;
+    if (message?.type !== 'FLOW_TRUSTED_ENTER' && message?.type !== 'FLOW_TRUSTED_CLICK') return false;
     const tabId = sender.tab?.id;
     let allowed = false;
     try {
@@ -255,7 +292,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
     }
 
-    sendTrustedEnter(tabId)
+    const action = message.type === 'FLOW_TRUSTED_CLICK'
+        ? sendTrustedClick(tabId, Number(message.x), Number(message.y))
+        : sendTrustedEnter(tabId);
+    action
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));
     return true;
@@ -381,7 +421,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-    console.log('[Criadores Dark Free] Extensão v1.2.0 instalada com Enter confiável para o Flow');
+    console.log('[Criadores Dark Free] Extensão v1.2.3 instalada: vídeo v9.2 e clique físico para imagens');
 });
 
 console.log('[Criadores Dark Free] Service Worker Custom iniciado');

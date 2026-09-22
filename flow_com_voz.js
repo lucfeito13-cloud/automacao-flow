@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v9.7  -   2026-09-22
+//  Flow NOVO v9.9  -   2026-09-22
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -64,6 +64,10 @@
 //        a janela Add to prompt aberta era quem bloqueava o clique de imagem.
 //  v9.7: imagens e videos usam Enter confiavel pelo servico da extensao. O Flow
 //        atual ignora click()/KeyboardEvent sinteticos, mas aceita a tecla real.
+//  v9.8: troca o Enter por um clique fisico confiavel no centro do botao Gerar,
+//        enviado pelo Chrome; e o mesmo gesto que funciona manualmente.
+//  v9.9: restaura EXATAMENTE o btn.click() da v9.2 para videos; o clique fisico
+//        fica isolado apenas nas imagens, sem alterar o caminho que ja funcionava.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -159,7 +163,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.7 (Enter confiável para imagens e vídeos)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.9 (vídeo v9.2 + clique físico em imagens)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -655,12 +659,37 @@
           'info'
         );
 
+        // Caminho comprovado da v9.2. Nao usar a ponte, Enter ou eventos extras
+        // em videos: o clique simples no button interno era o que funcionava.
+        if (this.videoIsRunning) {
+          this.logVideoDebug('Vídeo: usando o clique original da v9.2.', 'info');
+          btn.click();
+          try {
+            await this.modernWait(aceitou, 15000);
+            return true;
+          } catch (error) {
+            this._modernUncertain = true;
+            const restou = String(this.textoSemChips(this.getEditor())).slice(0, 60);
+            const gerandoAgora = this.getTiles().filter(t => this.tileHasProgress(t)).length;
+            this.logVideoDebug('Envio de vídeo sem confirmação. Sobrou no editor: ' + JSON.stringify(restou) +
+              ' | texto antes: ' + textoAntes.length + ' caracteres' +
+              ' | gerando: ' + gerandoAgora + ' (antes ' + gerandoAntes + ')', 'error');
+            throw new Error('Clique de vídeo da v9.2 não foi confirmado pelo Flow.');
+          }
+        }
+
         // O Flow passou a ignorar eventos criados por JavaScript. O servico de
-        // fundo da extensao usa a API de entrada do Chrome para pressionar Enter
-        // de verdade no botao ja focado. Uma requisicao gera UMA tecla e UMA
-        // tentativa; nunca repetimos automaticamente um envio sem confirmacao.
-        const requestId = 'flow-enter-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-        const trustedEnter = new Promise((resolve, reject) => {
+        // fundo usa a API de entrada do Chrome para clicar fisicamente no centro
+        // do botao. Uma requisicao gera UM clique e UMA tentativa; nunca
+        // repetimos automaticamente um envio sem confirmacao.
+        try { btn.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
+        try { btn.focus({ preventScroll: true }); }
+        catch (_) { try { btn.focus(); } catch (_) {} }
+        const rect = btn.getBoundingClientRect();
+        const clickX = Math.round(rect.left + rect.width / 2);
+        const clickY = Math.round(rect.top + rect.height / 2);
+        const requestId = 'flow-click-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        const trustedClick = new Promise((resolve, reject) => {
           let finished = false;
           const finish = (fn, value) => {
             if (finished) return;
@@ -673,25 +702,26 @@
             if (event.source !== window || event.origin !== location.origin) return;
             const data = event.data;
             if (!data || data.source !== 'criadores-dark-extension-bridge' ||
-                data.type !== 'FLOW_TRUSTED_ENTER_RESULT' || data.requestId !== requestId) return;
+                data.type !== 'FLOW_TRUSTED_CLICK_RESULT' || data.requestId !== requestId) return;
             if (data.ok) finish(resolve, true);
-            else finish(reject, new Error(data.error || 'O Chrome não conseguiu enviar Enter.'));
+            else finish(reject, new Error(data.error || 'O Chrome não conseguiu clicar no botão Gerar.'));
           };
           const timer = setTimeout(() => finish(reject, new Error(
-            'Canal de envio confiável indisponível. Recarregue a extensão e a página do Flow.'
+            'Canal de clique confiável indisponível. Recarregue a extensão e a página do Flow.'
           )), 7000);
           window.addEventListener('message', onResult);
           window.postMessage({
             source: 'criadores-dark-flow-main',
-            type: 'FLOW_TRUSTED_ENTER_REQUEST',
-            requestId
+            type: 'FLOW_TRUSTED_CLICK_REQUEST',
+            requestId,
+            x: clickX,
+            y: clickY
           }, location.origin);
         });
 
-        try { btn.focus({ preventScroll: true }); }
-        catch (_) { try { btn.focus(); } catch (_) {} }
-        this.logDebug((this.videoIsRunning ? 'Vídeo' : 'Imagem') + ': enviando Enter confiável ao botão Gerar.', 'info');
-        await trustedEnter;
+        this.logDebug((this.videoIsRunning ? 'Vídeo' : 'Imagem') +
+          ': enviando clique físico ao botão Gerar em ' + clickX + ',' + clickY + '.', 'info');
+        await trustedClick;
 
         try {
           await this.modernWait(aceitou, 15000);
