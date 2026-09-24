@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v9.9  -   2026-09-22
+//  Flow NOVO v10.0  -   2026-09-24
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -68,6 +68,8 @@
 //        enviado pelo Chrome; e o mesmo gesto que funciona manualmente.
 //  v9.9: restaura EXATAMENTE o btn.click() da v9.2 para videos; o clique fisico
 //        fica isolado apenas nas imagens, sem alterar o caminho que ja funcionava.
+//  v10.0: detecta 5 cartoes de "atividade incomum", salva fila e relatorio,
+//         atualiza a pagina e retoma automaticamente somente do ponto salvo.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -918,6 +920,16 @@
         if (this.tileHasProgress(tile)) return null;
 
         const text = (tile.textContent || '').trim().toLowerCase();
+
+        // Erro de bloqueio temporario mostrado pelo Flow. Ele precisa ficar
+        // separado das falhas comuns porque, ao acumular cinco ocorrencias,
+        // acionamos a recuperacao automatica da fila.
+        if (text.includes('we noticed some unusual activity') ||
+            text.includes('unusual activity') ||
+            text.includes('atividade incomum') ||
+            text.includes('atividade suspeita')) {
+          return '🚨 Atividade incomum';
+        }
 
         // 1. Erro específico de Áudio (ex: "Audio generation failed")
         if (text.includes('audio generation failed') || text.includes('falha no áudio') ||
@@ -2405,6 +2417,9 @@
             record.nodes.forEach((tile, index) => {
               if (record.results.has(index) && record.results.get(index).loaded) return;
               const entry = this.tileEntry(tile);
+              if (entry.errorReason === '🚨 Atividade incomum') {
+                this.observarErroAtividadeIncomum?.(tile, record.promptNum);
+              }
               if (entry.loaded && !record.beforeIds.has(entry.uuid)) {
                 record.results.set(index, entry);
               } else if (entry.error) {
@@ -2630,13 +2645,21 @@
           await this.sleep(250);
         }
         scroller.scrollTop = 0; await this.sleep(300);
-        this.rememberModernErrors();
+        this.rememberModernErrors(true);
       },
-      rememberModernErrors() {
+      rememberModernErrors(resetRecovery = false) {
         this._modernIgnoredErrors = new Map();
+        if (resetRecovery) {
+          this._unusualActivitySeen = new WeakSet();
+          this._unusualActivityCount = 0;
+          this._autoRecoveryTriggered = false;
+        }
         for (const tile of this.getTiles().filter(t => this.isTileError(t))) {
           const key = norm(tile.textContent);
           this._modernIgnoredErrors.set(key, (this._modernIgnoredErrors.get(key) || 0) + 1);
+          // Erros que ja estavam na galeria antes desta execucao nao podem
+          // disparar uma nova atualizacao automatica.
+          if (this.extractTileError(tile) === '🚨 Atividade incomum') this._unusualActivitySeen.add(tile);
         }
       },
 
@@ -3759,7 +3782,7 @@
           tipo: isVideo ? 'videos' : 'imagens',
           expectedPerPrompt: expected,
           totalPrompts: prompts.length,
-          resumo: { completos: 0, parciais: 0, falhas: 0 },
+          resumo: { completos: 0, parciais: 0, falhas: 0, pendentes: 0 },
           prompts: []
         };
 
@@ -3767,7 +3790,12 @@
           const slots = matrices.flatMap(m => m).filter(s => s.promptNum === p.promptNum);
           const loadedSlots = slots.filter(s => s.state === 'loaded');
           const errorSlots = slots.filter(s => s.state === 'error');
-          const loadedCount = loadedSlots.length;
+          const salvo = this._promptStatusState?.[isVideo ? 'videos' : 'imagens']?.[this.chaveDoPrompt(p.promptNum)];
+          // Depois de uma recuperacao, os prompts concluidos antes do reload
+          // nao aparecem nas matrizes novas. O estado persistido impede que o
+          // relatorio final os transforme incorretamente em falha.
+          const concluidoAntes = !slots.length && salvo?.status === 'done' && salvo.text === p.text;
+          const loadedCount = concluidoAntes ? expected : loadedSlots.length;
 
           let status = 'error';
           let motivo = null;
@@ -3812,13 +3840,14 @@
         this._generationReport = relatorio;
         try {
           localStorage.setItem('flow_last_generation_report', JSON.stringify(relatorio));
+          localStorage.setItem(this.reportStateKey(), JSON.stringify(relatorio));
         } catch (_) {}
 
         if (typeof this.renderizarRelatorioUI === 'function') {
           this.renderizarRelatorioUI(relatorio);
         }
 
-        const pendentes = relatorio.resumo.falhas + relatorio.resumo.parciais;
+        const pendentes = relatorio.resumo.falhas + relatorio.resumo.parciais + (relatorio.resumo.pendentes || 0);
         const badge = document.getElementById('rn-rel-badge');
         if (badge) {
           if (pendentes > 0) {
@@ -3893,10 +3922,12 @@
         const cComp = document.getElementById('rel-count-completos');
         const cParc = document.getElementById('rel-count-parciais');
         const cFalhas = document.getElementById('rel-count-falhas');
+        const cPendentes = document.getElementById('rel-count-pendentes');
         if (cTotal) cTotal.textContent = r.totalPrompts || 0;
         if (cComp) cComp.textContent = r.resumo?.completos || 0;
         if (cParc) cParc.textContent = r.resumo?.parciais || 0;
         if (cFalhas) cFalhas.textContent = r.resumo?.falhas || 0;
+        if (cPendentes) cPendentes.textContent = r.resumo?.pendentes || 0;
 
         const falhas = (r.prompts || []).filter(p => p.status === 'error');
         const parciais = (r.prompts || []).filter(p => p.status === 'partial');
@@ -3961,6 +3992,8 @@
             borda = '#fde68a'; fundo = '#fffbeb'; badgeBg = '#fef3c7'; badgeFg = '#92400e'; badgeTexto = `[${p.loadedCount}/${p.expected}] Parcial`; motivoCor = '#b45309';
           } else if (p.status === 'error') {
             borda = '#fecaca'; fundo = '#fef2f2'; badgeBg = '#fee2e2'; badgeFg = '#991b1b'; badgeTexto = `[${p.loadedCount}/${p.expected}] Falhou`; motivoCor = '#b91c1c';
+          } else if (p.status === 'pending') {
+            borda = '#bfdbfe'; fundo = '#eff6ff'; badgeBg = '#dbeafe'; badgeFg = '#1d4ed8'; badgeTexto = '⏳ Pendente'; motivoCor = '#1d4ed8';
           }
 
           const card = document.createElement('div');
@@ -4180,7 +4213,7 @@
             '</div>' +
             '<div class="flow-card-content">' +
               // Métricas
-              '<div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;margin-bottom:12px;">' +
+              '<div style="display:grid;grid-template-columns:repeat(5, minmax(0,1fr));gap:5px;margin-bottom:12px;">' +
                 '<div style="background:var(--cd-bg-secondary);border:1px solid var(--cd-border-light);border-radius:8px;padding:8px 4px;text-align:center;">' +
                   '<div style="font-size:11px;color:var(--cd-text-muted);">Total</div>' +
                   '<div id="rel-count-total" style="font-size:18px;font-weight:800;color:var(--cd-text);">0</div>' +
@@ -4196,6 +4229,10 @@
                 '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 4px;text-align:center;">' +
                   '<div style="font-size:11px;color:#991b1b;font-weight:600;">Falhas</div>' +
                   '<div id="rel-count-falhas" style="font-size:18px;font-weight:800;color:#dc2626;">0</div>' +
+                '</div>' +
+                '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 3px;text-align:center;">' +
+                  '<div style="font-size:10px;color:#1d4ed8;font-weight:600;">Pend.</div>' +
+                  '<div id="rel-count-pendentes" style="font-size:18px;font-weight:800;color:#2563eb;">0</div>' +
                 '</div>' +
               '</div>' +
 
@@ -4277,12 +4314,13 @@
         btnLimpar.addEventListener('click', () => {
           try { localStorage.removeItem('flow_last_generation_report'); } catch (_) {}
           const inst = root.__flowInstance;
+          try { if (inst?.reportStateKey) localStorage.removeItem(inst.reportStateKey()); } catch (_) {}
           if (inst) inst._generationReport = null;
           const b = document.getElementById('rn-rel-badge');
           if (b) b.style.display = 'none';
           const lista = document.getElementById('rel-lista-prompts');
           if (lista) lista.innerHTML = '<div style="text-align:center;padding:24px 12px;color:var(--cd-text-muted);font-size:12px;">Relatório limpo.</div>';
-          ['rel-count-total', 'rel-count-completos', 'rel-count-parciais', 'rel-count-falhas'].forEach(id => {
+          ['rel-count-total', 'rel-count-completos', 'rel-count-parciais', 'rel-count-falhas', 'rel-count-pendentes'].forEach(id => {
             const el = document.getElementById(id); if (el) el.textContent = '0';
           });
           ['rel-act-falhas', 'rel-act-parciais', 'rel-act-todos-erros', 'rel-btn-copiar'].forEach(id => {
@@ -4295,10 +4333,11 @@
 
       // Restaura dados salvos do localStorage se houver
       try {
-        const salvoRaw = localStorage.getItem('flow_last_generation_report');
+        const inst = root.__flowInstance;
+        const salvoRaw = (inst?.reportStateKey && localStorage.getItem(inst.reportStateKey())) ||
+          localStorage.getItem('flow_last_generation_report');
         if (salvoRaw) {
           const salvo = JSON.parse(salvoRaw);
-          const inst = root.__flowInstance;
           if (inst) {
             inst._generationReport = salvo;
             inst.renderizarRelatorioUI(salvo);
@@ -6100,6 +6139,13 @@ function triggerTrustedClick(el) {
             this.approveBeforeEnum = false;
             this._blockApprovalResolve = null; // para pausar no approve
             this.deferRetry = false; // retentar no final em vez de imediatamente
+            // Recuperacao automatica do bloqueio temporario "atividade incomum".
+            // WeakSet impede que o mesmo cartao seja contado a cada MutationObserver.
+            this._unusualActivitySeen = new WeakSet();
+            this._unusualActivityCount = 0;
+            this._autoRecoveryTriggered = false;
+            this._promptStatusState = { imagens: {}, videos: {} };
+            this.carregarEstadosDePrompt();
             this.initUI();
             this.setupTextWatcher();
             this.setupVideoTextWatcher();
@@ -6785,6 +6831,13 @@ clearReferencesForUI(source = 'images') {
             if (this.tileHasProgress(tile)) return null;
             const norm = (t) => (t || '').trim().toLowerCase();
             const text = norm(tile.textContent);
+
+            if (text.includes('we noticed some unusual activity') ||
+                text.includes('unusual activity') ||
+                text.includes('atividade incomum') ||
+                text.includes('atividade suspeita')) {
+                return '🚨 Atividade incomum';
+            }
 
             if (text.includes('audio generation failed') || text.includes('falha no áudio') ||
                 text.includes('não foi possível gerar áudio') || text.includes('return silent')) {
@@ -7690,7 +7743,7 @@ clearReferencesForUI(source = 'images') {
             const resumeInput = document.getElementById('flow-start-from').value.trim();
             let resumeFrom = -1;
             if (resumeInput !== '') {
-                resumeFrom = parseInt(resumeInput, 10);
+                resumeFrom = Number(resumeInput.replace(',', '.'));
             }
 
             // Valida referências nos prompts (não as da primeira linha)
@@ -7744,7 +7797,20 @@ clearReferencesForUI(source = 'images') {
 
             // --- INJEÇÃO ADD-ON: Resume > 0 ---
             let promptsToProcess = this.prompts;
-            if (resumeFrom > 0) {
+            if (this._autoResumePendingOnly) {
+                const salvos = this._promptStatusState?.imagens || {};
+                const concluido = p => {
+                    const s = salvos[this.chaveDoPrompt(p.promptNum)];
+                    return s?.status === 'done' && s.text === p.text;
+                };
+                promptsToProcess = this.prompts.filter(p => !concluido(p));
+                this.prompts.filter(concluido).forEach(p => {
+                    const idx = this.prompts.findIndex(x => x.promptNum === p.promptNum);
+                    this.updatePromptItemStatus(idx, 'done', 'Concluído antes da recuperação');
+                });
+                this.logDebug(`Recuperação: ${promptsToProcess.length} pendente(s); os prompts já concluídos foram pulados.`, 'info');
+                this._autoResumePendingOnly = false;
+            } else if (resumeFrom > 0) {
                 promptsToProcess = this.prompts.filter(p => p.promptNum >= resumeFrom);
                 const skipped = this.prompts.filter(p => p.promptNum < resumeFrom);
                 skipped.forEach(p => {
@@ -9747,7 +9813,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             const resumeInput = document.getElementById('fv-start-from').value.trim();
             let resumeFrom = -1;
             if (resumeInput !== '') {
-                resumeFrom = parseInt(resumeInput, 10);
+                resumeFrom = Number(resumeInput.replace(',', '.'));
             }
 
             // Valida referências nos prompts
@@ -9798,7 +9864,20 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
 
             // --- INJEÇÃO ADD-ON: Resume > 0 ---
             let promptsToProcess = this.videoPrompts;
-            if (resumeFrom > 0) {
+            if (this._autoResumePendingOnly) {
+                const salvos = this._promptStatusState?.videos || {};
+                const concluido = p => {
+                    const s = salvos[this.chaveDoPrompt(p.promptNum)];
+                    return s?.status === 'done' && s.text === p.text;
+                };
+                promptsToProcess = this.videoPrompts.filter(p => !concluido(p));
+                this.videoPrompts.filter(concluido).forEach(p => {
+                    const idx = this.videoPrompts.findIndex(x => x.promptNum === p.promptNum);
+                    this.updateVideoPromptItemStatus(idx, 'done', 'Concluído antes da recuperação');
+                });
+                this.logVideoDebug(`Recuperação: ${promptsToProcess.length} pendente(s); os prompts já concluídos foram pulados.`, 'info');
+                this._autoResumePendingOnly = false;
+            } else if (resumeFrom > 0) {
                 promptsToProcess = this.videoPrompts.filter(p => p.promptNum >= resumeFrom);
                 const skipped = this.videoPrompts.filter(p => p.promptNum < resumeFrom);
                 skipped.forEach(p => {
@@ -10880,15 +10959,244 @@ async scrollToWorkflow(wfId) {
         // CRASH RECOVERY (memória de estado)
         // ──────────────────────────────────────────────
 
+        projectStorageSuffix() {
+            const id = this.getProjectId?.() || location.pathname.match(/\/project\/([^/]+)/i)?.[1] || 'sem-projeto';
+            return String(id).replace(/[^a-z0-9_-]/gi, '_');
+        }
+
+        runStateKey() { return `flow_crash_state_v2_${this.projectStorageSuffix()}`; }
+        promptStateKey() { return `flow_prompt_status_v2_${this.projectStorageSuffix()}`; }
+        reportStateKey() { return `flow_generation_report_v2_${this.projectStorageSuffix()}`; }
+        recoveryHistoryKey() { return `flow_recovery_history_v2_${this.projectStorageSuffix()}`; }
+
+        carregarEstadosDePrompt() {
+            try {
+                const salvo = JSON.parse(localStorage.getItem(this.promptStateKey()) || 'null');
+                if (salvo && typeof salvo === 'object') {
+                    this._promptStatusState = {
+                        imagens: salvo.imagens || {},
+                        videos: salvo.videos || {}
+                    };
+                }
+            } catch (_) {
+                this._promptStatusState = { imagens: {}, videos: {} };
+            }
+        }
+
+        persistirEstadosDePromptAgora() {
+            try {
+                localStorage.setItem(this.promptStateKey(), JSON.stringify({
+                    ...(this._promptStatusState || { imagens: {}, videos: {} }),
+                    atualizadoEm: Date.now()
+                }));
+            } catch (e) {
+                console.warn('[Flow] Não foi possível salvar os estados da fila:', e);
+            }
+        }
+
+        salvarEstadoDePrompt(isVideo, index, status, extra = '') {
+            const lista = isVideo ? (this.videoPrompts || []) : (this.prompts || []);
+            const prompt = lista[index];
+            if (!prompt) return;
+            const tipo = isVideo ? 'videos' : 'imagens';
+            this._promptStatusState ||= { imagens: {}, videos: {} };
+            this._promptStatusState[tipo] ||= {};
+            this._promptStatusState[tipo][this.chaveDoPrompt?.(prompt.promptNum) || String(prompt.promptNum)] = {
+                status, extra, text: prompt.text, promptNum: prompt.promptNum, atualizadoEm: Date.now()
+            };
+            // Evita escrita no localStorage a cada mutação da galeria.
+            clearTimeout(this._promptStateSaveTimer);
+            this._promptStateSaveTimer = setTimeout(() => this.persistirEstadosDePromptAgora(), 250);
+        }
+
+        restaurarEstadosDePrompt(isVideo) {
+            const lista = isVideo ? (this.videoPrompts || []) : (this.prompts || []);
+            const salvos = this._promptStatusState?.[isVideo ? 'videos' : 'imagens'] || {};
+            lista.forEach((prompt, index) => {
+                const key = this.chaveDoPrompt?.(prompt.promptNum) || String(prompt.promptNum);
+                const salvo = salvos[key];
+                // O número pode ser reutilizado em outro roteiro. Só restaura quando
+                // o texto também é o mesmo.
+                if (!salvo || salvo.text !== prompt.text) return;
+                (isVideo ? this.updateVideoPromptItemStatus : this.updatePromptItemStatus)
+                    .call(this, index, salvo.status, salvo.extra || '');
+            });
+        }
+
+        salvarRelatorioRecuperacao(isVideo = this.videoIsRunning) {
+            const tipo = isVideo ? 'videos' : 'imagens';
+            let prompts = isVideo ? (this.videoPrompts || []) : (this.prompts || []);
+            if (!prompts.length) {
+                const texto = document.getElementById(isVideo ? 'fv-prompts-input' : 'flow-prompts-input')?.value || '';
+                prompts = parsePromptsText(texto);
+            }
+            const expected = isVideo ? (Number(this.videoResultsPerPrompt) || 2) : (Number(this.imagesPerPrompt) || 2);
+            const estados = this._promptStatusState?.[tipo] || {};
+            const relatorio = {
+                timestamp: Date.now(),
+                dataHora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+                tipo,
+                expectedPerPrompt: expected,
+                totalPrompts: prompts.length,
+                interrompidoParaRecuperacao: true,
+                resumo: { completos: 0, parciais: 0, falhas: 0, pendentes: 0 },
+                prompts: []
+            };
+            prompts.forEach((p, index) => {
+                const key = this.chaveDoPrompt?.(p.promptNum) || String(p.promptNum);
+                const salvo = estados[key];
+                let status = salvo?.status || 'pending';
+                if (status === 'active' || status === 'retrying') status = 'pending';
+                let loadedCount = status === 'done' ? expected : 0;
+                if (status === 'partial') loadedCount = Number(String(salvo?.extra || '').match(/(\d+)\s*\//)?.[1] || 0);
+                if (status === 'done') relatorio.resumo.completos++;
+                else if (status === 'partial') relatorio.resumo.parciais++;
+                else if (status === 'error') relatorio.resumo.falhas++;
+                else relatorio.resumo.pendentes++;
+                relatorio.prompts.push({
+                    index, promptNum: p.promptNum, text: p.text, expected, loadedCount, status,
+                    motivo: status === 'pending' ? 'Aguardando retomada automática' : (salvo?.extra || null), midias: []
+                });
+            });
+            this._generationReport = relatorio;
+            try {
+                localStorage.setItem(this.reportStateKey(), JSON.stringify(relatorio));
+                // Mantém compatibilidade com a aba Relatório existente.
+                localStorage.setItem('flow_last_generation_report', JSON.stringify(relatorio));
+            } catch (_) {}
+            try { this.renderizarRelatorioUI?.(relatorio); } catch (_) {}
+            const badge = document.getElementById('rn-rel-badge');
+            if (badge) {
+                const pendentes = relatorio.resumo.parciais + relatorio.resumo.falhas + relatorio.resumo.pendentes;
+                badge.style.display = 'inline-block';
+                badge.style.background = '#ef4444';
+                badge.style.color = '#fff';
+                badge.textContent = String(pendentes);
+            }
+            return relatorio;
+        }
+
+        mostrarEstadoRecuperacao(titulo, detalhe, progresso = 0, perigo = false) {
+            let card = document.getElementById('flow-auto-recovery-card');
+            if (!card) {
+                card = document.createElement('div');
+                card.id = 'flow-auto-recovery-card';
+                card.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:2147483646;width:min(380px,calc(100vw - 40px));padding:14px 16px;border-radius:12px;color:#fff;font:13px/1.45 Inter,Arial,sans-serif;box-shadow:0 12px 38px rgba(0,0,0,.42);';
+                document.body.appendChild(card);
+            }
+            card.style.background = perigo ? 'linear-gradient(135deg,#7f1d1d,#b91c1c)' : 'linear-gradient(135deg,#172554,#3730a3)';
+            card.innerHTML = `
+                <div style="font-weight:800;font-size:14px;margin-bottom:5px;">${titulo}</div>
+                <div id="flow-auto-recovery-detail" style="opacity:.92;">${detalhe}</div>
+                <div style="height:5px;background:rgba(255,255,255,.2);border-radius:9px;margin-top:10px;overflow:hidden;">
+                    <div style="height:100%;width:${Math.max(0, Math.min(100, progresso))}%;background:#67e8f9;transition:width .3s;"></div>
+                </div>`;
+            return card;
+        }
+
+        observarErroAtividadeIncomum(tile, promptNum) {
+            if (!tile || this._autoRecoveryTriggered || !this.isRunning && !this.videoIsRunning) return;
+            this._unusualActivitySeen ||= new WeakSet();
+            if (this._unusualActivitySeen.has(tile)) return;
+            this._unusualActivitySeen.add(tile);
+            this._unusualActivityCount = Number(this._unusualActivityCount || 0) + 1;
+            const count = this._unusualActivityCount;
+            this.mostrarEstadoRecuperacao(
+                `🚨 Atividade incomum: ${count}/5`,
+                count < 5 ? 'A fila continua sendo monitorada. Com 5 ocorrências, o estado será salvo e a página reiniciada.' : 'Limite atingido. Salvando fila e relatório...',
+                count * 20,
+                count >= 5
+            );
+            const status = this.videoIsRunning ? this.setVideoStatus : this.setStatus;
+            try { status.call(this, 'warning', `🚨 Atividade incomum detectada ${count}/5 no prompt ${this.esc(String(promptNum))}.`); } catch (_) {}
+            if (count >= 5) void this.iniciarRecuperacaoAutomatica();
+        }
+
+        promptParaRecuperacao() {
+            const records = this._modernActiveRecords || [];
+            const incompleto = records.find(r => {
+                const concluidos = [...(r.results?.values?.() || [])].filter(x => x?.loaded).length;
+                return concluidos < Number(r.expected || 1);
+            });
+            return incompleto?.promptNum ?? this._modernCurrentPrompt ?? 1;
+        }
+
+        sincronizarEstadoComRegistrosAtivos(isVideo) {
+            const lista = isVideo ? (this.videoPrompts || []) : (this.prompts || []);
+            const atualizar = isVideo ? this.updateVideoPromptItemStatus : this.updatePromptItemStatus;
+            for (const record of this._modernActiveRecords || []) {
+                const index = lista.findIndex(p => this.chaveDoPrompt(p.promptNum) === this.chaveDoPrompt(record.promptNum));
+                if (index < 0) continue;
+                const resultados = [...(record.results?.values?.() || [])];
+                const concluidos = resultados.filter(x => x?.loaded).length;
+                const expected = Number(record.expected || 1);
+                if (concluidos >= expected) atualizar.call(this, index, 'done');
+                else if (concluidos > 0) atualizar.call(this, index, 'partial', `${concluidos}/${expected}`);
+                else atualizar.call(this, index, 'retrying', 'retomar');
+            }
+        }
+
+        tentativasRecentesDeRecuperacao(adicionar = false) {
+            const key = this.recoveryHistoryKey();
+            let eventos = [];
+            try { eventos = JSON.parse(localStorage.getItem(key) || '[]'); } catch (_) {}
+            const limite = Date.now() - 30 * 60 * 1000;
+            eventos = (Array.isArray(eventos) ? eventos : []).filter(ts => Number(ts) >= limite);
+            if (adicionar) eventos.push(Date.now());
+            try { localStorage.setItem(key, JSON.stringify(eventos)); } catch (_) {}
+            return eventos.length;
+        }
+
+        async iniciarRecuperacaoAutomatica() {
+            if (this._autoRecoveryTriggered) return;
+            this._autoRecoveryTriggered = true;
+            const isVideo = !!this.videoIsRunning;
+            const promptNum = this.promptParaRecuperacao();
+            this.sincronizarEstadoComRegistrosAtivos(isVideo);
+            this.persistirEstadosDePromptAgora();
+            this.salvarRelatorioRecuperacao(isVideo);
+
+            if (this.tentativasRecentesDeRecuperacao(false) >= 3) {
+                this.saveRunState(promptNum, { autoResume: false, reason: 'unusual_activity', unusualCount: this._unusualActivityCount });
+                this.shouldStop = true;
+                this.videoShouldStop = true;
+                this.mostrarEstadoRecuperacao(
+                    '⛔ Recuperação automática pausada',
+                    'O Flow bloqueou 3 vezes em 30 minutos. O estado e o relatório estão salvos; use Continuar quando o serviço normalizar.',
+                    100, true
+                );
+                return;
+            }
+
+            const attempt = this.tentativasRecentesDeRecuperacao(true);
+            this.saveRunState(promptNum, {
+                autoResume: true,
+                reason: 'unusual_activity',
+                unusualCount: this._unusualActivityCount,
+                recoveryAttempt: attempt,
+                waitSeconds: 20
+            });
+            this._modernUncertain = true;
+            this.shouldStop = true;
+            this.videoShouldStop = true;
+            this.mostrarEstadoRecuperacao(
+                '💾 Estado salvo com sucesso',
+                `Relatório preservado. Atualizando em 4 segundos; depois retomará no prompt ${this.esc(String(promptNum))}.`,
+                100, true
+            );
+            await new Promise(resolve => setTimeout(resolve, 4000));
+            location.reload();
+        }
+
         /**
          * Salva estado do run antes de reload por crash.
          * Guarda: prompts, posição, modo, configurações.
          */
-        saveRunState(currentPromptNum) {
+        saveRunState(currentPromptNum, extra = {}) {
             try {
                 const imgInput = document.getElementById('flow-prompts-input');
                 const vidInput = document.getElementById('fv-prompts-input');
-                const isVideo = this.videoIsRunning;
+                const isVideo = extra.isVideo ?? this.videoIsRunning;
 
                 const state = {
                     timestamp: Date.now(),
@@ -10899,10 +11207,13 @@ async scrollToWorkflow(wfId) {
                     speedMultiplier: this.speedMultiplier,
                     batchSize: isVideo ? this.videoBatchSize : this.batchSize,
                     imagesPerPrompt: isVideo ? this.videoResultsPerPrompt : this.imagesPerPrompt,
-                    projectUrl: location.href
+                    projectUrl: location.href,
+                    projectId: this.projectStorageSuffix(),
+                    promptStatusState: this._promptStatusState,
+                    ...extra
                 };
 
-                localStorage.setItem('flow_crash_state', JSON.stringify(state));
+                localStorage.setItem(this.runStateKey(), JSON.stringify(state));
                 console.log('[Flow] Estado salvo para crash recovery:', state);
             } catch (e) {
                 console.error('[Flow] Falha ao salvar estado:', e);
@@ -10914,11 +11225,12 @@ async scrollToWorkflow(wfId) {
          */
         loadRunState() {
             try {
-                const raw = localStorage.getItem('flow_crash_state');
+                const raw = localStorage.getItem(this.runStateKey()) || localStorage.getItem('flow_crash_state');
                 if (!raw) return null;
                 const state = JSON.parse(raw);
-                // Expira estados com mais de 30 minutos
-                if (Date.now() - state.timestamp > 30 * 60 * 1000) {
+                // Mantém uma recuperação por até 6 horas. O relatório não
+                // expira e permanece disponível na aba própria.
+                if (Date.now() - state.timestamp > 6 * 60 * 60 * 1000) {
                     this.clearRunState();
                     return null;
                 }
@@ -10932,7 +11244,105 @@ async scrollToWorkflow(wfId) {
          * Limpa estado salvo.
          */
         clearRunState() {
+            localStorage.removeItem(this.runStateKey());
             localStorage.removeItem('flow_crash_state');
+            localStorage.removeItem(this.recoveryHistoryKey());
+        }
+
+        aplicarRunState(state) {
+            if (!state) return;
+            if (state.promptStatusState) {
+                this._promptStatusState = state.promptStatusState;
+                this.persistirEstadosDePromptAgora();
+            }
+            if (state.isVideo) {
+                document.querySelector('[data-tab="videos"], [data-tab="video"]')?.click();
+                const input = document.getElementById('fv-prompts-input');
+                if (input) {
+                    input.value = state.promptText || '';
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                const resume = document.getElementById('fv-start-from');
+                if (resume) resume.value = String(state.currentPromptNum ?? 1);
+            } else {
+                const input = document.getElementById('flow-prompts-input');
+                if (input) {
+                    input.value = state.promptText || '';
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                const resume = document.getElementById('flow-start-from');
+                if (resume) resume.value = String(state.currentPromptNum ?? 1);
+            }
+            if (Number.isFinite(Number(state.batchSize))) {
+                if (state.isVideo) this.videoBatchSize = Number(state.batchSize);
+                else this.batchSize = Number(state.batchSize);
+            }
+            if (Number.isFinite(Number(state.imagesPerPrompt))) {
+                if (state.isVideo) this.videoResultsPerPrompt = Number(state.imagesPerPrompt);
+                else this.imagesPerPrompt = Number(state.imagesPerPrompt);
+            }
+            if (state.genMode) {
+                if (state.isVideo) this.videoGenMode = state.genMode;
+                else this.genMode = state.genMode;
+            }
+            this._autoResumePendingOnly = !!(state.autoResume || state.reason === 'unusual_activity');
+            try {
+                const report = JSON.parse(localStorage.getItem(this.reportStateKey()) || 'null');
+                if (report) {
+                    this._generationReport = report;
+                    this.renderizarRelatorioUI?.(report);
+                }
+            } catch (_) {}
+        }
+
+        async retomarAutomaticamente(state, banner) {
+            if (this._autoResumeRunning) return;
+            this._autoResumeRunning = true;
+            this.aplicarRunState(state);
+            const total = Math.max(10, Number(state.waitSeconds) || 20);
+            for (let restante = total; restante > 0; restante--) {
+                if (this._cancelAutoRecovery) return;
+                this.mostrarEstadoRecuperacao(
+                    '⏳ Recuperação automática',
+                    `Flow estabilizando e relendo a fila... ${restante}s. Retomada no prompt ${this.esc(String(state.currentPromptNum))}.`,
+                    ((total - restante) / total) * 100
+                );
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            // Aguarda também os controles essenciais aparecerem. Isso cobre
+            // conexões lentas sem impor um minuto fixo a todos os computadores.
+            const prefix = state.isVideo ? 'fv' : 'flow';
+            let startBtn = null;
+            for (let i = 0; i < 20; i++) {
+                startBtn = document.getElementById(`${prefix}-start-btn`);
+                if (startBtn && !startBtn.disabled && (this.getEditor?.() || document.querySelector('flow-base-prompt-box'))) break;
+                this.mostrarEstadoRecuperacao('🔎 Relendo o projeto', 'Aguardando os controles do Flow ficarem prontos...', 96);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            if (this._cancelAutoRecovery) return;
+            if (!startBtn || startBtn.disabled) {
+                this._autoResumeRunning = false;
+                this.mostrarEstadoRecuperacao(
+                    '⚠️ Retomada aguardando você',
+                    `Fila e relatório restaurados no prompt ${this.esc(String(state.currentPromptNum))}. Clique em Iniciar quando o Flow terminar de carregar.`,
+                    100, true
+                );
+                return;
+            }
+            state.autoResume = false;
+            state.resumeStartedAt = Date.now();
+            try { localStorage.setItem(this.runStateKey(), JSON.stringify(state)); } catch (_) {}
+            this.mostrarEstadoRecuperacao(
+                '▶️ Retomando a fila',
+                `Leitura concluída. Iniciando novamente no prompt ${this.esc(String(state.currentPromptNum))}; os anteriores permanecem concluídos.`,
+                100
+            );
+            startBtn.click();
+            setTimeout(() => document.getElementById('flow-auto-recovery-card')?.remove(), 5000);
+            banner?.remove();
         }
 
         /**
@@ -10961,7 +11371,7 @@ async scrollToWorkflow(wfId) {
 
             banner.innerHTML = `
                 <div style="font-weight:700; font-size:14px; margin-bottom:8px; color:#a5b4fc;">
-                    🔄 Sessão anterior detectada
+                    ${state.autoResume ? '🚨 Recuperação automática preparada' : '🔄 Sessão anterior detectada'}
                 </div>
                 <div style="margin-bottom:4px;">
                     ${modeLabel} • Modo ${modeText} • Parou no prompt <b>${state.currentPromptNum}</b>
@@ -10974,7 +11384,7 @@ async scrollToWorkflow(wfId) {
                         flex:1; padding:8px 12px; border:none; border-radius:8px;
                         background:linear-gradient(135deg, #6366f1, #8b5cf6);
                         color:white; font-weight:600; cursor:pointer; font-size:13px;
-                    ">▶ Continuar de onde parou</button>
+                    ">${state.autoResume ? '▶ Retomar agora' : '▶ Continuar de onde parou'}</button>
                     <button id="flow-crash-dismiss" style="
                         padding:8px 12px; border:1px solid #4f46e5; border-radius:8px;
                         background:transparent; color:#a5b4fc; cursor:pointer; font-size:13px;
@@ -10986,37 +11396,33 @@ async scrollToWorkflow(wfId) {
 
             // Handler: Continuar
             document.getElementById('flow-crash-resume').addEventListener('click', () => {
-                const s = state;
-                if (s.isVideo) {
-                    // Preenche aba de vídeo
-                    const vidInput = document.getElementById('fv-prompts-input');
-                    if (vidInput) vidInput.value = s.promptText;
-                    // Seta retomar de
-                    const resumeInput = document.getElementById('fv-start-from');
-                    if (resumeInput) resumeInput.value = String(s.currentPromptNum);
-                    // Abre aba de vídeo
-                    document.querySelector('[data-tab="video"]')?.click();
-                } else {
-                    // Preenche aba de imagem
-                    const imgInput = document.getElementById('flow-prompts-input');
-                    if (imgInput) imgInput.value = s.promptText;
-                    // Seta retomar de
-                    const resumeInput = document.getElementById('flow-start-from');
-                    if (resumeInput) resumeInput.value = String(s.currentPromptNum);
-                    // Dispara evento para atualizar contadores
-                    imgInput?.dispatchEvent(new Event('input', { bubbles: true }));
+                this._cancelAutoRecovery = false;
+                if (state.autoResume) this.retomarAutomaticamente(state, banner);
+                else {
+                    this.aplicarRunState(state);
+                    const status = state.isVideo ? this.setVideoStatus : this.setStatus;
+                    status.call(this, 'info', `✅ Fila e relatório restaurados no prompt ${state.currentPromptNum}. Clique Iniciar quando estiver pronto.`);
+                    banner.remove();
                 }
-
-                this.setStatus('info', `✅ Prompts restaurados! "Retomar de" setado para ${s.currentPromptNum}. Clique Iniciar quando pronto.`);
-                this.clearRunState();
-                banner.remove();
             });
 
             // Handler: Dispensar
             document.getElementById('flow-crash-dismiss').addEventListener('click', () => {
+                this._cancelAutoRecovery = true;
                 this.clearRunState();
+                document.getElementById('flow-auto-recovery-card')?.remove();
                 banner.remove();
             });
+
+            // O bloqueio de atividade incomum volta sozinho. O botão permanece
+            // visível para o usuário adiantar a retomada quando quiser.
+            if (state.autoResume) {
+                setTimeout(() => {
+                    if (!this._cancelAutoRecovery) this.retomarAutomaticamente(state, banner);
+                }, 500);
+            } else {
+                this.aplicarRunState(state);
+            }
         }
 
         // ──────────────────────────────────────────────
@@ -11098,9 +11504,11 @@ async scrollToWorkflow(wfId) {
                     ${refs.length ? `<span class="refs">${refs.map(r => `<span class="ref-badge">${this.esc(r)}</span>`).join('')}</span>` : ''}
                 </div>`;
             }).join('');
+            this.restaurarEstadosDePrompt(false);
         }
 
         updatePromptItemStatus(index, status, extra = '') {
+            this.salvarEstadoDePrompt(false, index, status, extra);
             const item = document.querySelector(`.flow-prompt-item[data-index="${index}"]`);
             if (!item) return;
             item.className = `flow-prompt-item ${status}`;
@@ -11197,9 +11605,11 @@ async scrollToWorkflow(wfId) {
                     ${refs.length ? `<span class="refs">${refs.map(r => `<span class="ref-badge">${this.esc(r)}</span>`).join('')}</span>` : ''}
                 </div>`;
             }).join('');
+            this.restaurarEstadosDePrompt(true);
         }
 
         updateVideoPromptItemStatus(index, status, extra = '') {
+            this.salvarEstadoDePrompt(true, index, status, extra);
             const item = document.querySelector(`#fv-prompt-list .flow-prompt-item[data-index="${index}"]`);
             if (!item) return;
             item.className = `flow-prompt-item ${status}`;
