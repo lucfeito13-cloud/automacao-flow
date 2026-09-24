@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.0  -   2026-09-24
+//  Flow NOVO v10.1  -   2026-09-24
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -70,6 +70,8 @@
 //        fica isolado apenas nas imagens, sem alterar o caminho que ja funcionava.
 //  v10.0: detecta 5 cartoes de "atividade incomum", salva fila e relatorio,
 //         atualiza a pagina e retoma automaticamente somente do ponto salvo.
+//  v10.1: preserva tambem a memoria das renomeacoes confirmadas e adiciona
+//         Limpar projeto para iniciar outro trabalho sem herdar estado local.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -1485,6 +1487,58 @@
         this.mostrarBarraDeAtualizar();
         this.atualizarBotaoRenomearMarcadas?.();
       },
+      chaveDoHistoricoRenomeacao() {
+        const proj = (typeof this.getProjectId === 'function' && this.getProjectId()) || location.pathname;
+        return 'flow_renomeacoes_confirmadas_' + proj;
+      },
+      lerHistoricoRenomeacao() {
+        try { return JSON.parse(localStorage.getItem(this.chaveDoHistoricoRenomeacao()) || '{}') || {}; }
+        catch (_) { return {}; }
+      },
+      salvarHistoricoRenomeacao(historico) {
+        try { localStorage.setItem(this.chaveDoHistoricoRenomeacao(), JSON.stringify(historico || {})); } catch (_) {}
+      },
+      registrarRenomeacaoConfirmada(id, dados = {}, tile = null) {
+        if (!id || !dados.nome) return;
+        const historico = this.lerHistoricoRenomeacao();
+        historico[id] = {
+          nome: dados.nome,
+          tipo: dados.tipo || 'scene',
+          cena: dados.cena || '',
+          referencia: dados.referencia || '',
+          imgNum: Number(dados.imgNum || 1),
+          isVideo: dados.isVideo ?? !!(tile && this.isVideoTile(tile)),
+          confirmadoEm: Date.now()
+        };
+        this.salvarHistoricoRenomeacao(historico);
+      },
+      restaurarHistoricoRenomeacao(isVideo = false) {
+        const historico = this.lerHistoricoRenomeacao();
+        for (const [id, registro] of Object.entries(historico)) {
+          if (!registro?.nome) continue;
+          if (registro.tipo === 'ref') {
+            if (registro.referencia && (!this.refNames?.length || this.refNames.includes(registro.referencia))) {
+              this.refAssignments.set(registro.referencia, id);
+              this.tileAssignments.set(id, { label: registro.referencia, type: 'ref', name: registro.referencia, isVideo: !!registro.isVideo });
+            }
+            continue;
+          }
+          if (!!registro.isVideo !== !!isVideo || !registro.cena) continue;
+          const mapa = isVideo ? this.videoSceneAssignments : this.sceneAssignments;
+          // Um roteiro novo pode reutilizar o mesmo projeto do Flow. Nao cria
+          // cenas antigas que nao existem na fila atualmente.
+          if (!mapa.has(registro.cena)) continue;
+          const lista = mapa.get(registro.cena) || [];
+          if (!lista.some(item => item.workflowId === id)) {
+            lista.push({ imgNum: registro.imgNum || 1, workflowId: id, src: '' });
+            mapa.set(registro.cena, lista);
+          }
+          this.tileAssignments.set(id, {
+            label: registro.nome, type: 'scene', scene: registro.cena,
+            imgNum: registro.imgNum || 1, isVideo: !!registro.isVideo
+          });
+        }
+      },
       atualizarEstadoItemAtribuir(chave, estado) {
         document.querySelectorAll('.flow-assign-item').forEach(item => {
           const nome = item.dataset.name || item.dataset.scene;
@@ -1560,6 +1614,23 @@
       },
       marcar(id, dados) {
         const marcas = this.lerMarcas();
+        const historico = this.lerHistoricoRenomeacao();
+        const confirmado = historico[id];
+        if (confirmado && norm(confirmado.nome) === norm(dados?.nome)) {
+          delete marcas[id];
+          this.salvarMarcas(marcas);
+          this.removeLabelFromTile?.(id);
+          const chave = dados.tipo === 'ref' ? dados.referencia : dados.cena;
+          if (chave) this.atualizarEstadoItemAtribuir(chave, 'confirmed');
+          this.logDebug(`⏭️ ${dados.nome} já foi confirmada anteriormente; não entrou novamente na fila.`, 'success');
+          return;
+        }
+        // Se o destino mudou, a confirmação antiga deixa de valer e a nova
+        // seleção passa a ser uma pendência normal.
+        if (confirmado) {
+          delete historico[id];
+          this.salvarHistoricoRenomeacao(historico);
+        }
         const antigo = marcas[id];
         let original = (antigo && antigo.original) || '';
         if (!original) {
@@ -1630,6 +1701,69 @@
         this.logDebug(`🧹 Memória limpa: ${entradas.length} seleção(ões) pendente(s) removida(s).`, 'success');
         return true;
       },
+      limparProjetoLocal() {
+        if (this.isRunning || this.videoIsRunning || this._modernTaskRunning || this._aplicandoMarcas || this._renomeando) {
+          this.logDebug('Pare a geração ou renomeação antes de limpar o projeto.', 'warning');
+          return false;
+        }
+        const pendentes = Object.keys(this.lerMarcas()).length;
+        const confirmadas = Object.keys(this.lerHistoricoRenomeacao()).length;
+        const confirmou = window.confirm(
+          'Iniciar um novo trabalho neste projeto do Flow?\n\n' +
+          `Serão apagados da extensão: fila, relatório, ${pendentes} seleção(ões) pendente(s) e ` +
+          `${confirmadas} renomeação(ões) memorizada(s).\n\n` +
+          'As mídias e os nomes que já estão no Google Flow NÃO serão alterados.'
+        );
+        if (!confirmou) return false;
+
+        clearTimeout(this._promptStateSaveTimer);
+        try {
+          localStorage.removeItem(this.chaveDasMarcas());
+          localStorage.removeItem(this.chaveDoHistoricoRenomeacao());
+          localStorage.removeItem(this.promptStateKey());
+          localStorage.removeItem(this.reportStateKey());
+          localStorage.removeItem(this.getValidatedRefsCacheKey());
+          localStorage.removeItem('flow_last_generation_report');
+          localStorage.removeItem('flow_crash_state');
+          localStorage.removeItem(this.runStateKey());
+          localStorage.removeItem(this.recoveryHistoryKey());
+          localStorage.removeItem(this.chaveContinuidade(false));
+          localStorage.removeItem(this.chaveContinuidade(true));
+        } catch (_) {}
+
+        this._promptStatusState = { imagens: {}, videos: {} };
+        this._generationReport = null;
+        this._planoRenomear = [];
+        this._lastMatrices = [];
+        this._lastRunMedia = [];
+        this.prompts = [];
+        this.videoPrompts = [];
+        this.validatedRefs = {};
+        this.tileAssignments?.clear();
+        this.refAssignments?.clear();
+        this.sceneAssignments?.clear();
+        this.videoSceneAssignments?.clear();
+        document.querySelectorAll('.flow-tile-label').forEach(el => el.remove());
+        const assignItems = document.getElementById('flow-assign-items');
+        if (assignItems) assignItems.innerHTML = '';
+        for (const id of ['flow-prompt-list', 'fv-prompt-list']) {
+          const list = document.getElementById(id);
+          if (list) list.innerHTML = '';
+        }
+        for (const id of ['flow-prompts-input', 'fv-prompts-input']) {
+          const input = document.getElementById(id);
+          if (input) {
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        }
+        document.getElementById('rel-btn-limpar')?.click();
+        this.atualizarBotaoRenomearMarcadas();
+        this.updateAssignCount();
+        this.logDebug('🗑️ Memória local do projeto limpa. Pronto para iniciar um novo trabalho.', 'success');
+        try { this.setStatus('success', '🗑️ Projeto limpo na extensão. As mídias do Flow foram preservadas.'); } catch (_) {}
+        return true;
+      },
       /** Avisa que ha marcacoes esperando a atualizacao da pagina. */
       mostrarBarraDeAtualizar() {
         const barra = document.getElementById('flow-assign-reload-bar');
@@ -1677,6 +1811,7 @@
           tipo: 'scene',
           cena: sceneName,
           imgNum,
+          isVideo: isVid,
           ordem: Date.now()
         });
         tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'pending'));
@@ -1711,6 +1846,7 @@
           favoritar: true,
           tipo: 'ref',
           referencia: name,
+          isVideo: !!(tile && this.isVideoTile(tile)),
           ordem: Date.now()
         });
         tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'pending'));
@@ -1749,6 +1885,7 @@
                 ok++;
                 this.pintarNomeNoTile(id, marca.nome);
                 if (marca.favoritar) { try { await this.apiFavorite(id, true); } catch (_) {} }
+                this.registrarRenomeacaoConfirmada(id, marca, tile);
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
                 this.updateAssignItemUI(marca.tipo === 'ref' ? marca.referencia : marca.cena, true);
                 delete marcas[id];
@@ -3413,7 +3550,7 @@
         });
         this.marcar(p.uuid, {
           nome: p.novo, favoritar: true, tipo: 'scene', cena,
-          imgNum: p.g, ordem: p.ordem || Date.now(), origemPlano: 'auto'
+          imgNum: p.g, isVideo: !!p.isVideo, ordem: p.ordem || Date.now(), origemPlano: 'auto'
         });
         const tile = this.getTiles().find(t => this.getUuidFromTile(t) === p.uuid);
         if (tile) {
@@ -3433,6 +3570,7 @@
       /** Sincroniza uma leitura inteira de uma vez, sem centenas de gravações. */
       sincronizarPlanoComCaixas(plano) {
         const marcas = this.lerMarcas();
+        const historico = this.lerHistoricoRenomeacao();
         const atuais = new Set((plano || []).map(p => p.uuid));
 
         // Retira somente caixas automáticas de uma leitura anterior. Caixas
@@ -3449,6 +3587,14 @@
         (plano || []).forEach((p, indice) => {
           if (!p?.uuid || p.selecionado === false) return;
           const cena = 'Cena ' + p.cena;
+          if (historico[p.uuid] && norm(historico[p.uuid].nome) === norm(p.novo)) {
+            delete marcas[p.uuid];
+            this.tileAssignments.set(p.uuid, {
+              label: p.novo, type: 'scene', scene: cena, imgNum: p.g, isVideo: !!p.isVideo
+            });
+            this.removeLabelFromTile(p.uuid);
+            return;
+          }
           const anterior = marcas[p.uuid];
           marcas[p.uuid] = {
             original: anterior?.original || p.name || '',
@@ -3457,6 +3603,7 @@
             tipo: 'scene',
             cena,
             imgNum: p.g,
+            isVideo: !!p.isVideo,
             ordem: agora + indice,
             origemPlano: 'auto'
           };
@@ -3537,6 +3684,10 @@
                 this.pintarNomeNoTile(p.uuid, p.novo);
                 this.startLabelObserver();
                 try { await this.apiFavorite(p.uuid, true); } catch (_) {}
+                this.registrarRenomeacaoConfirmada(p.uuid, {
+                  nome: p.novo, tipo: 'scene', cena: 'Cena ' + p.cena,
+                  imgNum: p.g, isVideo: !!p.isVideo
+                }, tile);
                 delete marcas[p.uuid];
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
                 this.removeLabelFromTile(p.uuid);
@@ -3613,6 +3764,7 @@
         const contador = new Map();
         const plano = [];
         const vistos = new Set();
+        const historicoConfirmado = this.lerHistoricoRenomeacao();
         let ok = 0, falhou = 0, semCena = 0, jaCorretas = 0, totalProcessados = 0;
 
         aviso(apenasAnalisar ? '🔎 Analisando galeria...' : '🏷️ Varrendo e renomeando vídeos e imagens...');
@@ -3666,10 +3818,23 @@
               contador.set(chave, Math.max(g, contador.get(chave) || 0));
               const novo = montarNome(cena, g, entry.isVideo);
 
+              // A confirmação persistente por projeto evita que uma mídia
+              // volte para a fila caso o Flow demore a redesenhar o nome no card.
+              if (historicoConfirmado[entry.uuid] &&
+                  norm(historicoConfirmado[entry.uuid].nome) === norm(novo)) {
+                jaCorretas++;
+                linha('⏭️ Memória: já confirmada · ' + novo);
+                return;
+              }
+
               // O nome já corresponde exatamente ao modelo escolhido. Reserva
               // sua posição no contador, mas não cria caixa nem entra na fila.
               if (norm(entry.name) === norm(novo)) {
                 jaCorretas++;
+                this.registrarRenomeacaoConfirmada(entry.uuid, {
+                  nome: novo, tipo: 'scene', cena: 'Cena ' + cena,
+                  imgNum: g, isVideo: !!entry.isVideo
+                }, tile);
                 aviso('⏭️ <b>' + jaCorretas + '</b> já correta(s) ignorada(s) · <b>' + totalProcessados + '</b> verificadas...');
                 return;
               }
@@ -3705,6 +3870,10 @@
                     this.pintarNomeNoTile(entry.uuid, novo);
                     this.startLabelObserver();
                     try { await this.apiFavorite(entry.uuid, true); } catch (_) {}
+                    this.registrarRenomeacaoConfirmada(entry.uuid, {
+                      nome: novo, tipo: 'scene', cena: 'Cena ' + cena,
+                      imgNum: g, isVideo: !!entry.isVideo
+                    }, tile);
 
                     const assignments = entry.isVideo ? this.videoSceneAssignments : this.sceneAssignments;
                     const sceneName = 'Cena ' + cena;
@@ -4541,6 +4710,7 @@
         '#flow-assign-panel.canto #flow-assign-download,',
         '#flow-assign-panel.canto #flow-assign-auto,',
         '#flow-assign-panel.canto #flow-assign-clear,',
+        '#flow-assign-panel.canto #flow-assign-new-project,',
         '#flow-assign-panel.canto #flow-assign-layout{display:none!important;}',
         '#flow-assign-panel.canto .flow-assign-header-btns{flex:0 0 auto;flex-wrap:nowrap;margin-left:auto;}',
         '#flow-assign-panel.canto #flow-assign-toggle,',
@@ -4871,6 +5041,11 @@
       if (botaoLimparMemoria && !botaoLimparMemoria._flowLigado) {
         botaoLimparMemoria._flowLigado = true;
         botaoLimparMemoria.addEventListener('click', () => this.limparMemoriaAtribuir());
+      }
+      const botaoLimparProjeto = document.getElementById('flow-assign-new-project');
+      if (botaoLimparProjeto && !botaoLimparProjeto._flowLigado) {
+        botaoLimparProjeto._flowLigado = true;
+        botaoLimparProjeto.addEventListener('click', () => this.limparProjetoLocal());
       }
       setTimeout(() => this.startLabelObserver(), 700);
 
@@ -6086,7 +6261,8 @@ function triggerTrustedClick(el) {
       <button class="flow-assign-dl-btn" id="flow-assign-rename" disabled title="Arraste uma cena para uma mídia antes de iniciar" style="display:inline-flex;background:#2563eb;color:#fff;border-color:#2563eb;">🏷️ Renomear selecionadas (0)</button>
       <button class="flow-assign-dl-btn" id="flow-assign-download" style="display:none;">⬇️ Baixar Cenas</button>
       <button class="flow-assign-hbtn" id="flow-assign-auto" title="Lê os prompts e monta automaticamente as caixas de renomeação">⚡ Auto</button>
-      <button class="flow-assign-hbtn" id="flow-assign-clear" title="Limpar caixas e pendências salvas neste projeto">🧹 Limpar</button>
+      <button class="flow-assign-hbtn" id="flow-assign-clear" title="Limpar somente as caixas e pendências ainda não confirmadas">🧹 Seleção</button>
+      <button class="flow-assign-hbtn" id="flow-assign-new-project" title="Limpar toda a memória local deste projeto para iniciar um trabalho novo">🗑 Projeto</button>
       <button class="flow-assign-hbtn" id="flow-assign-layout" title="Alternar Horizontal/Vertical">↔</button>
       <button class="flow-assign-hbtn" id="flow-assign-toggle" title="Minimizar">▲</button>
       <button class="flow-assign-hbtn close-btn" id="flow-assign-close" title="Fechar">✕</button>
@@ -8710,6 +8886,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
 
         showAssignPanel(allMatrices) {
             this._videoAssignActive = false;
+            this.restaurarHistoricoRenomeacao(false);
             const panel = document.getElementById('flow-assign-panel');
             const title = document.getElementById('flow-assign-title');
             const items = document.getElementById('flow-assign-items');
@@ -10163,6 +10340,7 @@ if (this.videoGenMode === 'scenes') {
          * Reutiliza o mesmo painel de assign do DOM, mas com estado de vídeo.
          */
         showVideoAssignPanel(allMatrices) {
+            this.restaurarHistoricoRenomeacao(true);
             const panel = document.getElementById('flow-assign-panel');
             const title = document.getElementById('flow-assign-title');
             const items = document.getElementById('flow-assign-items');
@@ -11147,6 +11325,23 @@ async scrollToWorkflow(wfId) {
             return eventos.length;
         }
 
+        limparCacheTemporarioDaExecucao() {
+            // Nao apaga o cache/cookies do Chrome: isso poderia deslogar a conta
+            // e remover recursos do Flow. Limpa apenas observadores e indices
+            // transitórios da automacao; fila, relatorio e renomeacoes ficam no
+            // armazenamento persistente por projeto.
+            try { this._modernObservers?.forEach(observer => observer.disconnect()); } catch (_) {}
+            try { this._modernGalleryObserver?.disconnect(); } catch (_) {}
+            this._modernObservers = [];
+            this._modernGalleryObserver = null;
+            this._modernCaptureError = null;
+            this._modernRecords = new Map();
+            this._modernActiveRecords = [];
+            this._modernVideoAliases?.clear?.();
+            this._modernVideoIds = new WeakMap();
+            document.documentElement.classList.remove('flow-rename-silent', 'flow-prompt-read-silent');
+        }
+
         async iniciarRecuperacaoAutomatica() {
             if (this._autoRecoveryTriggered) return;
             this._autoRecoveryTriggered = true;
@@ -11160,6 +11355,7 @@ async scrollToWorkflow(wfId) {
                 this.saveRunState(promptNum, { autoResume: false, reason: 'unusual_activity', unusualCount: this._unusualActivityCount });
                 this.shouldStop = true;
                 this.videoShouldStop = true;
+                this.limparCacheTemporarioDaExecucao();
                 this.mostrarEstadoRecuperacao(
                     '⛔ Recuperação automática pausada',
                     'O Flow bloqueou 3 vezes em 30 minutos. O estado e o relatório estão salvos; use Continuar quando o serviço normalizar.',
@@ -11179,9 +11375,10 @@ async scrollToWorkflow(wfId) {
             this._modernUncertain = true;
             this.shouldStop = true;
             this.videoShouldStop = true;
+            this.limparCacheTemporarioDaExecucao();
             this.mostrarEstadoRecuperacao(
                 '💾 Estado salvo com sucesso',
-                `Relatório preservado. Atualizando em 4 segundos; depois retomará no prompt ${this.esc(String(promptNum))}.`,
+                `Cache temporário limpo e relatório preservado. Atualizando em 4 segundos; depois retomará no prompt ${this.esc(String(promptNum))}.`,
                 100, true
             );
             await new Promise(resolve => setTimeout(resolve, 4000));

@@ -1,6 +1,6 @@
 /**
  * Criadores Dark - Background Service Worker (Inscritos)
- * Versão 1.3.0 - recuperação automática e relatório persistente
+ * Versão 1.3.1 - memória persistente de renomeação por projeto
  */
 
 // Servidor original para Whisk, Meta, etc.
@@ -421,7 +421,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-    console.log('[Criadores Dark Free] Extensão v1.3.0 instalada: recuperação automática e relatório persistente');
+    console.log('[Criadores Dark Free] Extensão v1.3.1 instalada: memória persistente de renomeação por projeto');
 });
 
 console.log('[Criadores Dark Free] Service Worker Custom iniciado');
