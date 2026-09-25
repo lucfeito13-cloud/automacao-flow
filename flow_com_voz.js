@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.3  -   2026-09-25
+//  Flow NOVO v10.4  -   2026-09-25
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -76,6 +76,8 @@
 //         o nome salvo no servidor e revisita cards que carregam tarde.
 //  v10.3: o modo Gerar um por um de videos usa o envio de video, mesmo sem
 //         iniciar a fila automatica; preserva o envio de imagens.
+//  v10.4: confirma o coracao pelo estado visual do Flow e para a busca quando
+//         renomeacao ou selecao para download ja concluiu todos os alvos.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -1459,30 +1461,55 @@
           document.documentElement.classList.remove('flow-rename-silent');
         }
       },
-      async apiFavorite(id, value) {
-        if (this.idServeNaApi(id) && this._apiFavoritarVale !== false && old.apiFavorite) {
-          try {
-            const deu = await this.apiComLimite(old.apiFavorite.call(this, id, value), 2500);
-            if (deu) { this._apiFavoritarVale = true; return true; }
-          } catch (_) {}
-          if (this._apiFavoritarVale === undefined) this._apiFavoritarVale = false;
-        }
-        return this.favoritarPeloBotao(id, value);
+      async apiFavorite(id, value, tileOptional = null) {
+        // O PATCH pode responder 200 sem alterar o coração visível. A UI é a
+        // confirmação primária; reutilizar o card evita voltar ao topo da galeria.
+        if (await this.favoritarPeloBotao(id, value, tileOptional)) return true;
+        if (!this.idServeNaApi(id) || !old.apiFavorite || !old.apiReadFavorite) return false;
+        try {
+          const deu = await this.apiComLimite(old.apiFavorite.call(this, id, value), 2500);
+          if (!deu) return false;
+          const salvo = await this.apiComLimite(old.apiReadFavorite.call(this, id), 1800);
+          return salvo === !!value;
+        } catch (_) { return false; }
       },
 
-      async favoritarPeloBotao(id, value) {
+      estadoFavoritoNoBotao(button) {
+        if (!button) return null;
+        const pressed = button.getAttribute('aria-pressed');
+        if (pressed === 'true' || pressed === 'false') return pressed === 'true';
+        const label = (button.getAttribute('aria-label') || '').toLowerCase();
+        if (/remove|remover|unfavorite|desfavoritar/.test(label)) return true;
+        if (/add to|adicionar aos|adicionar.*favorit/.test(label)) return false;
+        const icon = button.querySelector('mat-icon, .material-icons, .material-symbols-rounded');
+        const variation = icon ? getComputedStyle(icon).fontVariationSettings : '';
+        const fill = /["']?FILL["']?\s*(\d+)/i.exec(variation || '');
+        return fill ? fill[1] === '1' : null;
+      },
+
+      async favoritarPeloBotao(id, value, tileOptional = null) {
         try {
-          const tile = await this.scrollToWorkflow(id);
+          const tileId = tileOptional?.isConnected ? this.getUuidFromTile(tileOptional) : '';
+          const tileValido = tileOptional && tileOptional.isConnected && (
+            tileId === id || this.workflowIdReal(tileOptional, tileId) === id
+          );
+          // O Flow pode recriar o card depois do rename. Com um card fornecido,
+          // só procuramos no trecho visível; nunca reiniciamos a varredura.
+          const tile = tileValido ? tileOptional : tileOptional
+            ? this.getTiles().find(t => this.getUuidFromTile(t) === id || this.workflowIdReal(t, this.getUuidFromTile(t)) === id)
+            : await this.scrollToWorkflow(id);
           if (!tile) throw new Error('Mídia não encontrada para favoritar.');
           const target = $$('button[aria-label]', tile).find(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')));
           if (!target) throw new Error('Botão de favorito não encontrado.');
-          const before = target.getAttribute('aria-label');
-          if (/remove|remover/i.test(before) === !!value) return true;
+          const before = this.estadoFavoritoNoBotao(target);
+          if (before === !!value) return true;
+          if (before === null) throw new Error('Estado do favorito desconhecido; clique não realizado para evitar desfavoritar.');
           target.click();
-          await this.modernWait(
-            () => $$('button[aria-label]', tile).some(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')) && b.getAttribute('aria-label') !== before),
+          const confirmado = await this.modernWait(
+            () => this.estadoFavoritoNoBotao(target) === !!value,
             2500
           );
+          if (!confirmado) throw new Error('O Flow não confirmou o favorito.');
           return true;
         } catch (error) { this.logDebug(`Favoritar: ${error.message}`, 'error'); return false; }
       },
@@ -1901,11 +1928,11 @@
               const tile = await this.scrollToWorkflow(id);
               tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
               this.logDebug(`🏷️ Renomeando ${i + 1}/${ids.length}: ${marca.nome}`, 'info');
-              const deu = await this.renomearSelecionadoConfirmado(id, marca.nome, tile);
+              const renomeou = await this.renomearSelecionadoConfirmado(id, marca.nome, tile);
+              const deu = renomeou && (!marca.favoritar || await this.apiFavorite(id, true, tile));
               if (deu) {
                 ok++;
                 this.pintarNomeNoTile(id, marca.nome);
-                if (marca.favoritar) { try { await this.apiFavorite(id, true); } catch (_) {} }
                 this.registrarRenomeacaoConfirmada(id, marca, tile);
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
                 this.updateAssignItemUI(marca.tipo === 'ref' ? marca.referencia : marca.cena, true);
@@ -1913,6 +1940,7 @@
                 this.removeLabelFromTile(id);
               } else {
                 falhou++;
+                if (renomeou) this.logDebug('Nome salvo, mas favorito não confirmado: ' + marca.nome, 'warning');
                 marca.estado = 'failed';
                 this.atualizarEstadoItemAtribuir(marca.tipo === 'ref' ? marca.referencia : marca.cena, 'failed');
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'failed'));
@@ -2341,8 +2369,15 @@
             }));
           } catch (_) {}
 
+          const tipoDesconhecido = [...this.tileAssignments.values()].some(atrib =>
+            atrib?.type === 'scene' && typeof atrib.isVideo !== 'boolean');
+          const alvos = new Set([...this.tileAssignments].filter(([, atrib]) =>
+            atrib?.type === 'scene' && !!atrib.isVideo === somenteVideos
+          ).map(([id]) => id));
+          const encontrados = new Set();
           await this.scanGallery(async (entry, tile) => {
             if (!entry.uuid || !entry.loaded || entry.isVideo !== somenteVideos) return;
+            if (encontrados.has(entry.uuid)) return;
             const atrib = this.tileAssignments.get(entry.uuid);
             // So entra no lote quem recebeu uma caixa de Cena neste painel.
             // Ler apenas o texto do prompt/nome selecionava indevidamente todas
@@ -2352,9 +2387,11 @@
             const alvo = alvoDoCard(tile);
             clicarComCtrl(alvo);
             selecionadas++;
+            encontrados.add(entry.uuid);
             ultima = { tile, alvo, uuid: entry.uuid };
             status('info', '☑️ Selecionando caixas de cena: <b>' + selecionadas + '</b>');
             await this.pausa(90);
+            if (!tipoDesconhecido && alvos.size && encontrados.size >= alvos.size) return false;
           }, { restore: false, completo: true });
 
           try {
@@ -2996,7 +3033,9 @@
             if (!renomeou) throw new Error('O Flow não confirmou o nome da Cena ' + cena + '.');
 
             this.pintarNomeNoTile(resultado.uuid || resultado.workflowId, nomeFinal);
-            try { await this.apiFavorite(resultado.uuid || resultado.workflowId, true); } catch (_) {}
+            if (!await this.apiFavorite(resultado.uuid || resultado.workflowId, true, tile)) {
+              throw new Error('O Flow salvou o nome, mas não confirmou o favorito da Cena ' + cena + '.');
+            }
             this.tileAssignments.set(resultado.uuid || resultado.workflowId, {
               label: nomeFinal, type: 'scene', scene: 'Cena ' + cena,
               imgNum: 1, isVideo: !!video
@@ -3161,7 +3200,8 @@
         for (const entry of entries) {
           if (!/\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif)$/i.test(entry.name)) continue;
           const name = entry.name.replace(/\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif)$/i, '').replace(/ _$/, '');
-          if (await this.apiRename(entry.uuid, name + CONFIG.REF_SUFFIX)) { await this.apiFavorite(entry.uuid, true); count++; }
+          if (await this.apiRename(entry.uuid, name + CONFIG.REF_SUFFIX) &&
+              await this.apiFavorite(entry.uuid, true)) count++;
         }
         this.setStatus('success', `✅ ${count} referência(s) renomeada(s) a partir dos nomes dos arquivos.`);
       },
@@ -3700,12 +3740,19 @@
                 this.logDebug('Tentativa ' + rodada + ' falhou em ' + p.novo + ': ' + (erroItem?.message || erroItem), 'warning');
               }
 
+              if (deu && tile) {
+                const favorito = await this.apiFavorite(p.uuid, true, tile);
+                if (!favorito) {
+                  deu = false;
+                  this.logDebug('Nome salvo, mas favorito não confirmado: ' + p.novo, 'warning');
+                }
+              }
+
               if (deu) {
                 ok++;
-                this.tileAssignments.set(p.uuid, { label: p.novo, type: 'scene', scene: 'Cena ' + p.cena, imgNum: p.g });
+                this.tileAssignments.set(p.uuid, { label: p.novo, type: 'scene', scene: 'Cena ' + p.cena, imgNum: p.g, isVideo: !!p.isVideo });
                 this.pintarNomeNoTile(p.uuid, p.novo);
                 this.startLabelObserver();
-                try { await this.apiFavorite(p.uuid, true); } catch (_) {}
                 this.registrarRenomeacaoConfirmada(p.uuid, {
                   nome: p.novo, tipo: 'scene', cena: 'Cena ' + p.cena,
                   imgNum: p.g, isVideo: !!p.isVideo
@@ -3715,6 +3762,9 @@
                 this.removeLabelFromTile(p.uuid);
                 this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
                 if (ok % 20 === 0) this.salvarMarcas(marcas);
+                // Último item confirmado: encerra a rodada aqui, sem outra
+                // varredura da galeria ou rolagem depois da conclusão.
+                if (ok === selecionados.length) break;
               } else {
                 falharamNestaRodada.push(p);
                 const pendente = this._planoRenomear.find(o => o.uuid === p.uuid);
@@ -3896,13 +3946,12 @@
                   aviso('🏷️ Renomeando <b>' + (ok + 1) + '</b>: ' + novo);
                   const deu = await this.apiRename(entry.uuid, novo, tile);
                   await this.closeMenus();
-                  if (deu) {
+                  if (deu && await this.apiFavorite(entry.uuid, true, tile)) {
                     ok++;
                     linha('✅ ' + novo);
-                    this.tileAssignments.set(entry.uuid, { label: novo, type: 'scene', scene: 'Cena ' + cena, imgNum: g });
+                    this.tileAssignments.set(entry.uuid, { label: novo, type: 'scene', scene: 'Cena ' + cena, imgNum: g, isVideo: !!entry.isVideo });
                     this.pintarNomeNoTile(entry.uuid, novo);
                     this.startLabelObserver();
-                    try { await this.apiFavorite(entry.uuid, true); } catch (_) {}
                     this.registrarRenomeacaoConfirmada(entry.uuid, {
                       nome: novo, tipo: 'scene', cena: 'Cena ' + cena,
                       imgNum: g, isVideo: !!entry.isVideo
@@ -7948,6 +7997,23 @@ clearReferencesForUI(source = 'images') {
             } catch(e) { return false; }
         }
 
+        async apiReadFavorite(workflowId, token = getAuthToken() || _authToken) {
+            if (!token || !workflowId) return null;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 1200);
+            try {
+                const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, {
+                    headers: { 'Authorization': token }, signal: controller.signal
+                });
+                if (!res.ok) return null;
+                const resposta = await res.json();
+                const valor = resposta?.workflow?.metadata?.favorited ??
+                    resposta?.flowWorkflow?.metadata?.favorited ?? resposta?.metadata?.favorited;
+                return typeof valor === 'boolean' ? valor : null;
+            } catch (_) { return null; }
+            finally { clearTimeout(timer); }
+        }
+
         // ──────────────────────────────────────────────
         // PIPELINE PRINCIPAL (sem rename automático)
         // ──────────────────────────────────────────────
@@ -8400,7 +8466,7 @@ async renameUploadReferencesFromFilenames() {
                 this.logDebug(`Renomeando referência: "${currentName}" → "${newName}"`, 'info');
 
                 const okRename = await this.apiRename(workflowId, newName);
-                const okFav = await this.apiFavorite(workflowId, true);
+                const okFav = await this.apiFavorite(workflowId, true, tile);
 
                 if (okRename && okFav) {
                     renamed++;
@@ -8802,11 +8868,11 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
                 for (const it of plan) {
                     const tipo = it.isVid ? 'Vídeo' : 'Imagem';
                     const newName = `Cena ${it.sceneNum} - ${tipo} ${it.g}`;
-                    const ok = await this.apiRename(it.wf, newName);
-                    await this.apiFavorite(it.wf, true);   // ⭐ favorita = "concluído"
+                    const ok = await this.apiRename(it.wf, newName) &&
+                        await this.apiFavorite(it.wf, true); // ⭐ favorita = "concluído"
                     if (ok) {
                         done++; if (it.isVid) vids++; else imgs++;
-                        this.tileAssignments.set(it.wf, { label: newName, type: 'scene', scene: `Cena ${it.sceneNum}`, imgNum: it.g });
+                        this.tileAssignments.set(it.wf, { label: newName, type: 'scene', scene: `Cena ${it.sceneNum}`, imgNum: it.g, isVideo: !!it.isVid });
                         const link = document.querySelector(`a[href*="/edit/${it.wf}"]`);
                         const tile = link ? link.closest('[data-tile-id]') : null;
                         if (tile) this.addLabelToTile(tile, newName, it.wf, 'scene', `Cena ${it.sceneNum}`);
@@ -9495,7 +9561,7 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             // Renomeia com sufixo " _"
             const apiName = name + CONFIG.REF_SUFFIX;
             const ok1 = await this.apiRename(workflowId, apiName, tileEl);
-            const ok2 = await this.apiFavorite(workflowId, true);
+            const ok2 = ok1 && await this.apiFavorite(workflowId, true, tileEl);
 
             if (ok1 && ok2) {
                 this.refAssignments.set(name, workflowId);
@@ -9543,12 +9609,12 @@ formatSceneNameWithVariationCount(sceneName, variationCounts) {
             logFn(`Atribuindo "${fullName}" → ${workflowId.substring(0,8)}...`, 'info');
 
             const ok1 = await this.apiRename(workflowId, fullName, tileEl);
-            const ok2 = await this.apiFavorite(workflowId, true);
+            const ok2 = ok1 && await this.apiFavorite(workflowId, true, tileEl);
 
             if (ok1 && ok2) {
                 arr.push({ imgNum, workflowId, src: this.getImgSrcFromTile(tileEl) || '' });
                 assignments.set(sceneName, arr);
-                this.tileAssignments.set(workflowId, { label: fullName, type: 'scene', scene: sceneName, imgNum });
+                this.tileAssignments.set(workflowId, { label: fullName, type: 'scene', scene: sceneName, imgNum, isVideo: !!this._videoAssignActive });
                 this.addLabelToTile(tileEl, fullName, workflowId, 'scene', sceneName);
                 this.updateAssignItemUI(sceneName, true);
                 this.updateAssignCount();
