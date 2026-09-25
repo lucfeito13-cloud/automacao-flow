@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.1  -   2026-09-24
+//  Flow NOVO v10.2  -   2026-09-25
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -72,6 +72,8 @@
 //         atualiza a pagina e retoma automaticamente somente do ponto salvo.
 //  v10.1: preserva tambem a memoria das renomeacoes confirmadas e adiciona
 //         Limpar projeto para iniciar outro trabalho sem herdar estado local.
+//  v10.2: so pula renomeacoes cujo nome atual confere com o Flow; confirma
+//         o nome salvo no servidor e revisita cards que carregam tarde.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -366,8 +368,8 @@
       numeroDaCenaNoTexto(texto) {
         const s = norm(texto);
         if (!s) return null;
-        // {cena 12}, [cena 12], (cena 12), [12], {12}, (12)
-        const marcado = s.match(/^\s*[{[(]\s*(?:cena|prompt|scene)?\s*([0-9]+(?:[.,][0-9]+)?)\s*[}\])]/i);
+        // Chaves identificam a cena; colchetes sao reservados a referencias.
+        const marcado = s.match(/^\s*\{\s*(?:cena|prompt|scene)?\s*([0-9]+(?:[.,][0-9]+)?)\s*\}/i);
         if (marcado) return Number(String(marcado[1]).replace(',', '.'));
         // "Cena 12 - ...", "Cena 12: ...", "Prompt 12: ...", "Scene 12: ..."
         // "take|tomada|shot" entram aqui porque os prompts do Flow chegam como
@@ -1069,7 +1071,11 @@
         const colher = async () => {
           for (const tile of this.getTiles()) {
             const entry = this.tileEntry(tile);
-            if (!entry.uuid || entries.has(entry.uuid)) continue;
+            if (!entry.uuid) continue;
+            const anterior = entries.get(entry.uuid);
+            // Um card pode aparecer antes de carregar a miniatura. Releia-o
+            // quando terminar, em vez de considerá-lo visto para sempre.
+            if (anterior && (anterior.loaded || !entry.loaded)) continue;
             entries.set(entry.uuid, entry);
             if (visit && await visit(entry, tile) === false) return false;
           }
@@ -1354,7 +1360,12 @@
           );
           const tile = tileValido ? tileOptional : (await this.scrollToWorkflow(id));
           if (!tile) throw new Error('Mídia não encontrada para renomear.');
-          if (this.getTileName(tile) === name) return true;
+          if (norm(this.getTileName(tile)) === norm(name)) {
+            const realId = this.workflowIdReal(tile, id);
+            const salvo = realId && old.apiReadName
+              ? await this.apiComLimite(old.apiReadName.call(this, realId), 1800) : null;
+            if (norm(salvo) === norm(name)) return true;
+          }
 
           // 1. Abre o menu do card (3 pontinhos)
           await this.openTileMenu(tile);
@@ -1428,13 +1439,14 @@
             throw new Error('O Flow não confirmou o novo nome.');
           }
 
-          this.pintarNomeNoTile(id, name);
-          if (tile) {
-            tile.setAttribute('aria-label', name);
-            const tit = $('.footer-title', tile);
-            if (tit) tit.textContent = name;
+          const realId = this.workflowIdReal(tile, id);
+          if (!realId || !old.apiReadName) throw new Error('ID real indisponivel para confirmar o nome.');
+          let confirmado = await this.apiComLimite(old.apiReadName.call(this, realId), 1800);
+          if (norm(confirmado) !== norm(name)) {
+            await this.pausa(160);
+            confirmado = await this.apiComLimite(old.apiReadName.call(this, realId), 1800);
           }
-
+          if (norm(confirmado) !== norm(name)) throw new Error('O Flow ainda nao salvou o novo nome.');
           return true;
         } catch (error) {
           this.logDebug(`Renomear: ${error.message}`, 'error');
@@ -1514,8 +1526,12 @@
       },
       restaurarHistoricoRenomeacao(isVideo = false) {
         const historico = this.lerHistoricoRenomeacao();
+        const tilesPorId = new Map(this.getTiles().map(tile => [this.getUuidFromTile(tile), tile]));
         for (const [id, registro] of Object.entries(historico)) {
           if (!registro?.nome) continue;
+          // A memoria guarda a intencao, mas so o nome atual do Flow confirma.
+          const tile = tilesPorId.get(id);
+          if (!tile || norm(this.getTileName(tile)) !== norm(registro.nome)) continue;
           if (registro.tipo === 'ref') {
             if (registro.referencia && (!this.refNames?.length || this.refNames.includes(registro.referencia))) {
               this.refAssignments.set(registro.referencia, id);
@@ -1616,7 +1632,9 @@
         const marcas = this.lerMarcas();
         const historico = this.lerHistoricoRenomeacao();
         const confirmado = historico[id];
-        if (confirmado && norm(confirmado.nome) === norm(dados?.nome)) {
+        const tileAtual = this.getTiles().find(t => this.getUuidFromTile(t) === id);
+        if (confirmado && norm(confirmado.nome) === norm(dados?.nome) &&
+            tileAtual && norm(this.getTileName(tileAtual)) === norm(dados.nome)) {
           delete marcas[id];
           this.salvarMarcas(marcas);
           this.removeLabelFromTile?.(id);
@@ -3587,7 +3605,8 @@
         (plano || []).forEach((p, indice) => {
           if (!p?.uuid || p.selecionado === false) return;
           const cena = 'Cena ' + p.cena;
-          if (historico[p.uuid] && norm(historico[p.uuid].nome) === norm(p.novo)) {
+          if (historico[p.uuid] && norm(historico[p.uuid].nome) === norm(p.novo) &&
+              norm(p.name) === norm(p.novo)) {
             delete marcas[p.uuid];
             this.tileAssignments.set(p.uuid, {
               label: p.novo, type: 'scene', scene: cena, imgNum: p.g, isVideo: !!p.isVideo
@@ -3670,9 +3689,7 @@
                 if (!tile) {
                   this.logDebug('Card não encontrado nesta passagem: ' + p.novo, 'warning');
                 } else {
-                  deu = norm(p.name) === norm(p.novo)
-                    ? true
-                    : await this.renomearSelecionadoConfirmado(p.uuid, p.novo, tile);
+                  deu = await this.renomearSelecionadoConfirmado(p.uuid, p.novo, tile);
                 }
               } catch (erroItem) {
                 this.logDebug('Tentativa ' + rodada + ' falhou em ' + p.novo + ': ' + (erroItem?.message || erroItem), 'warning');
@@ -3787,8 +3804,14 @@
             // ele nunca mais e aceito sem validacao.
             let promptHover = null, cenaHover = null;
             try {
-              promptHover = await this.promptPorHover(tile, 2200);
+              promptHover = await this.promptPorHover(tile, 900);
               cenaHover = this.numeroDaCenaNoTexto(promptHover);
+              // Segunda tentativa so para o card que falhou: a grade virtual
+              // pode inserir o rodape depois do primeiro hover.
+              if (cenaHover == null && tile.isConnected) {
+                promptHover = await this.promptPorHover(tile, 750);
+                cenaHover = this.numeroDaCenaNoTexto(promptHover);
+              }
             } catch (_) {}
 
             // Nem nome existente, nem contexto Angular, nem posicao na grade
@@ -3821,10 +3844,15 @@
               // A confirmação persistente por projeto evita que uma mídia
               // volte para a fila caso o Flow demore a redesenhar o nome no card.
               if (historicoConfirmado[entry.uuid] &&
-                  norm(historicoConfirmado[entry.uuid].nome) === norm(novo)) {
+                  norm(historicoConfirmado[entry.uuid].nome) === norm(novo) &&
+                  norm(entry.name) === norm(novo)) {
                 jaCorretas++;
-                linha('⏭️ Memória: já confirmada · ' + novo);
+                linha('⏭️ Conferida no Flow · ' + novo);
                 return;
+              }
+              if (historicoConfirmado[entry.uuid] && norm(entry.name) !== norm(novo)) {
+                delete historicoConfirmado[entry.uuid];
+                this.salvarHistoricoRenomeacao(historicoConfirmado);
               }
 
               // O nome já corresponde exatamente ao modelo escolhido. Reserva
@@ -7868,9 +7896,33 @@ clearReferencesForUI(source = 'images') {
                         updateMask: 'metadata.displayName'
                     })
                 });
-                if (!res.ok) this.logDebug(`API rename falhou: ${res.status}`, 'error');
-                return res.ok;
+                if (!res.ok) { this.logDebug(`API rename falhou: ${res.status}`, 'error'); return false; }
+                // A resposta ao PATCH pode apenas ecoar o pedido. Confirma no
+                // recurso salvo antes de declarar a renomeacao concluida.
+                let salvo = await this.apiReadName(workflowId, token);
+                if (String(salvo || '').trim() !== String(newName).trim()) {
+                    await this.sleep(160);
+                    salvo = await this.apiReadName(workflowId, token);
+                }
+                return String(salvo || '').trim() === String(newName).trim();
             } catch(e) { this.logDebug(`Erro API rename: ${e.message}`, 'error'); return false; }
+        }
+
+        async apiReadName(workflowId, token = getAuthToken() || _authToken) {
+            if (!token || !workflowId) return null;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 1200);
+            try {
+                const res = await _origFetch(`${CONFIG.API_BASE}/${workflowId}`, {
+                    headers: { 'Authorization': token }, signal: controller.signal
+                });
+                if (!res.ok) return null;
+                const resposta = await res.json();
+                return resposta?.workflow?.metadata?.displayName ||
+                    resposta?.flowWorkflow?.metadata?.displayName ||
+                    resposta?.metadata?.displayName || null;
+            } catch (_) { return null; }
+            finally { clearTimeout(timer); }
         }
 
         async apiFavorite(workflowId, favorited) {
