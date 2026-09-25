@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.4  -   2026-09-25
+//  Flow NOVO v10.5  -   2026-09-25
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -78,6 +78,8 @@
 //         iniciar a fila automatica; preserva o envio de imagens.
 //  v10.4: confirma o coracao pelo estado visual do Flow e para a busca quando
 //         renomeacao ou selecao para download ja concluiu todos os alvos.
+//  v10.5: revela o coracao com hover real, clica pelo Chrome e confirma o
+//         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -1349,6 +1351,10 @@
         if (!tile) return false;
 
         const realId = this.workflowIdReal(tile, id);
+        if (realId && norm(this.getTileName(tile)) === norm(name) && old.apiReadName) {
+          const salvo = await this.apiComLimite(old.apiReadName.call(this, realId), 1800);
+          if (norm(salvo) === norm(name)) return true;
+        }
         // Usa o mesmo caminho rápido/cooldown de todas as outras renomeações.
         // Antes este botão chamava a API antiga diretamente, sem limite de
         // tempo, e podia ficar preso entre uma mídia e a próxima.
@@ -1462,16 +1468,86 @@
         }
       },
       async apiFavorite(id, value, tileOptional = null) {
-        // O PATCH pode responder 200 sem alterar o coração visível. A UI é a
-        // confirmação primária; reutilizar o card evita voltar ao topo da galeria.
-        if (await this.favoritarPeloBotao(id, value, tileOptional)) return true;
+        const desejado = !!value;
+        const uiOk = await this.favoritarPeloBotao(id, desejado, tileOptional);
+        // O Flow pode mostrar o coração preenchido antes de salvar. Confirmar
+        // pelo recurso persistido evita declarar sucesso apenas pela animação.
+        if (uiOk && this.idServeNaApi(id) && old.apiReadFavorite) {
+          try {
+            const salvo = await this.apiComLimite(old.apiReadFavorite.call(this, id), 1800);
+            if (salvo === desejado) return true;
+            if (salvo === null) {
+              await this.pausa(350);
+              const tile = tileOptional?.isConnected ? tileOptional : this.getTiles().find(t => this.getUuidFromTile(t) === id);
+              const button = tile && $$('button[aria-label]', tile).find(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')));
+              if (this.estadoFavoritoNoBotao(button) === desejado) return true;
+            }
+          } catch (_) {}
+        } else if (uiOk && !this.idServeNaApi(id)) {
+          return true;
+        }
         if (!this.idServeNaApi(id) || !old.apiFavorite || !old.apiReadFavorite) return false;
         try {
           const deu = await this.apiComLimite(old.apiFavorite.call(this, id, value), 2500);
           if (!deu) return false;
           const salvo = await this.apiComLimite(old.apiReadFavorite.call(this, id), 1800);
-          return salvo === !!value;
+          return salvo === desejado;
         } catch (_) { return false; }
+      },
+
+      async entradaConfiavelNoFlow(tipo, x, y) {
+        const requestId = 'flow-fav-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        return new Promise((resolve, reject) => {
+          let encerrado = false;
+          const finalizar = (fn, resposta) => {
+            if (encerrado) return;
+            encerrado = true;
+            window.removeEventListener('message', receber);
+            clearTimeout(timer);
+            fn(resposta);
+          };
+          const receber = event => {
+            if (event.source !== window || event.origin !== location.origin) return;
+            const data = event.data;
+            if (data?.source !== 'criadores-dark-extension-bridge' ||
+                data.type !== 'FLOW_TRUSTED_' + tipo + '_RESULT' || data.requestId !== requestId) return;
+            if (data.ok) finalizar(resolve, true);
+            else finalizar(reject, new Error(data.error || 'Entrada confiável indisponível.'));
+          };
+          const timer = setTimeout(() => finalizar(reject, new Error('Ponte de entrada confiável sem resposta.')), 4000);
+          window.addEventListener('message', receber);
+          window.postMessage({
+            source: 'criadores-dark-flow-main', type: 'FLOW_TRUSTED_' + tipo + '_REQUEST',
+            requestId, x, y
+          }, location.origin);
+        });
+      },
+
+      async clicarFavoritoFisico(tile, button) {
+        const overlay = tile.querySelector('.hover-overlay');
+        if (overlay && getComputedStyle(overlay).display === 'none') return false;
+        const r = tile.getBoundingClientRect();
+        if (!r.width || !r.height) return false;
+        const paineis = ['flow-panel', 'flow-assign-panel', 'flow-popup', 'flow-mini']
+          .map(id => document.getElementById(id)).filter(Boolean);
+        const anteriores = paineis.map(el => el.style.pointerEvents);
+        paineis.forEach(el => { el.style.pointerEvents = 'none'; });
+        try {
+          // O hotbar do Flow tem tamanho zero até o mouse entrar no card.
+          await this.entradaConfiavelNoFlow('MOVE', Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+          const pronto = await this.modernWait(() => {
+            const box = button.getBoundingClientRect();
+            return box.width > 4 && box.height > 4 ? box : null;
+          }, 1200);
+          const x = Math.round(pronto.left + pronto.width / 2);
+          const y = Math.round(pronto.top + pronto.height / 2);
+          const sobMouse = document.elementFromPoint(x, y);
+          if (sobMouse !== button && !button.contains(sobMouse)) return false;
+          await this.entradaConfiavelNoFlow('CLICK', x, y);
+          return true;
+        } finally {
+          paineis.forEach((el, i) => { el.style.pointerEvents = anteriores[i]; });
+        }
       },
 
       estadoFavoritoNoBotao(button) {
@@ -1504,14 +1580,24 @@
           const before = this.estadoFavoritoNoBotao(target);
           if (before === !!value) return true;
           if (before === null) throw new Error('Estado do favorito desconhecido; clique não realizado para evitar desfavoritar.');
-          target.click();
+          let cliqueFisico = false;
+          try { cliqueFisico = await this.clicarFavoritoFisico(tile, target); }
+          catch (error) { this.logDebug('Favorito: clique físico indisponível: ' + error.message, 'warning'); }
+          if (!cliqueFisico) target.click();
           const confirmado = await this.modernWait(
-            () => this.estadoFavoritoNoBotao(target) === !!value,
+            () => {
+              const atual = tile.isConnected ? tile : this.getTiles().find(t => this.getUuidFromTile(t) === id);
+              return this.favoritoNoTile(atual) === !!value;
+            },
             2500
           );
           if (!confirmado) throw new Error('O Flow não confirmou o favorito.');
           return true;
         } catch (error) { this.logDebug(`Favoritar: ${error.message}`, 'error'); return false; }
+      },
+      favoritoNoTile(tile) {
+        const button = tile && $$('button[aria-label]', tile).find(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')));
+        return this.estadoFavoritoNoBotao(button);
       },
       // ── MARCAR AGORA, RENOMEAR PELO BOTAO ────────────────────────────────────
       // Arrastar um nome nao mexe no servidor. A caixa fica guardada e so vira
@@ -1929,7 +2015,7 @@
               tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
               this.logDebug(`🏷️ Renomeando ${i + 1}/${ids.length}: ${marca.nome}`, 'info');
               const renomeou = await this.renomearSelecionadoConfirmado(id, marca.nome, tile);
-              const deu = renomeou && (!marca.favoritar || await this.apiFavorite(id, true, tile));
+              const deu = renomeou && await this.apiFavorite(id, true, tile);
               if (deu) {
                 ok++;
                 this.pintarNomeNoTile(id, marca.nome);
@@ -3650,7 +3736,7 @@
         (plano || []).forEach((p, indice) => {
           if (!p?.uuid || p.selecionado === false) return;
           const cena = 'Cena ' + p.cena;
-          if (historico[p.uuid] && norm(historico[p.uuid].nome) === norm(p.novo) &&
+          if (!p.favoritoPendente && historico[p.uuid] && norm(historico[p.uuid].nome) === norm(p.novo) &&
               norm(p.name) === norm(p.novo)) {
             delete marcas[p.uuid];
             this.tileAssignments.set(p.uuid, {
@@ -3884,6 +3970,30 @@
             // Sem prompt confiavel nao ha renomeacao. Nenhuma aproximacao por
             // titulo, posicao ou sequencia e permitida.
             if (cena == null) {
+              // Favoritar um nome oficial já existente não exige inferir uma
+              // nova cena pelo prompt; não alteramos o nome neste caminho.
+              if (jaNomeada && this.favoritoNoTile(tile) !== true) {
+                const cenaSalva = jaNomeada.sceneNum;
+                const gSalvo = jaNomeada.imgNum || 1;
+                if (apenasAnalisar) {
+                  plano.push({ ...entry, cena: cenaSalva, g: gSalvo, novo: entry.name,
+                    origem: 'favorito_pendente', favoritoPendente: true });
+                  const cenaNome = 'Cena ' + cenaSalva;
+                  this.tileAssignments.set(entry.uuid, {
+                    label: entry.name, type: 'scene', scene: cenaNome,
+                    imgNum: gSalvo, isVideo: !!entry.isVideo
+                  });
+                  this.addLabelToTile(tile, entry.name, entry.uuid, 'scene', cenaNome);
+                  $('.flow-tile-label', tile)?.setAttribute('data-rename-state', 'pending');
+                } else if (await this.apiFavorite(entry.uuid, true, tile)) {
+                  ok++;
+                  linha('⭐ Favorito confirmado · ' + entry.name);
+                } else {
+                  falhou++;
+                  linha('⚠️ Favorito não confirmado · ' + entry.name, 'aviso');
+                }
+                return;
+              }
               semCena++;
               if (apenasAnalisar) linha('⚠️ Pulada sem prompt confirmado: ' + (entry.name || 'sem nome').slice(0, 45), 'aviso');
               return;
@@ -3896,23 +4006,29 @@
               contador.set(chave, Math.max(g, contador.get(chave) || 0));
               const novo = montarNome(cena, g, entry.isVideo);
 
-              // A confirmação persistente por projeto evita que uma mídia
-              // volte para a fila caso o Flow demore a redesenhar o nome no card.
-              if (historicoConfirmado[entry.uuid] &&
-                  norm(historicoConfirmado[entry.uuid].nome) === norm(novo) &&
-                  norm(entry.name) === norm(novo)) {
-                jaCorretas++;
-                linha('⏭️ Conferida no Flow · ' + novo);
-                return;
-              }
-              if (historicoConfirmado[entry.uuid] && norm(entry.name) !== norm(novo)) {
-                delete historicoConfirmado[entry.uuid];
-                this.salvarHistoricoRenomeacao(historicoConfirmado);
-              }
-
-              // O nome já corresponde exatamente ao modelo escolhido. Reserva
-              // sua posição no contador, mas não cria caixa nem entra na fila.
+              // Nome certo não implica favorito certo. Durante a análise,
+              // deixamos uma caixa só para corrigir o coração quando o usuário
+              // clicar em Renomear; na execução direta, favoritar agora.
               if (norm(entry.name) === norm(novo)) {
+                if (this.favoritoNoTile(tile) !== true) {
+                  if (apenasAnalisar) {
+                    plano.push({ ...entry, cena, g, novo, origem: 'favorito_pendente', favoritoPendente: true });
+                    const cenaNome = 'Cena ' + cena;
+                    this.tileAssignments.set(entry.uuid, {
+                      label: novo, type: 'scene', scene: cenaNome, imgNum: g, isVideo: !!entry.isVideo
+                    });
+                    this.addLabelToTile(tile, novo, entry.uuid, 'scene', cenaNome);
+                    $('.flow-tile-label', tile)?.setAttribute('data-rename-state', 'pending');
+                    if (plano.length % 25 === 0) this.sincronizarPlanoComCaixas(plano);
+                  } else if (await this.apiFavorite(entry.uuid, true, tile)) {
+                    ok++;
+                    linha('⭐ Nome correto, favorito confirmado · ' + novo);
+                  } else {
+                    falhou++;
+                    linha('⚠️ Nome correto, favorito não confirmado · ' + novo, 'aviso');
+                  }
+                  return;
+                }
                 jaCorretas++;
                 this.registrarRenomeacaoConfirmada(entry.uuid, {
                   nome: novo, tipo: 'scene', cena: 'Cena ' + cena,
@@ -3920,6 +4036,11 @@
                 }, tile);
                 aviso('⏭️ <b>' + jaCorretas + '</b> já correta(s) ignorada(s) · <b>' + totalProcessados + '</b> verificadas...');
                 return;
+              }
+
+              if (historicoConfirmado[entry.uuid]) {
+                delete historicoConfirmado[entry.uuid];
+                this.salvarHistoricoRenomeacao(historicoConfirmado);
               }
 
               plano.push({ ...entry, cena, g, novo, origem });
@@ -3939,14 +4060,10 @@
                 aviso('🔎 Analisando: <b>' + plano.length + '</b> identificada(s) · <b>' + totalProcessados + '</b> verificadas...');
               } else {
                 // JÁ VAI RENOMEANDO PROGRESSIVAMENTE!
-                if (norm(entry.name) === norm(novo)) {
-                  ok++;
-                  linha('já estava: ' + novo);
-                } else {
-                  aviso('🏷️ Renomeando <b>' + (ok + 1) + '</b>: ' + novo);
-                  const deu = await this.apiRename(entry.uuid, novo, tile);
-                  await this.closeMenus();
-                  if (deu && await this.apiFavorite(entry.uuid, true, tile)) {
+                aviso('🏷️ Renomeando <b>' + (ok + 1) + '</b>: ' + novo);
+                const deu = await this.apiRename(entry.uuid, novo, tile);
+                await this.closeMenus();
+                if (deu && await this.apiFavorite(entry.uuid, true, tile)) {
                     ok++;
                     linha('✅ ' + novo);
                     this.tileAssignments.set(entry.uuid, { label: novo, type: 'scene', scene: 'Cena ' + cena, imgNum: g, isVideo: !!entry.isVideo });
@@ -3964,10 +4081,9 @@
                     const idx = list.findIndex(item => item.workflowId === entry.uuid);
                     if (idx >= 0) list.splice(idx, 1);
                     list.push({ imgNum: g, workflowId: entry.uuid, src: entry.src || '' });
-                  } else {
-                    falhou++;
-                    linha('❌ falhou: ' + (entry.name || entry.uuid).slice(0, 30), 'erro');
-                  }
+                } else {
+                  falhou++;
+                  linha('❌ falhou: ' + (entry.name || entry.uuid).slice(0, 30), 'erro');
                 }
               }
             } else {

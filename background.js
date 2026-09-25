@@ -1,6 +1,6 @@
 /**
  * Criadores Dark - Background Service Worker (Inscritos)
- * Versão 1.3.3 - correção do envio individual de vídeos
+ * Versão 1.3.5 - clique confiável para favoritar mídias do Flow
  */
 
 // Servidor original para Whisk, Meta, etc.
@@ -166,12 +166,13 @@ function installTrustedInputBridge() {
         if (!data || data.source !== 'criadores-dark-flow-main' || !data.requestId) return;
         const isClick = data.type === 'FLOW_TRUSTED_CLICK_REQUEST';
         const isEnter = data.type === 'FLOW_TRUSTED_ENTER_REQUEST';
-        if (!isClick && !isEnter) return;
+        const isMove = data.type === 'FLOW_TRUSTED_MOVE_REQUEST';
+        if (!isClick && !isEnter && !isMove) return;
 
         let response;
         try {
             response = await chrome.runtime.sendMessage({
-                type: isClick ? 'FLOW_TRUSTED_CLICK' : 'FLOW_TRUSTED_ENTER',
+                type: isClick ? 'FLOW_TRUSTED_CLICK' : isMove ? 'FLOW_TRUSTED_MOVE' : 'FLOW_TRUSTED_ENTER',
                 requestId: String(data.requestId),
                 x: Number(data.x),
                 y: Number(data.y)
@@ -182,7 +183,7 @@ function installTrustedInputBridge() {
 
         window.postMessage({
             source: 'criadores-dark-extension-bridge',
-            type: isClick ? 'FLOW_TRUSTED_CLICK_RESULT' : 'FLOW_TRUSTED_ENTER_RESULT',
+            type: isClick ? 'FLOW_TRUSTED_CLICK_RESULT' : isMove ? 'FLOW_TRUSTED_MOVE_RESULT' : 'FLOW_TRUSTED_ENTER_RESULT',
             requestId: String(data.requestId),
             ok: !!response?.ok,
             error: response?.error || ''
@@ -247,7 +248,7 @@ async function sendTrustedEnter(tabId) {
 
 async function sendTrustedClick(tabId, x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
-        throw new Error('A posição do botão Gerar é inválida.');
+        throw new Error('A posição do botão é inválida.');
     }
     await ensureTrustedDebugger(tabId);
     try {
@@ -267,7 +268,25 @@ async function sendTrustedClick(tabId, x, y) {
     } catch (error) {
         try { await chrome.debugger.detach({ tabId }); } catch (_) {}
         trustedDebuggerTabs.delete(tabId);
-        throw new Error('Falha ao clicar no botão Gerar: ' + (error?.message || String(error)));
+        throw new Error('Falha ao clicar no botão: ' + (error?.message || String(error)));
+    }
+}
+
+async function sendTrustedMove(tabId, x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+        throw new Error('A posição da mídia é inválida.');
+    }
+    await ensureTrustedDebugger(tabId);
+    try {
+        await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+            type: 'mouseMoved', x, y, button: 'none', buttons: 0
+        });
+        scheduleTrustedDetach(tabId);
+        return { ok: true };
+    } catch (error) {
+        try { await chrome.debugger.detach({ tabId }); } catch (_) {}
+        trustedDebuggerTabs.delete(tabId);
+        throw new Error('Falha ao posicionar o mouse: ' + (error?.message || String(error)));
     }
 }
 
@@ -280,7 +299,7 @@ chrome.debugger.onDetach.addListener((source) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type !== 'FLOW_TRUSTED_ENTER' && message?.type !== 'FLOW_TRUSTED_CLICK') return false;
+    if (!['FLOW_TRUSTED_ENTER', 'FLOW_TRUSTED_CLICK', 'FLOW_TRUSTED_MOVE'].includes(message?.type)) return false;
     const tabId = sender.tab?.id;
     let allowed = false;
     try {
@@ -294,7 +313,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const action = message.type === 'FLOW_TRUSTED_CLICK'
         ? sendTrustedClick(tabId, Number(message.x), Number(message.y))
-        : sendTrustedEnter(tabId);
+        : message.type === 'FLOW_TRUSTED_MOVE'
+            ? sendTrustedMove(tabId, Number(message.x), Number(message.y))
+            : sendTrustedEnter(tabId);
     action
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));

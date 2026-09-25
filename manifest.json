@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Criadores Dark - Ferramentas IA",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "description": "Ferramentas de automação para Whisk e Flow — compatibilidade Flow setembro/2026",
   "permissions": [
     "scripting",
