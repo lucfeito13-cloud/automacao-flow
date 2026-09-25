@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.2  -   2026-09-25
+//  Flow NOVO v10.3  -   2026-09-25
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -74,6 +74,8 @@
 //         Limpar projeto para iniciar outro trabalho sem herdar estado local.
 //  v10.2: so pula renomeacoes cujo nome atual confere com o Flow; confirma
 //         o nome salvo no servidor e revisita cards que carregam tarde.
+//  v10.3: o modo Gerar um por um de videos usa o envio de video, mesmo sem
+//         iniciar a fila automatica; preserva o envio de imagens.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -476,7 +478,7 @@
       },
       async selectAsset(name, type, opcoes) {
         const { reaproveitar = false, manterAberto = false } = opcoes || {};
-        const useBackspace = document.getElementById(this.videoIsRunning || this._modernTestVideo ? 'fv-use-backspace' : 'flow-use-backspace')?.checked;
+        const useBackspace = document.getElementById(this.videoIsRunning || this._modernIndividualVideo || this._modernTestVideo ? 'fv-use-backspace' : 'flow-use-backspace')?.checked;
         const segurar = manterAberto && !useBackspace;
         // Cada [nome] escrito no prompt vira uma mencao NAQUELE ponto do texto.
         // Pular as repeticoes deixava o prompt sem a mencao no lugar certo — por
@@ -604,6 +606,7 @@
         this._modernPreparedText = cleanEditorText(editor);
         const textoAntes = this.textoSemChips(editor);
         const gerandoAntes = this.getTiles().filter(t => this.tileHasProgress(t)).length;
+        const envioDeVideo = !!(this.videoIsRunning || this._modernIndividualVideo);
 
         const findSubmitButton = () => {
           const exact = $('button[aria-label="Start generation"]');
@@ -667,7 +670,7 @@
 
         // Caminho comprovado da v9.2. Nao usar a ponte, Enter ou eventos extras
         // em videos: o clique simples no button interno era o que funcionava.
-        if (this.videoIsRunning) {
+        if (envioDeVideo) {
           this.logVideoDebug('Vídeo: usando o clique original da v9.2.', 'info');
           btn.click();
           try {
@@ -725,7 +728,7 @@
           }, location.origin);
         });
 
-        this.logDebug((this.videoIsRunning ? 'Vídeo' : 'Imagem') +
+        this.logDebug((envioDeVideo ? 'Vídeo' : 'Imagem') +
           ': enviando clique físico ao botão Gerar em ' + clickX + ',' + clickY + '.', 'info');
         await trustedClick;
 
@@ -751,7 +754,7 @@
           // inexistente, diálogo travado, editor teimoso) vira falha DESTE
           // prompt e a fila segue para o próximo.
           if (erro && erro.stopped) throw erro;
-          const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
+          const reg = this.videoIsRunning || this._modernIndividualVideo ? this.logVideoDebug : this.logDebug;
           try { reg.call(this, `⏭️ Prompt ${prompt.promptNum} pulado: ${erro && erro.message ? erro.message : erro}`, 'error'); } catch (_) {}
           try { await this.closeAssetPicker(); } catch (_) {}
           try { await this.closeMenus(); } catch (_) {}
@@ -2475,6 +2478,7 @@
           throw new Error('Há outra operação em andamento. Aguarde ou pare antes de enviar este prompt.');
         }
         this._modernTaskRunning = true;
+        this._modernIndividualVideo = !!isVideo;
         this.shouldStop = false;
         this.videoShouldStop = false;
         if (button) button.disabled = true;
@@ -2496,6 +2500,7 @@
           statusFn.call(this, 'success', `✅ ${this.esc(prompt.sceneName)} enviado ao Flow. Sem espera de conferência.`);
           return true;
         } finally {
+          this._modernIndividualVideo = false;
           this._modernTaskRunning = false;
           if (button) button.disabled = false;
         }

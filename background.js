@@ -1,6 +1,6 @@
 /**
  * Criadores Dark - Background Service Worker (Inscritos)
- * Versão 1.3.2 - confirmação do nome salvo no Flow
+ * Versão 1.3.3 - correção do envio individual de vídeos
  */
 
 // Servidor original para Whisk, Meta, etc.
