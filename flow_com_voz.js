@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.6  -   2026-09-27
+//  Flow NOVO v10.7  -   2026-09-27
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,8 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.7: favorita pelo menu de contexto nativo apos renomear, inclusive
+//         nos cards compactos que ocultam a barra de hover; confirma a estrela.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -177,7 +179,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v9.9 (vídeo v9.2 + clique físico em imagens)', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.7', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1215,6 +1217,7 @@
         await this.pausa(100);
 
         let btn = $('button[aria-label="More options"], button[aria-label*="opções" i], button[aria-label*="options" i]', tile);
+        if (btn && !visible(btn)) btn = null;
         if (!btn) {
           const btns = $$('button, [role="button"]', tile);
           btn = btns.find(b => {
@@ -1256,7 +1259,8 @@
           }));
         }
 
-        await this.modernWait(() => $$('[role="menu"], .cdk-overlay-pane [role="menuitem"]').some(visible), 3500);
+        const abriu = await this.modernWait(() => $$('[role="menu"], .cdk-overlay-pane [role="menuitem"]').some(visible), 3500);
+        if (!abriu) throw new Error('O menu da mídia não abriu.');
         return true;
       },
       async closeMenus() {
@@ -1471,7 +1475,8 @@
       },
       async apiFavorite(id, value, tileOptional = null) {
         const desejado = !!value;
-        const uiOk = await this.favoritarPeloBotao(id, desejado, tileOptional);
+        const uiOk = await this.favoritarPeloMenu(id, desejado, tileOptional) ||
+          await this.favoritarPeloBotao(id, desejado, tileOptional);
         // O Flow pode mostrar o coração preenchido antes de salvar. Confirmar
         // pelo recurso persistido evita declarar sucesso apenas pela animação.
         if (uiOk && this.idServeNaApi(id) && old.apiReadFavorite) {
@@ -1549,6 +1554,49 @@
           return true;
         } finally {
           paineis.forEach((el, i) => { el.style.pointerEvents = anteriores[i]; });
+        }
+      },
+
+      async favoritarPeloMenu(id, value, tileOptional = null) {
+        let abriu = false;
+        try {
+          const tileId = tileOptional?.isConnected ? this.getUuidFromTile(tileOptional) : '';
+          const tile = tileOptional?.isConnected && (tileId === id || this.workflowIdReal(tileOptional, tileId) === id)
+            ? tileOptional
+            : tileOptional
+              ? this.getTiles().find(t => this.getUuidFromTile(t) === id || this.workflowIdReal(t, this.getUuidFromTile(t)) === id)
+              : await this.scrollToWorkflow(id);
+          if (!tile) throw new Error('Mídia não encontrada para abrir o menu de favorito.');
+          if (this.favoritoNoTile(tile) === !!value) return true;
+          await this.openTileMenu(tile);
+          abriu = true;
+          const rotulos = value
+            ? ['Favourite', 'Favorite', 'Adicionar aos favoritos', 'Adicionar a favoritos', 'Favoritar']
+            : ['Unfavourite', 'Unfavorite', 'Remover dos favoritos', 'Desfavoritar'];
+          const item = menuItem(rotulos);
+          if (!item) throw new Error('Comando Favoritar não encontrado no menu da mídia.');
+          const r = item.getBoundingClientRect();
+          let clicou = false;
+          if (r.width > 4 && r.height > 4) {
+            try {
+              await this.entradaConfiavelNoFlow('CLICK', Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+              clicou = true;
+            } catch (error) {
+              this.logDebug('Favorito: clique confiável no menu indisponível: ' + error.message, 'warning');
+            }
+          }
+          if (!clicou) item.click();
+          const confirmado = await this.modernWait(() => {
+            const atual = tile.isConnected ? tile : this.getTiles().find(t => this.getUuidFromTile(t) === id);
+            return this.favoritoNoTile(atual) === !!value;
+          }, 2500);
+          if (!confirmado) throw new Error('O Flow não confirmou o favorito após o menu.');
+          return true;
+        } catch (error) {
+          this.logDebug('Favoritar pelo menu: ' + error.message, 'warning');
+          return false;
+        } finally {
+          if (abriu) await this.closeMenus();
         }
       },
 

@@ -166,6 +166,41 @@ test('revela coração que só aparece após hover e então clica', async () => 
   assert.equal(await favoritarPeloBotao.call(state, 'id-1', true, tile), true);
 });
 
+test('favorita pelo menu nativo quando a barra de hover está oculta', async () => {
+  let favorito = false;
+  let cliquesSinteticos = 0;
+  let abriu = false;
+  let fechou = false;
+  const item = {
+    getBoundingClientRect: () => ({ left: 10, top: 20, width: 80, height: 30 }),
+    click: () => { cliquesSinteticos++; }
+  };
+  const favoritarPeloMenu = method(
+    '      async favoritarPeloMenu(id, value, tileOptional = null) {',
+    '      botaoFavoritoNoTile(tile) {',
+    ['menuItem'],
+    [labels => labels.includes('Favourite') ? item : null]
+  );
+  const tile = { isConnected: true };
+  const state = {
+    getUuidFromTile: () => 'video-1',
+    workflowIdReal: () => '',
+    favoritoNoTile: () => favorito,
+    openTileMenu: async () => { abriu = true; },
+    entradaConfiavelNoFlow: async (kind, x, y) => {
+      assert.deepEqual([kind, x, y], ['CLICK', 50, 35]);
+      favorito = true;
+    },
+    modernWait: async check => check(),
+    closeMenus: async () => { fechou = true; },
+    logDebug() {}
+  };
+  assert.equal(await favoritarPeloMenu.call(state, 'video-1', true, tile), true);
+  assert.equal(abriu, true);
+  assert.equal(fechou, true);
+  assert.equal(cliquesSinteticos, 0);
+});
+
 test('não declara favorito se nem a interface nem o servidor confirmarem', async () => {
   const old = {
     apiFavorite: async () => true,
@@ -179,6 +214,7 @@ test('não declara favorito se nem a interface nem o servidor confirmarem', asyn
   let patches = 0;
   old.apiFavorite = async () => { patches++; return true; };
   const state = {
+    favoritarPeloMenu: async () => false,
     favoritarPeloBotao: async () => false,
     idServeNaApi: () => true,
     apiComLimite: promise => promise
