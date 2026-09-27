@@ -16,6 +16,12 @@ function method(startMarker, endMarker, names = [], values = []) {
 }
 
 test('favorito do Flow usa FILL, não aria-label fixo, e evita clique duplicado', async () => {
+  const botaoFavoritoNoTile = method(
+    '      botaoFavoritoNoTile(tile) {',
+    '      estadoFavoritoNoBotao(button) {',
+    ['$$'],
+    [(selector, tile) => selector === 'button' ? [tile.button] : []]
+  );
   const estadoFavoritoNoBotao = method(
     '      estadoFavoritoNoBotao(button) {',
     '      async favoritarPeloBotao(id, value, tileOptional = null) {',
@@ -38,6 +44,7 @@ test('favorito do Flow usa FILL, não aria-label fixo, e evita clique duplicado'
   const tile = { isConnected: true, button };
   let scrolls = 0;
   const state = {
+    botaoFavoritoNoTile,
     estadoFavoritoNoBotao,
     favoritoNoTile: current => estadoFavoritoNoBotao(current.button),
     getUuidFromTile: () => 'id-1',
@@ -59,6 +66,12 @@ test('favorito do Flow usa FILL, não aria-label fixo, e evita clique duplicado'
 });
 
 test('favorito não é confirmado se o Flow não mudar o coração', async () => {
+  const botaoFavoritoNoTile = method(
+    '      botaoFavoritoNoTile(tile) {',
+    '      estadoFavoritoNoBotao(button) {',
+    ['$$'],
+    [(selector, tile) => [tile.button]]
+  );
   const estadoFavoritoNoBotao = method(
     '      estadoFavoritoNoBotao(button) {',
     '      async favoritarPeloBotao(id, value, tileOptional = null) {',
@@ -80,6 +93,7 @@ test('favorito não é confirmado se o Flow não mudar o coração', async () =>
     }
   };
   const state = {
+    botaoFavoritoNoTile,
     estadoFavoritoNoBotao,
     favoritoNoTile: current => estadoFavoritoNoBotao(current.button),
     getUuidFromTile: () => 'id-1',
@@ -107,11 +121,49 @@ test('favorito revela o hotbar e usa clique físico no botão correto', async ()
     [{ elementFromPoint: () => button, getElementById: () => null }, () => ({ display: 'block' })]
   );
   const state = {
+    botaoFavoritoNoTile: () => button,
     entradaConfiavelNoFlow: async (...args) => { calls.push(args); return true; },
     modernWait: async check => check()
   };
   assert.equal(await clicarFavoritoFisico.call(state, tile, button), true);
   assert.deepEqual(calls, [['MOVE', 110, 70], ['CLICK', 90, 30]]);
+});
+
+test('localiza coração pelo mat-icon mesmo sem aria-label no botão', () => {
+  const botaoFavoritoNoTile = method(
+    '      botaoFavoritoNoTile(tile) {',
+    '      estadoFavoritoNoBotao(button) {',
+    ['$$'],
+    [(selector, tile) => selector === 'button' ? tile.buttons : []]
+  );
+  const outro = { getAttribute: () => null, querySelector: () => ({ textContent: 'more_vert' }) };
+  const favorito = { getAttribute: () => null, querySelector: () => ({ textContent: 'favorite' }) };
+  assert.equal(botaoFavoritoNoTile({ buttons: [outro, favorito] }), favorito);
+});
+
+test('revela coração que só aparece após hover e então clica', async () => {
+  const favoritarPeloBotao = method(
+    '      async favoritarPeloBotao(id, value, tileOptional = null) {',
+    '      // ── MARCAR AGORA, RENOMEAR PELO BOTAO'
+  );
+  let revelado = false;
+  let preenchido = false;
+  const tile = {
+    isConnected: true,
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 })
+  };
+  const state = {
+    getUuidFromTile: () => 'id-1',
+    workflowIdReal: () => 'id-1',
+    botaoFavoritoNoTile: () => revelado ? {} : null,
+    estadoFavoritoNoBotao: () => preenchido,
+    favoritoNoTile: () => preenchido,
+    entradaConfiavelNoFlow: async tipo => { assert.equal(tipo, 'MOVE'); revelado = true; },
+    clicarFavoritoFisico: async () => { preenchido = true; return true; },
+    modernWait: async check => check(),
+    logDebug() {}
+  };
+  assert.equal(await favoritarPeloBotao.call(state, 'id-1', true, tile), true);
 });
 
 test('não declara favorito se nem a interface nem o servidor confirmarem', async () => {

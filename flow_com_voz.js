@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.5  -   2026-09-25
+//  Flow NOVO v10.6  -   2026-09-27
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -80,6 +80,8 @@
 //         renomeacao ou selecao para download ja concluiu todos os alvos.
 //  v10.5: revela o coracao com hover real, clica pelo Chrome e confirma o
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
+//  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
+//         revela a barra antes de clicar, inclusive quando comeca oculta.
 //
 //  Para trocar de versao: pegue um arquivo antigo e substitua este.
 //  Depois e so dar F5 na pagina do Flow — nao precisa recarregar a extensao.
@@ -1479,7 +1481,7 @@
             if (salvo === null) {
               await this.pausa(350);
               const tile = tileOptional?.isConnected ? tileOptional : this.getTiles().find(t => this.getUuidFromTile(t) === id);
-              const button = tile && $$('button[aria-label]', tile).find(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')));
+              const button = this.botaoFavoritoNoTile(tile);
               if (this.estadoFavoritoNoBotao(button) === desejado) return true;
             }
           } catch (_) {}
@@ -1524,8 +1526,6 @@
       },
 
       async clicarFavoritoFisico(tile, button) {
-        const overlay = tile.querySelector('.hover-overlay');
-        if (overlay && getComputedStyle(overlay).display === 'none') return false;
         const r = tile.getBoundingClientRect();
         if (!r.width || !r.height) return false;
         const paineis = ['flow-panel', 'flow-assign-panel', 'flow-popup', 'flow-mini']
@@ -1536,18 +1536,29 @@
           // O hotbar do Flow tem tamanho zero até o mouse entrar no card.
           await this.entradaConfiavelNoFlow('MOVE', Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
           const pronto = await this.modernWait(() => {
-            const box = button.getBoundingClientRect();
-            return box.width > 4 && box.height > 4 ? box : null;
+            const atual = this.botaoFavoritoNoTile(tile) || button;
+            const box = atual?.getBoundingClientRect();
+            return box?.width > 4 && box?.height > 4 ? { box, button: atual } : null;
           }, 1200);
-          const x = Math.round(pronto.left + pronto.width / 2);
-          const y = Math.round(pronto.top + pronto.height / 2);
+          if (!pronto) return false;
+          const x = Math.round(pronto.box.left + pronto.box.width / 2);
+          const y = Math.round(pronto.box.top + pronto.box.height / 2);
           const sobMouse = document.elementFromPoint(x, y);
-          if (sobMouse !== button && !button.contains(sobMouse)) return false;
+          if (sobMouse !== pronto.button && !pronto.button.contains(sobMouse)) return false;
           await this.entradaConfiavelNoFlow('CLICK', x, y);
           return true;
         } finally {
           paineis.forEach((el, i) => { el.style.pointerEvents = anteriores[i]; });
         }
+      },
+
+      botaoFavoritoNoTile(tile) {
+        if (!tile) return null;
+        return $$('button', tile).find(button => {
+          if (/favou?rite|favorit/i.test(button.getAttribute('aria-label') || '')) return true;
+          const icon = button.querySelector('mat-icon, .material-icons, .material-symbols-rounded');
+          return /^favorite(?:_border)?$/i.test((icon?.textContent || '').trim());
+        }) || null;
       },
 
       estadoFavoritoNoBotao(button) {
@@ -1575,7 +1586,15 @@
             ? this.getTiles().find(t => this.getUuidFromTile(t) === id || this.workflowIdReal(t, this.getUuidFromTile(t)) === id)
             : await this.scrollToWorkflow(id);
           if (!tile) throw new Error('Mídia não encontrada para favoritar.');
-          const target = $$('button[aria-label]', tile).find(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')));
+          let target = this.botaoFavoritoNoTile(tile);
+          if (!target) {
+            // O Flow so monta a barra do card depois do hover.
+            try {
+              const r = tile.getBoundingClientRect();
+              await this.entradaConfiavelNoFlow('MOVE', Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+              target = await this.modernWait(() => this.botaoFavoritoNoTile(tile), 1200);
+            } catch (_) {}
+          }
           if (!target) throw new Error('Botão de favorito não encontrado.');
           const before = this.estadoFavoritoNoBotao(target);
           if (before === !!value) return true;
@@ -1596,8 +1615,7 @@
         } catch (error) { this.logDebug(`Favoritar: ${error.message}`, 'error'); return false; }
       },
       favoritoNoTile(tile) {
-        const button = tile && $$('button[aria-label]', tile).find(b => /favou?rite|favorito/i.test(b.getAttribute('aria-label')));
-        return this.estadoFavoritoNoBotao(button);
+        return this.estadoFavoritoNoBotao(this.botaoFavoritoNoTile(tile));
       },
       // ── MARCAR AGORA, RENOMEAR PELO BOTAO ────────────────────────────────────
       // Arrastar um nome nao mexe no servidor. A caixa fica guardada e so vira
