@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.8  -   2026-09-27
+//  Flow NOVO v10.9  -   2026-09-27
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,8 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.9: confirma vídeo sem UUID pelo nome nativo da galeria; separa nome
+//         salvo de favorito pendente para não repetir renomeações.
 //  v10.8: restaura o botão de opções no renomear e valida o comando do menu;
 //         não fecha overlays reutilizáveis forçando display:none.
 //  v10.7: favorita pelo menu de contexto nativo apos renomear, inclusive
@@ -181,7 +183,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.8', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.9', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1365,6 +1367,10 @@
         if (!tile) return false;
 
         const realId = this.workflowIdReal(tile, id);
+        // Vídeos da galeria podem ter apenas um ID visual (video-*). Neles o
+        // nome nativo exibido pelo Flow é a confirmação disponível; não abra
+        // Rename outra vez quando o nome já está correto.
+        if (!realId && norm(this.getTileName(tile)) === norm(name)) return true;
         if (realId && norm(this.getTileName(tile)) === norm(name) && old.apiReadName) {
           const salvo = await this.apiComLimite(old.apiReadName.call(this, realId), 1800);
           if (norm(salvo) === norm(name)) return true;
@@ -1387,6 +1393,7 @@
           if (!tile) throw new Error('Mídia não encontrada para renomear.');
           if (norm(this.getTileName(tile)) === norm(name)) {
             const realId = this.workflowIdReal(tile, id);
+            if (!realId) return true;
             const salvo = realId && old.apiReadName
               ? await this.apiComLimite(old.apiReadName.call(this, realId), 1800) : null;
             if (norm(salvo) === norm(name)) return true;
@@ -1465,7 +1472,17 @@
           }
 
           const realId = this.workflowIdReal(tile, id);
-          if (!realId || !old.apiReadName) throw new Error('ID real indisponivel para confirmar o nome.');
+          if (!realId) {
+            const nomeNoFlow = () => {
+              const atual = this.getTiles().find(t => t.isConnected && this.getUuidFromTile(t) === id);
+              return !!atual && norm(this.getTileName(atual)) === norm(name);
+            };
+            if (!await this.modernWait(nomeNoFlow, 2500)) throw new Error('O Flow ainda nao mostrou o novo nome.');
+            await this.pausa(220);
+            if (!nomeNoFlow()) throw new Error('O novo nome não permaneceu na galeria.');
+            return true;
+          }
+          if (!old.apiReadName) throw new Error('Leitura do nome salvo indisponível.');
           let confirmado = await this.apiComLimite(old.apiReadName.call(this, realId), 1800);
           if (norm(confirmado) !== norm(name)) {
             await this.pausa(160);
@@ -1622,12 +1639,15 @@
         const pressed = button.getAttribute('aria-pressed');
         if (pressed === 'true' || pressed === 'false') return pressed === 'true';
         const label = (button.getAttribute('aria-label') || '').toLowerCase();
-        if (/remove|remover|unfavorite|desfavoritar/.test(label)) return true;
+        if (/remove|remover|unfavou?rite|desfavoritar/.test(label)) return true;
         if (/add to|adicionar aos|adicionar.*favorit/.test(label)) return false;
         const icon = button.querySelector('mat-icon, .material-icons, .material-symbols-rounded');
+        if (icon?.classList?.contains('fill')) return true;
         const variation = icon ? getComputedStyle(icon).fontVariationSettings : '';
         const fill = /["']?FILL["']?\s*(\d+)/i.exec(variation || '');
-        return fill ? fill[1] === '1' : null;
+        if (fill) return fill[1] === '1';
+        if (/^favou?rite$/.test(label)) return false;
+        return null;
       },
 
       async favoritarPeloBotao(id, value, tileOptional = null) {
@@ -1749,7 +1769,7 @@
         document.querySelectorAll('.flow-assign-item').forEach(item => {
           const nome = item.dataset.name || item.dataset.scene;
           if (nome !== chave) return;
-          item.classList.remove('assigned', 'complete', 'rename-pending', 'rename-confirmed', 'rename-failed');
+          item.classList.remove('assigned', 'complete', 'rename-pending', 'rename-confirmed', 'rename-failed', 'rename-favorite-pending');
           const status = item.querySelector('.assign-status');
           if (estado === 'pending') {
             item.classList.add('assigned', 'rename-pending');
@@ -1766,6 +1786,11 @@
             item.title = 'Atenção: o Flow não confirmou a renomeação; tente novamente';
             item.setAttribute('aria-label', `${nome}: atenção, renomeação não confirmada`);
             if (status) status.textContent = '⚠️';
+          } else if (estado === 'favorite_pending') {
+            item.classList.add('assigned', 'rename-favorite-pending');
+            item.title = 'Nome salvo; favorito ainda não confirmado';
+            item.setAttribute('aria-label', `${nome}: nome salvo, favorito pendente`);
+            if (status) status.textContent = '⭐';
           } else {
             item.removeAttribute('title');
             item.removeAttribute('aria-label');
@@ -1783,7 +1808,9 @@
           (m.tipo === 'ref' && m.referencia === name) ||
           (m.tipo === 'scene' && m.cena === name)
         );
-        this.atualizarEstadoItemAtribuir(name, temPendente ? 'pending' : 'confirmed');
+        const favoritoPendente = pendentes.some(m => m.estado === 'favorite_pending' &&
+          ((m.tipo === 'ref' && m.referencia === name) || (m.tipo === 'scene' && m.cena === name)));
+        this.atualizarEstadoItemAtribuir(name, temPendente ? (favoritoPendente ? 'favorite_pending' : 'pending') : 'confirmed');
       },
       atualizarBotaoRenomearMarcadas() {
         const botao = document.getElementById('flow-assign-rename');
@@ -1805,7 +1832,8 @@
           const temPendente = marcasDoItem.length > 0;
           if (temPendente) {
             const teveFalha = marcasDoItem.some(m => m.estado === 'failed');
-            this.atualizarEstadoItemAtribuir(chave, teveFalha ? 'failed' : 'pending');
+            const faltaFavorito = marcasDoItem.some(m => m.estado === 'favorite_pending');
+            this.atualizarEstadoItemAtribuir(chave, teveFalha ? 'failed' : faltaFavorito ? 'favorite_pending' : 'pending');
             return;
           }
           const atribuidoComoRef = !!(item.dataset.name && this.refAssignments?.get(chave));
@@ -2083,12 +2111,13 @@
             try {
               if (miniSub) miniSub.textContent = `${i + 1} de ${ids.length} · ${marca.nome}`;
               if (miniBar) miniBar.style.width = `${Math.round((i / ids.length) * 100)}%`;
-              marca.estado = 'pending';
-              this.atualizarEstadoItemAtribuir(marca.tipo === 'ref' ? marca.referencia : marca.cena, 'pending');
+              marca.estado = marca.nomeSalvo ? 'favorite_pending' : 'pending';
+              this.atualizarEstadoItemAtribuir(marca.tipo === 'ref' ? marca.referencia : marca.cena, marca.estado);
               const tile = await this.scrollToWorkflow(id);
               tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'renaming'));
               this.logDebug(`🏷️ Renomeando ${i + 1}/${ids.length}: ${marca.nome}`, 'info');
               const renomeou = await this.renomearSelecionadoConfirmado(id, marca.nome, tile);
+              if (renomeou) marca.nomeSalvo = true;
               const deu = renomeou && await this.apiFavorite(id, true, tile);
               if (deu) {
                 ok++;
@@ -2101,9 +2130,9 @@
               } else {
                 falhou++;
                 if (renomeou) this.logDebug('Nome salvo, mas favorito não confirmado: ' + marca.nome, 'warning');
-                marca.estado = 'failed';
-                this.atualizarEstadoItemAtribuir(marca.tipo === 'ref' ? marca.referencia : marca.cena, 'failed');
-                tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'failed'));
+                marca.estado = renomeou ? 'favorite_pending' : 'failed';
+                this.atualizarEstadoItemAtribuir(marca.tipo === 'ref' ? marca.referencia : marca.cena, marca.estado);
+                tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', marca.estado));
               }
             } catch (erro) {
               falhou++;
@@ -2114,9 +2143,10 @@
           }
           this.salvarMarcas(marcas);
           this.updateAssignCount();
+          const nomesSalvos = ids.filter(id => marcas[id]?.nomeSalvo && marcas[id]?.estado === 'favorite_pending').length;
           this.logDebug(
             falhou
-              ? `Renomeação concluída: ${ok} confirmada(s), ${falhou} pendente(s) para tentar novamente.`
+              ? `Renomeação: ${ok} nome(s) e favorito(s) confirmado(s), ${nomesSalvos} nome(s) salvo(s) aguardando favorito, ${falhou - nomesSalvos} renomeação(ões) pendente(s).`
               : `✅ ${ok} mídia(s) renomeada(s) e confirmada(s).`,
             falhou ? 'warning' : 'success'
           );
@@ -2212,7 +2242,7 @@
             if (pendente?.nome) {
               let nomeAtual = '';
               try { nomeAtual = this.getTileName(tile) || ''; } catch (_) {}
-              if (norm(nomeAtual) === norm(pendente.nome)) {
+              if (norm(nomeAtual) === norm(pendente.nome) && this.favoritoNoTile(tile) === true) {
                 delete marcas[id];
                 pendente = null;
                 limpouConfirmadas = true;
@@ -2242,7 +2272,8 @@
             if (data && pendente && !$('.flow-tile-label', tile)) this.addLabelToTile(tile, data.label, id, data.type, data.type === 'ref' ? data.name : data.scene);
             if (pendente) $('.flow-tile-label', tile)?.setAttribute(
               'data-rename-state',
-              pendente.estado === 'failed' ? 'failed' : 'pending'
+              pendente.estado === 'failed' ? 'failed' :
+                pendente.estado === 'favorite_pending' ? 'favorite_pending' : 'pending'
             );
           }
           if (limpouConfirmadas) this.salvarMarcas(marcas);
@@ -3714,6 +3745,7 @@
             const cores = {
               pending: 'background:#fffbeb;border-color:#f59e0b;',
               renaming: 'background:#eff6ff;border-color:#3b82f6;',
+              favorite_pending: 'background:#fffbeb;border-color:#eab308;',
               failed: 'background:#fef2f2;border-color:#ef4444;'
             };
             linha.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 8px;' +
@@ -3732,7 +3764,7 @@
             });
             const texto = document.createElement('span');
             texto.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-            const icone = estado === 'renaming' ? '⏳ ' : estado === 'failed' ? '❌ ' : '📌 ';
+            const icone = estado === 'renaming' ? '⏳ ' : estado === 'favorite_pending' ? '⭐ ' : estado === 'failed' ? '❌ ' : '📌 ';
             const atual = document.createElement('span');
             atual.style.opacity = '.55';
             atual.textContent = (p.name || 'sem nome').slice(0, 30);
@@ -3900,6 +3932,10 @@
                 this.logDebug('Tentativa ' + rodada + ' falhou em ' + p.novo + ': ' + (erroItem?.message || erroItem), 'warning');
               }
 
+              if (deu) {
+                p.nomeSalvo = true;
+                if (marcas[p.uuid]) marcas[p.uuid].nomeSalvo = true;
+              }
               if (deu && tile) {
                 const favorito = await this.apiFavorite(p.uuid, true, tile);
                 if (!favorito) {
@@ -3928,8 +3964,10 @@
               } else {
                 falharamNestaRodada.push(p);
                 const pendente = this._planoRenomear.find(o => o.uuid === p.uuid);
-                if (pendente) pendente.estado = 'failed';
-                tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'failed'));
+                const estado = p.nomeSalvo ? 'favorite_pending' : 'failed';
+                if (pendente) { pendente.estado = estado; pendente.nomeSalvo = !!p.nomeSalvo; }
+                if (marcas[p.uuid]) marcas[p.uuid].estado = estado;
+                tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', estado));
               }
             }
 
@@ -3946,8 +3984,10 @@
           if (this.renomearParar) {
             aviso('⏹ Parado por você: <b>' + ok + '</b> confirmada(s) · <b>' + pendentes.length + '</b> ainda selecionada(s).', 'warning');
           } else {
+            const aguardandoFavorito = pendentes.filter(p => p.nomeSalvo).length;
             aviso((pendentes.length ? '⚠️ ' : '✅ ') + '<b>' + ok + '/' + selecionados.length + '</b> selecionada(s) confirmada(s)' +
-              (pendentes.length ? ' · ' + pendentes.length + ' continuam marcadas após 3 tentativas' : ' · todas concluídas') + '.',
+              (pendentes.length ? ' · ' + aguardandoFavorito + ' nome(s) salvo(s), favorito pendente · ' +
+                (pendentes.length - aguardandoFavorito) + ' renomeação(ões) pendente(s)' : ' · todas concluídas') + '.',
               pendentes.length ? 'warning' : 'success');
           }
         } catch (erro) {
@@ -5050,10 +5090,12 @@
         '.flow-assign-item.rename-confirmed .assign-name,.flow-assign-item.rename-confirmed .assign-status,.flow-assign-item.rename-confirmed .drag-icon{color:#fff!important;font-weight:800!important;text-decoration:none!important;}',
         '.flow-assign-item.rename-failed{background:#fff7ed!important;border-color:#f97316!important;color:#9a3412!important;box-shadow:0 0 0 1px rgba(249,115,22,.18)!important;}',
         '.flow-assign-item.rename-failed .assign-name,.flow-assign-item.rename-failed .assign-status,.flow-assign-item.rename-failed .drag-icon{color:#9a3412!important;font-weight:800!important;}',
+        '.flow-assign-item.rename-favorite-pending{background:#fef9c3!important;border-color:#eab308!important;color:#854d0e!important;}',
         '.flow-tile-label[data-rename-state="pending"]{background:rgba(0,0,0,.88)!important;color:#fff!important;border:1px solid rgba(255,255,255,.35)!important;box-shadow:0 2px 8px rgba(0,0,0,.45)!important;}',
         '.flow-tile-label[data-rename-state="renaming"]{background:#dbeafe!important;color:#1d4ed8!important;border-color:#3b82f6!important;}',
         '.flow-tile-label[data-rename-state="confirmed"]{background:#dcfce7!important;color:#166534!important;border-color:#22c55e!important;}',
         '.flow-tile-label[data-rename-state="failed"]{background:#fee2e2!important;color:#991b1b!important;border-color:#ef4444!important;}',
+        '.flow-tile-label[data-rename-state="favorite_pending"]{background:#fef9c3!important;color:#854d0e!important;border-color:#eab308!important;}',
         '.flow-assign-item.complete:not(.rename-confirmed) .assign-name{color:#14532d!important;font-weight:800!important;text-decoration:none!important;}',
         '.flow-assign-item.missing{opacity:.85!important;}',
         /* quantos prompts foram lidos, nas duas abas */

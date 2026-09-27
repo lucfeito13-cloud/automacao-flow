@@ -235,6 +235,50 @@ test('renomeação volta a usar o botão de opções do card e exige Rename no m
   assert.match(rename, /modernWait\(\(\) => menuItem\(\['Rename', 'Renomear'\]\)/);
 });
 
+test('vídeo sem UUID real já renomeado não é enviado para renomear outra vez', async () => {
+  const renomear = method(
+    '      async renomearSelecionadoConfirmado(id, name, tileOptional = null) {',
+    '      async renomearPeloMenu(id, name, tileOptional = null) {',
+    ['norm', 'old'],
+    [value => String(value || '').trim(), {}]
+  );
+  const tile = { isConnected: true };
+  let abriuMenu = false;
+  const state = {
+    getUuidFromTile: () => 'video-123',
+    workflowIdReal: () => '',
+    getTileName: () => 'cena_43_',
+    renomearPeloMenu: async () => { abriuMenu = true; return false; }
+  };
+  assert.equal(await renomear.call(state, 'video-123', 'cena_43_', tile), true);
+  assert.equal(abriuMenu, false);
+});
+
+test('vídeo sem UUID real confirma o nome pela galeria e mantém favorito pendente', () => {
+  const rename = source.slice(source.indexOf('      async renomearPeloMenu(id, name, tileOptional = null) {'), source.indexOf('      async apiFavorite(id, value, tileOptional = null) {'));
+  const observer = source.slice(source.indexOf('      startLabelObserver() {'), source.indexOf('      async ', source.indexOf('      startLabelObserver() {') + 20));
+  assert.match(rename, /if \(!realId\) \{[\s\S]*?const nomeNoFlow =/);
+  assert.match(rename, /if \(!nomeNoFlow\(\)\) throw new Error/);
+  assert.match(observer, /norm\(nomeAtual\) === norm\(pendente\.nome\) && this\.favoritoNoTile\(tile\) === true/);
+  assert.match(source, /marca\.estado = renomeou \? 'favorite_pending' : 'failed'/);
+});
+
+test('favorito reconhece o estado preenchido e Unfavourite do Flow', () => {
+  const estado = method(
+    '      estadoFavoritoNoBotao(button) {',
+    '      async favoritarPeloBotao(id, value, tileOptional = null) {',
+    ['getComputedStyle'],
+    [() => ({ fontVariationSettings: 'normal' })]
+  );
+  const botao = (label, fill) => ({
+    getAttribute: name => name === 'aria-label' ? label : null,
+    querySelector: () => ({ classList: { contains: name => name === 'fill' && fill } })
+  });
+  assert.equal(estado(botao('Unfavourite', false)), true);
+  assert.equal(estado(botao('Favourite', true)), true);
+  assert.equal(estado(botao('Favourite', false)), false);
+});
+
 test('download interrompe a varredura ao selecionar todos os IDs marcados', () => {
   assert.match(source, /const alvos = new Set\(\[\.\.\.this\.tileAssignments\]/);
   assert.match(source, /if \(!tipoDesconhecido && alvos\.size && encontrados\.size >= alvos\.size\) return false;/);
