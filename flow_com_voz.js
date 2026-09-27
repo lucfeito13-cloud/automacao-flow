@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.7  -   2026-09-27
+//  Flow NOVO v10.8  -   2026-09-27
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,8 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.8: restaura o botão de opções no renomear e valida o comando do menu;
+//         não fecha overlays reutilizáveis forçando display:none.
 //  v10.7: favorita pelo menu de contexto nativo apos renomear, inclusive
 //         nos cards compactos que ocultam a barra de hover; confirma a estrela.
 //
@@ -179,7 +181,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.7', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.8', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1192,8 +1194,9 @@
         const info = document.getElementById('flow-grid-info');
         if (info) info.textContent = `Flow atualizado • ${this.gridCols} coluna(s)`;
       },
-      async openTileMenu(tile) {
+      async openTileMenu(tile, expectedLabels = []) {
         if (!tile?.isConnected) throw new Error('Mídia não está visível na galeria.');
+        if ($$('[role="menu"]').some(visible)) await this.closeMenus();
         tile.scrollIntoView({ block: 'center', inline: 'center' });
 
         // Simula hover completo para o Flow renderizar botões e disparar ações
@@ -1216,8 +1219,10 @@
         }
         await this.pausa(100);
 
+        // O Flow mantém o botão de opções no DOM mesmo quando o overlay do
+        // card está oculto. O click programático nele era o caminho usado pela
+        // renomeação; não o substitua automaticamente por clique direito.
         let btn = $('button[aria-label="More options"], button[aria-label*="opções" i], button[aria-label*="options" i]', tile);
-        if (btn && !visible(btn)) btn = null;
         if (!btn) {
           const btns = $$('button, [role="button"]', tile);
           btn = btns.find(b => {
@@ -1231,6 +1236,13 @@
           });
         }
 
+        const menuCorreto = () => {
+          const items = $$('[role="menuitem"]').filter(visible);
+          if (!items.length) return false;
+          return !expectedLabels.length || items.some(item =>
+            expectedLabels.some(label => controlText(item).toLowerCase() === label.toLowerCase()));
+        };
+
         if (btn) {
           const br = btn.getBoundingClientRect();
           const bx = Math.round(br.left + br.width / 2);
@@ -1241,7 +1253,12 @@
           btn.dispatchEvent(new PointerEvent('pointerup', Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, bOpts)));
           btn.dispatchEvent(new MouseEvent('mouseup', bOpts));
           btn.click();
-        } else {
+        }
+        let abriu = await this.modernWait(menuCorreto, 900);
+        if (!abriu) {
+          // Se o botão mudou ou abriu outro menu, tenta o menu de contexto
+          // nativo da mídia, onde o Flow também oferece Rename/Favourite.
+          await this.closeMenus();
           const target = tile.querySelector('.mat-context-menu-trigger') || inner || tile;
           const tr = target.getBoundingClientRect();
           const tcx = Math.round(tr.left + tr.width / 2);
@@ -1257,10 +1274,9 @@
             screenX: tcx,
             screenY: tcy
           }));
+          abriu = await this.modernWait(menuCorreto, 2500);
         }
-
-        const abriu = await this.modernWait(() => $$('[role="menu"], .cdk-overlay-pane [role="menuitem"]').some(visible), 3500);
-        if (!abriu) throw new Error('O menu da mídia não abriu.');
+        if (!abriu) throw new Error('O menu correto da mídia não abriu.');
         return true;
       },
       async closeMenus() {
@@ -1276,15 +1292,7 @@
             try { el.click(); } catch (_) {}
           });
 
-          const menus = $$('[role="menu"]').filter(visible);
-          if (menus.length) {
-            document.body?.click();
-            await this.sleep(40);
-            menus.forEach(m => {
-              const pane = m.closest('.cdk-overlay-pane') || m;
-              if (pane && pane.style) pane.style.display = 'none';
-            });
-          }
+          if ($$('[role="menu"]').some(visible)) document.body?.click();
         } catch (_) {}
         await this.pausa(60);
       },
@@ -1385,10 +1393,10 @@
           }
 
           // 1. Abre o menu do card (3 pontinhos)
-          await this.openTileMenu(tile);
+          await this.openTileMenu(tile, ['Rename', 'Renomear']);
 
           // 2. Clica no comando Rename / Renomear
-          const rename = menuItem(['Rename', 'Renomear']);
+          const rename = await this.modernWait(() => menuItem(['Rename', 'Renomear']), 1500);
           if (!rename) throw new Error('Comando Renomear não encontrado no menu.');
           rename.click();
 
@@ -1568,11 +1576,11 @@
               : await this.scrollToWorkflow(id);
           if (!tile) throw new Error('Mídia não encontrada para abrir o menu de favorito.');
           if (this.favoritoNoTile(tile) === !!value) return true;
-          await this.openTileMenu(tile);
-          abriu = true;
           const rotulos = value
             ? ['Favourite', 'Favorite', 'Adicionar aos favoritos', 'Adicionar a favoritos', 'Favoritar']
             : ['Unfavourite', 'Unfavorite', 'Remover dos favoritos', 'Desfavoritar'];
+          await this.openTileMenu(tile, rotulos);
+          abriu = true;
           const item = menuItem(rotulos);
           if (!item) throw new Error('Comando Favoritar não encontrado no menu da mídia.');
           const r = item.getBoundingClientRect();

@@ -225,6 +225,16 @@ test('não declara favorito se nem a interface nem o servidor confirmarem', asyn
   assert.equal(await apiFavorite.call(state, 'id-1', true), true);
 });
 
+test('renomeação volta a usar o botão de opções do card e exige Rename no menu', () => {
+  const menu = source.slice(source.indexOf('      async openTileMenu(tile, expectedLabels = []) {'), source.indexOf('      async closeMenus() {'));
+  const rename = source.slice(source.indexOf('      async renomearPeloMenu(id, name, tileOptional = null) {'), source.indexOf('      async apiFavorite(id, value, tileOptional = null) {'));
+  assert.match(menu, /let btn = \$\('button\[aria-label="More options"\]/);
+  assert.doesNotMatch(menu, /if \(btn && !visible\(btn\)\) btn = null/);
+  assert.match(menu, /expectedLabels\.some\(label => controlText\(item\)/);
+  assert.match(rename, /openTileMenu\(tile, \['Rename', 'Renomear'\]\)/);
+  assert.match(rename, /modernWait\(\(\) => menuItem\(\['Rename', 'Renomear'\]\)/);
+});
+
 test('download interrompe a varredura ao selecionar todos os IDs marcados', () => {
   assert.match(source, /const alvos = new Set\(\[\.\.\.this\.tileAssignments\]/);
   assert.match(source, /if \(!tipoDesconhecido && alvos\.size && encontrados\.size >= alvos\.size\) return false;/);
