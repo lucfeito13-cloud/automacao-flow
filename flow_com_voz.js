@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.9  -   2026-09-27
+//  Flow NOVO v10.10  -   2026-09-28
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,8 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.10: botão para favoritar apenas mídias selecionadas já renomeadas;
+//          não chama renomeação e preserva pendências sem confirmação.
 //  v10.9: confirma vídeo sem UUID pelo nome nativo da galeria; separa nome
 //         salvo de favorito pendente para não repetir renomeações.
 //  v10.8: restaura o botão de opções no renomear e valida o comando do menu;
@@ -183,7 +185,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.9', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.10', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -3733,9 +3735,15 @@
        * aquela midia antes de aplicar.
        */
       mostrarPlanoRenomear(plano) {
-        this._planoRenomear = plano.map(p => ({ ...p, selecionado: p.selecionado !== false }));
+        this._planoRenomear = plano.map(p => ({
+          ...p,
+          selecionado: p.selecionado !== false,
+          nomeSalvo: !!(p.nomeSalvo || p.favoritoPendente || p.estado === 'favorite_pending'),
+          estado: p.estado || (p.favoritoPendente ? 'favorite_pending' : undefined)
+        }));
         const painel = document.getElementById('rn-resultado');
         const botao = document.getElementById('rn-aplicar');
+        const botaoFavoritar = document.getElementById('rn-favoritar');
         if (!painel) return;
         const desenhar = () => {
           painel.innerHTML = '';
@@ -3791,6 +3799,12 @@
             botao.style.display = total ? '' : 'none';
             botao.disabled = !!this._renomeando || !n;
             botao.textContent = '🏷️ Renomear selecionadas (' + n + ')';
+          }
+          if (botaoFavoritar) {
+            const n = this._planoRenomear.filter(p => p.selecionado !== false && p.nomeSalvo).length;
+            botaoFavoritar.style.display = n ? '' : 'none';
+            botaoFavoritar.disabled = !!this._renomeando || !n;
+            botaoFavoritar.textContent = '⭐ Favoritar selecionadas (' + n + ')';
           }
         };
         desenhar();
@@ -3855,6 +3869,8 @@
           marcas[p.uuid] = {
             original: anterior?.original || p.name || '',
             nome: p.novo,
+            nomeSalvo: !!(p.nomeSalvo || p.favoritoPendente || anterior?.nomeSalvo),
+            estado: p.favoritoPendente || anterior?.estado === 'favorite_pending' ? 'favorite_pending' : 'pending',
             favoritar: true,
             tipo: 'scene',
             cena,
@@ -3869,12 +3885,72 @@
           const tile = this.getTiles().find(t => this.getUuidFromTile(t) === p.uuid);
           if (tile) {
             this.addLabelToTile(tile, p.novo, p.uuid, 'scene', cena);
-            $('.flow-tile-label', tile)?.setAttribute('data-rename-state', 'pending');
+            $('.flow-tile-label', tile)?.setAttribute('data-rename-state', marcas[p.uuid].estado);
           }
         });
         this.salvarMarcas(marcas);
         this.startLabelObserver();
         this.updateAssignCount();
+      },
+
+      /** Favorita somente as linhas selecionadas cujo nome ja foi salvo no Flow. */
+      async favoritarSelecionadasDoPlano() {
+        const selecionados = (this._planoRenomear || []).filter(p => p.selecionado !== false && p.nomeSalvo);
+        if (!selecionados.length || this._renomeando) return;
+        this._renomeando = true;
+        this.renomearParar = false;
+        const status = document.getElementById('rn-status');
+        const barra = document.getElementById('rn-barra');
+        const marcas = this.lerMarcas();
+        let confirmados = 0, pendentes = 0;
+        try {
+          for (let i = 0; i < selecionados.length; i++) {
+            if (this.renomearParar) break;
+            const p = selecionados[i];
+            if (status) {
+              status.className = 'flow-status info';
+              status.textContent = `⭐ Favoritando ${i + 1}/${selecionados.length}: ${p.novo}`;
+            }
+            if (barra) barra.style.width = Math.round(i / selecionados.length * 100) + '%';
+            try {
+              const tile = await this.scrollToWorkflow(p.uuid);
+              // Nunca altere o favorito de uma mídia errada ou ainda sem o nome
+              // confirmado. Este botão não chama a rotina de renomear.
+              if (!tile || norm(this.getTileName(tile)) !== norm(p.novo)) {
+                throw new Error('Nome salvo não confere com esta mídia.');
+              }
+              const estado = this.favoritoNoTile(tile);
+              if (estado === null) throw new Error('Estado do favorito não pôde ser lido com segurança.');
+              const favorito = estado === true || await this.apiFavorite(p.uuid, true, tile);
+              if (!favorito) throw new Error('O Flow não confirmou o favorito.');
+
+              confirmados++;
+              this.registrarRenomeacaoConfirmada(p.uuid, {
+                nome: p.novo, tipo: 'scene', cena: 'Cena ' + p.cena,
+                imgNum: p.g, isVideo: !!p.isVideo
+              }, tile);
+              delete marcas[p.uuid];
+              this.removeLabelFromTile(p.uuid);
+              this._planoRenomear = this._planoRenomear.filter(item => item.uuid !== p.uuid);
+            } catch (erro) {
+              pendentes++;
+              const item = this._planoRenomear.find(item => item.uuid === p.uuid);
+              if (item) { item.nomeSalvo = true; item.estado = 'favorite_pending'; }
+              if (marcas[p.uuid]) { marcas[p.uuid].nomeSalvo = true; marcas[p.uuid].estado = 'favorite_pending'; }
+              this.logDebug(`Favorito pendente em ${p.novo}: ${erro?.message || erro}`, 'warning');
+            }
+            this.salvarMarcas(marcas);
+          }
+          if (barra) barra.style.width = '100%';
+          if (status) {
+            status.className = 'flow-status ' + (pendentes ? 'warning' : 'success');
+            status.textContent = `⭐ ${confirmados} favorito(s) confirmado(s); ${pendentes} pendente(s). Nenhum nome foi alterado.`;
+          }
+        } finally {
+          this._renomeando = false;
+          this.mostrarPlanoRenomear(this._planoRenomear || []);
+          this.updateAssignCount();
+        }
       },
 
       /** Aplica o que sobrou na lista depois das suas remocoes. */
@@ -4569,6 +4645,7 @@
           '</div>' +
           '<button class="flow-validate-btn" id="rn-testar" style="display:none;">analisar</button>' +
           '<button class="flow-btn flow-btn-primary" id="rn-aplicar" style="width:100%;margin-top:6px;display:none;" disabled>✅ Aplicar renomeação</button>' +
+          '<button class="flow-btn flow-btn-secondary" id="rn-favoritar" style="width:100%;margin-top:6px;display:none;" disabled>⭐ Favoritar selecionadas</button>' +
           '<div style="font-size:11px;color:var(--cd-text-muted);margin:2px 0 8px;line-height:1.5;">' +
             '1) Clique em <b>🔎 Ler e montar caixas</b>. 2) Confira ou retire itens. 3) Clique em <b>🏷️ Renomear selecionadas</b>.' +
           '</div>' +
@@ -4657,6 +4734,10 @@
       document.getElementById('rn-aplicar').addEventListener('click', () => {
         const alvo = root.__flowInstance;
         if (alvo) alvo.aplicarPlanoRenomear();
+      });
+      document.getElementById('rn-favoritar').addEventListener('click', () => {
+        const alvo = root.__flowInstance;
+        if (alvo) alvo.favoritarSelecionadasDoPlano();
       });
       document.getElementById('rn-stop').addEventListener('click', () => {
         const alvo = root.__flowInstance;

@@ -279,6 +279,45 @@ test('favorito reconhece o estado preenchido e Unfavourite do Flow', () => {
   assert.equal(estado(botao('Favourite', false)), false);
 });
 
+test('botão Favoritar selecionadas não renomeia nem toca linhas sem nome salvo', async () => {
+  const status = { className: '', textContent: '' };
+  const barra = { style: {} };
+  const favoritar = method(
+    '      async favoritarSelecionadasDoPlano() {',
+    '      /** Aplica o que sobrou na lista depois das suas remocoes. */',
+    ['document', 'norm'],
+    [{ getElementById: id => id === 'rn-status' ? status : barra }, value => String(value || '').trim()]
+  );
+  const marcas = { salvo: { nome: 'Cena 1', nomeSalvo: true }, naoSalvo: { nome: 'Cena 2' } };
+  const nomes = [];
+  const favoritos = [];
+  const state = {
+    _planoRenomear: [
+      { uuid: 'salvo', novo: 'Cena 1', nomeSalvo: true, selecionado: true, cena: 1, g: 1, isVideo: true },
+      { uuid: 'naoSalvo', novo: 'Cena 2', nomeSalvo: false, selecionado: true, cena: 2, g: 1, isVideo: true }
+    ],
+    lerMarcas: () => marcas,
+    scrollToWorkflow: async id => ({ id }),
+    getTileName: tile => { nomes.push(tile.id); return tile.id === 'salvo' ? 'Cena 1' : 'Cena 2'; },
+    favoritoNoTile: () => false,
+    apiFavorite: async id => { favoritos.push(id); return true; },
+    registrarRenomeacaoConfirmada() {},
+    removeLabelFromTile() {},
+    salvarMarcas() {},
+    mostrarPlanoRenomear() {},
+    updateAssignCount() {},
+    logDebug() {},
+    apiRename: () => { throw new Error('não pode renomear'); },
+    renomearPeloMenu: () => { throw new Error('não pode renomear'); }
+  };
+  await favoritar.call(state);
+  assert.deepEqual(nomes, ['salvo']);
+  assert.deepEqual(favoritos, ['salvo']);
+  assert.equal(state._planoRenomear.length, 1);
+  assert.equal(marcas.salvo, undefined);
+  assert.match(status.textContent, /Nenhum nome foi alterado/);
+});
+
 test('download interrompe a varredura ao selecionar todos os IDs marcados', () => {
   assert.match(source, /const alvos = new Set\(\[\.\.\.this\.tileAssignments\]/);
   assert.match(source, /if \(!tipoDesconhecido && alvos\.size && encontrados\.size >= alvos\.size\) return false;/);
