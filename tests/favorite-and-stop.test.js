@@ -318,6 +318,69 @@ test('botão Favoritar selecionadas não renomeia nem toca linhas sem nome salvo
   assert.match(status.textContent, /Nenhum nome foi alterado/);
 });
 
+test('painel Atribuir favorita só caixas com nome confirmado e preserva as demais', async () => {
+  const favoritar = method(
+    '      async favoritarMarcasSemRenomear() {',
+    '      async validateReferences(source = \'images\') {',
+    ['norm'],
+    [value => String(value || '').trim()]
+  );
+  const marcas = {
+    pronta: { nome: 'REF_1', tipo: 'ref', referencia: 'REF_1' },
+    errada: { nome: 'REF_2', tipo: 'ref', referencia: 'REF_2' },
+    favorita: { nome: 'REF_3', tipo: 'ref', referencia: 'REF_3' }
+  };
+  const favorites = [];
+  const state = {
+    lerMarcas: () => marcas,
+    atualizarBotaoRenomearMarcadas() {},
+    scrollToWorkflow: async id => ({ id }),
+    getUuidFromTile: tile => tile.id,
+    getTileName: tile => tile.id === 'errada' ? 'Nome antigo' : marcas[tile.id].nome,
+    favoritoNoTile: tile => tile.id === 'favorita',
+    apiFavorite: async id => { favorites.push(id); return true; },
+    registrarRenomeacaoConfirmada() {},
+    updateAssignItemUI() {},
+    removeLabelFromTile() {},
+    salvarMarcas() {},
+    updateAssignCount() {},
+    logDebug() {},
+    apiRename: () => { throw new Error('não pode renomear'); }
+  };
+  await favoritar.call(state);
+  assert.deepEqual(favorites, ['pronta']);
+  assert.deepEqual(Object.keys(marcas), ['errada']);
+  assert.equal(state._favoritandoMarcas, false);
+  assert.match(source, /id="flow-assign-favorite"/);
+});
+
+test('mídia já renomeada mas sem favorito continua selecionada para favoritar', () => {
+  const marcar = method(
+    '      marcar(id, dados) {',
+    '      desmarcar(id) {',
+    ['norm'],
+    [value => String(value || '').trim()]
+  );
+  const marcas = {};
+  const historico = { id: { nome: 'REF_1' } };
+  const tile = { id: 'id' };
+  const state = {
+    lerMarcas: () => marcas,
+    lerHistoricoRenomeacao: () => historico,
+    getTiles: () => [tile],
+    getUuidFromTile: item => item.id,
+    getTileName: () => 'REF_1',
+    favoritoNoTile: () => false,
+    salvarMarcas() {},
+    startLabelObserver() {},
+    salvarHistoricoRenomeacao() { throw new Error('não deve apagar o histórico'); }
+  };
+  marcar.call(state, 'id', { nome: 'REF_1', tipo: 'ref', referencia: 'REF_1' });
+  assert.equal(marcas.id.nomeSalvo, true);
+  assert.equal(marcas.id.estado, 'favorite_pending');
+  assert.equal(historico.id.nome, 'REF_1');
+});
+
 test('download interrompe a varredura ao selecionar todos os IDs marcados', () => {
   assert.match(source, /const alvos = new Set\(\[\.\.\.this\.tileAssignments\]/);
   assert.match(source, /if \(!tipoDesconhecido && alvos\.size && encontrados\.size >= alvos\.size\) return false;/);

@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.10  -   2026-09-28
+//  Flow NOVO v10.11  -   2026-09-29
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,8 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.11: Favoritar selecionadas também no painel Atribuir; mídias com nome
+//          já salvo e coração desligado permanecem na seleção.
 //  v10.10: botão para favoritar apenas mídias selecionadas já renomeadas;
 //          não chama renomeação e preserva pendências sem confirmação.
 //  v10.9: confirma vídeo sem UUID pelo nome nativo da galeria; separa nome
@@ -185,7 +187,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.10', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.11', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1821,10 +1823,17 @@
         const pendentes = Object.values(marcas);
         const total = pendentes.length;
         botao.style.display = 'inline-flex';
-        botao.disabled = !!this._aplicandoMarcas || total === 0;
+        botao.disabled = !!this._aplicandoMarcas || !!this._favoritandoMarcas || total === 0;
         botao.textContent = this._aplicandoMarcas
           ? '⏳ Renomeando...'
           : `🏷️ Renomear selecionadas (${total})`;
+        const favorito = document.getElementById('flow-assign-favorite');
+        if (favorito) {
+          favorito.disabled = !!this._aplicandoMarcas || !!this._favoritandoMarcas || total === 0;
+          favorito.textContent = this._favoritandoMarcas
+            ? '⏳ Favoritando...'
+            : `⭐ Favoritar selecionadas (${total})`;
+        }
         document.querySelectorAll('.flow-assign-item').forEach(item => {
           const chave = item.dataset.name || item.dataset.scene;
           const marcasDoItem = pendentes.filter(m =>
@@ -1853,8 +1862,9 @@
         const historico = this.lerHistoricoRenomeacao();
         const confirmado = historico[id];
         const tileAtual = this.getTiles().find(t => this.getUuidFromTile(t) === id);
-        if (confirmado && norm(confirmado.nome) === norm(dados?.nome) &&
-            tileAtual && norm(this.getTileName(tileAtual)) === norm(dados.nome)) {
+        const nomeJaSalvo = !!(confirmado && norm(confirmado.nome) === norm(dados?.nome) &&
+          tileAtual && norm(this.getTileName(tileAtual)) === norm(dados.nome));
+        if (nomeJaSalvo && this.favoritoNoTile(tileAtual) === true) {
           delete marcas[id];
           this.salvarMarcas(marcas);
           this.removeLabelFromTile?.(id);
@@ -1865,7 +1875,7 @@
         }
         // Se o destino mudou, a confirmação antiga deixa de valer e a nova
         // seleção passa a ser uma pendência normal.
-        if (confirmado) {
+        if (confirmado && !nomeJaSalvo) {
           delete historico[id];
           this.salvarHistoricoRenomeacao(historico);
         }
@@ -1876,7 +1886,8 @@
           try { original = this.getTileName(this.getTiles().find(t => this.getUuidFromTile(t) === id)) || ''; }
           catch (_) { original = ''; }
         }
-        marcas[id] = Object.assign({ original, estado: 'pending' }, dados);
+        marcas[id] = Object.assign({ original, estado: 'pending' }, dados,
+          nomeJaSalvo ? { nomeSalvo: true, estado: 'favorite_pending' } : {});
         this.salvarMarcas(marcas);
         // assignScene/assignReference chamam o observador antes de salvar a
         // marca; com a pausa inteligente, garantimos a ativacao depois dela.
@@ -2157,6 +2168,53 @@
           if (miniBar) miniBar.style.width = '100%';
           if (mini) mini.style.display = 'none';
           this.mostrarBarraDeAtualizar();
+          this.atualizarBotaoRenomearMarcadas();
+        }
+      },
+      /** Favorita só as caixas cujo nome já está realmente salvo no Flow. */
+      async favoritarMarcasSemRenomear() {
+        if (this._aplicandoMarcas || this._favoritandoMarcas) return;
+        const marcas = this.lerMarcas();
+        const ids = Object.keys(marcas).sort((a, b) => (marcas[a]?.ordem || 0) - (marcas[b]?.ordem || 0));
+        if (!ids.length) return;
+        this._favoritandoMarcas = true;
+        this.atualizarBotaoRenomearMarcadas();
+        let ok = 0, ignoradas = 0;
+        try {
+          for (const id of ids) {
+            const marca = marcas[id];
+            const tile = await this.scrollToWorkflow(id);
+            if (!tile || this.getUuidFromTile(tile) !== id || norm(this.getTileName(tile)) !== norm(marca.nome)) {
+              ignoradas++;
+              this.logDebug(`⭐ Ignorada (nome ainda não confirmado no Flow): ${marca.nome}`, 'warning');
+              continue;
+            }
+            try {
+              const jaFavorita = this.favoritoNoTile(tile) === true;
+              const confirmou = jaFavorita || await this.apiFavorite(id, true, tile);
+              if (!confirmou) {
+                marca.nomeSalvo = true;
+                marca.estado = 'favorite_pending';
+                ignoradas++;
+                this.logDebug(`⭐ Favorito ainda não confirmado: ${marca.nome}`, 'warning');
+                continue;
+              }
+              this.registrarRenomeacaoConfirmada(id, marca, tile);
+              this.updateAssignItemUI(marca.tipo === 'ref' ? marca.referencia : marca.cena, true);
+              delete marcas[id];
+              this.removeLabelFromTile(id);
+              ok++;
+            } catch (erro) {
+              ignoradas++;
+              this.logDebug(`⭐ ${marca.nome}: ${erro?.message || erro}`, 'warning');
+            } finally {
+              this.salvarMarcas(marcas);
+            }
+          }
+          this.updateAssignCount();
+          this.logDebug(`⭐ Favoritas confirmadas: ${ok}; permanecem pendentes: ${ignoradas}.`, ignoradas ? 'warning' : 'success');
+        } finally {
+          this._favoritandoMarcas = false;
           this.atualizarBotaoRenomearMarcadas();
         }
       },
@@ -5100,6 +5158,7 @@
         '#flow-assign-panel.canto .flow-assign-header h3{font-size:12px;flex:1 1 auto;}',
         '#flow-assign-panel.canto .flow-assign-count,',
         '#flow-assign-panel.canto #flow-assign-rename,',
+        '#flow-assign-panel.canto #flow-assign-favorite,',
         '#flow-assign-panel.canto #flow-assign-download,',
         '#flow-assign-panel.canto #flow-assign-auto,',
         '#flow-assign-panel.canto #flow-assign-clear,',
@@ -5429,6 +5488,11 @@
         if (!botao || botao._flowLigado) return;
         botao._flowLigado = true;
         botao.addEventListener('click', () => this.aplicarMarcas());
+        const favorito = document.getElementById('flow-assign-favorite');
+        if (favorito && !favorito._flowLigado) {
+          favorito._flowLigado = true;
+          favorito.addEventListener('click', () => this.favoritarMarcasSemRenomear());
+        }
         this.atualizarBotaoRenomearMarcadas();
       };
       for (const ms of [100, 500, 1500]) setTimeout(ligarBotaoRenomearMarcadas, ms);
@@ -6654,6 +6718,7 @@ function triggerTrustedClick(el) {
     <span class="flow-assign-count" id="flow-assign-count"></span>
     <div class="flow-assign-header-btns">
       <button class="flow-assign-dl-btn" id="flow-assign-rename" disabled title="Arraste uma cena para uma mídia antes de iniciar" style="display:inline-flex;background:#2563eb;color:#fff;border-color:#2563eb;">🏷️ Renomear selecionadas (0)</button>
+      <button class="flow-assign-dl-btn" id="flow-assign-favorite" disabled title="Favorita só as mídias selecionadas cujo nome já está salvo no Flow, sem renomear" style="display:inline-flex;background:#f59e0b;color:#fff;border-color:#f59e0b;">⭐ Favoritar selecionadas (0)</button>
       <button class="flow-assign-dl-btn" id="flow-assign-download" style="display:none;">⬇️ Baixar Cenas</button>
       <button class="flow-assign-hbtn" id="flow-assign-auto" title="Lê os prompts e monta automaticamente as caixas de renomeação">⚡ Auto</button>
       <button class="flow-assign-hbtn" id="flow-assign-clear" title="Limpar somente as caixas e pendências ainda não confirmadas">🧹 Seleção</button>
