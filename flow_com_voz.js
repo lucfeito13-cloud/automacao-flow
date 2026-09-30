@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.14  -   2026-09-30
+//  Flow NOVO v10.15  -   2026-09-30
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,8 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.15: opção de personalizar sigla também na aba Renomear, com prévia
+//          e aplicação ao formato usado pelo renomeador automático.
 //  v10.14: personalização de sigla no modo cena por vez, com três dígitos
 //          (S_023_); configuração própria e reconhecimento do nome salvo.
 //  v10.13: favorito tenta primeiro o coração; hover só quando a barra está
@@ -193,7 +195,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.14', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.15', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -4728,8 +4730,16 @@
               '</div>' +
               '<input type="text" id="rn-modelo" class="flow-textarea" style="min-height:auto;padding:8px 10px;margin-top:8px;font-family:monospace;">' +
               '<div style="font-size:11px;color:var(--cd-text-muted);margin-top:6px;line-height:1.6;">' +
-                '<b>{n}</b> nº da cena · <b>{g}</b> nº da variação · <b>{tipo}</b> Imagem/Vídeo · <b>{nn}</b>/<b>{gg}</b> com dois dígitos' +
+                '<b>{n}</b> nº da cena · <b>{g}</b> nº da variação · <b>{tipo}</b> Imagem/Vídeo · <b>{nn}</b>/<b>{gg}</b> com dois dígitos · <b>{nnn}</b> cena com três dígitos' +
               '</div>' +
+              '<details style="margin-top:10px;border:1px solid var(--cd-border-light);border-radius:7px;padding:8px;">' +
+                '<summary style="cursor:pointer;font-size:12px;font-weight:700;">⚙️ Personalizar sigla</summary>' +
+                '<label style="display:block;margin-top:8px;font-size:11px;">Sigla inicial' +
+                  '<input type="text" id="rn-sigla" maxlength="24" placeholder="S" class="flow-textarea" style="min-height:auto;padding:7px 9px;margin-top:4px;"></label>' +
+                '<div id="rn-sigla-preview" style="font-size:12px;margin-top:7px;"></div>' +
+                '<button type="button" id="rn-usar-sigla" class="flow-validate-btn" style="margin-top:8px;">Usar este formato</button>' +
+                '<div style="font-size:11px;color:var(--cd-text-muted);margin-top:6px;">Depois de aplicar, marque “Numerar as variações” abaixo se quiser nomes diferentes para cada resultado.</div>' +
+              '</details>' +
               '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;cursor:pointer;font-size:12px;">' +
                 '<input type="checkbox" id="rn-variacao" style="margin-top:2px;">' +
                 '<span><b>Numerar as variações</b><br><span style="color:var(--cd-text-light);font-size:11px;">' +
@@ -4782,6 +4792,18 @@
       const caixaVar = document.getElementById('rn-variacao');
       const temVar = m => { const s = String(m).toLowerCase(); return s.includes('{g}') || s.includes('{gg}'); };
       campo.value = lerModelo();
+      const campoSigla = document.getElementById('rn-sigla');
+      const formatoSigla = campo.value.match(/^(.+)_\{nnn\}_(?:\{g\}_)?$/i);
+      try { campoSigla.value = limparSiglaContinuidade(formatoSigla?.[1] || localStorage.getItem('flow_renomear_sigla') || 'S'); }
+      catch (_) { campoSigla.value = 'S'; }
+      const atualizarSigla = () => {
+        const sigla = limparSiglaContinuidade(campoSigla.value);
+        document.getElementById('rn-sigla-preview').textContent = 'Exemplo: ' + montarNome(23, 1, false, sigla + '_{nnn}_');
+        try { localStorage.setItem('flow_renomear_sigla', sigla); } catch (_) {}
+      };
+      campoSigla.addEventListener('input', atualizarSigla);
+      campoSigla.addEventListener('blur', () => { campoSigla.value = limparSiglaContinuidade(campoSigla.value); atualizarSigla(); });
+      atualizarSigla();
 
       const atualizar = (salvar) => {
         const modelo = campo.value.trim() || MODELO_PADRAO;
@@ -4799,6 +4821,12 @@
       campo.addEventListener('input', () => atualizar(false));
       campo.addEventListener('change', () => atualizar(true));
       campo.addEventListener('blur', () => atualizar(true));
+      document.getElementById('rn-usar-sigla').addEventListener('click', () => {
+        campoSigla.value = limparSiglaContinuidade(campoSigla.value);
+        campo.value = campoSigla.value + '_{nnn}_';
+        atualizarSigla();
+        atualizar(true);
+      });
       conteudo.querySelectorAll('[data-rnmodelo]').forEach(b => {
         b.addEventListener('click', () => { campo.value = b.getAttribute('data-rnmodelo'); atualizar(true); });
       });
