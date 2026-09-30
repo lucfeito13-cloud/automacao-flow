@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.12  -   2026-09-30
+//  Flow NOVO v10.13  -   2026-09-30
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,8 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.13: favorito tenta primeiro o coração; hover só quando a barra está
+//          oculta e menu somente como alternativa se o botão não confirmar.
 //  v10.12: cena por vez usa só as referências do prompt; nome confirmado
 //          libera a próxima cena e falhas de favorito ficam salvas como pendência.
 //  v10.11: Favoritar selecionadas também no painel Atribuir; mídias com nome
@@ -189,7 +191,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.12', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.13', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1506,8 +1508,8 @@
       },
       async apiFavorite(id, value, tileOptional = null) {
         const desejado = !!value;
-        const uiOk = await this.favoritarPeloMenu(id, desejado, tileOptional) ||
-          await this.favoritarPeloBotao(id, desejado, tileOptional);
+        const uiOk = await this.favoritarPeloBotao(id, desejado, tileOptional) ||
+          await this.favoritarPeloMenu(id, desejado, tileOptional);
         // O Flow pode mostrar o coração preenchido antes de salvar. Confirmar
         // pelo recurso persistido evita declarar sucesso apenas pela animação.
         if (uiOk && this.idServeNaApi(id) && old.apiReadFavorite) {
@@ -1569,13 +1571,18 @@
         const anteriores = paineis.map(el => el.style.pointerEvents);
         paineis.forEach(el => { el.style.pointerEvents = 'none'; });
         try {
-          // O hotbar do Flow tem tamanho zero até o mouse entrar no card.
-          await this.entradaConfiavelNoFlow('MOVE', Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
-          const pronto = await this.modernWait(() => {
+          const localizar = () => {
             const atual = this.botaoFavoritoNoTile(tile) || button;
             const box = atual?.getBoundingClientRect();
             return box?.width > 4 && box?.height > 4 ? { box, button: atual } : null;
-          }, 1200);
+          };
+          let pronto = localizar();
+          // Depois de renomear ou revelar a barra, o coração já pode estar
+          // visível. Só fazemos hover quando o Flow ainda não o mostrou.
+          if (!pronto) {
+            await this.entradaConfiavelNoFlow('MOVE', Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+            pronto = await this.modernWait(localizar, 1200);
+          }
           if (!pronto) return false;
           const x = Math.round(pronto.box.left + pronto.box.width / 2);
           const y = Math.round(pronto.box.top + pronto.box.height / 2);

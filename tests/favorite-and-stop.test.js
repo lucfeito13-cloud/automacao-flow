@@ -106,8 +106,9 @@ test('favorito não é confirmado se o Flow não mudar o coração', async () =>
 
 test('favorito revela o hotbar e usa clique físico no botão correto', async () => {
   const calls = [];
+  let visivel = false;
   const button = {
-    getBoundingClientRect: () => ({ left: 80, top: 20, width: 20, height: 20 }),
+    getBoundingClientRect: () => ({ left: 80, top: 20, width: visivel ? 20 : 0, height: visivel ? 20 : 0 }),
     contains: () => false
   };
   const tile = {
@@ -122,11 +123,14 @@ test('favorito revela o hotbar e usa clique físico no botão correto', async ()
   );
   const state = {
     botaoFavoritoNoTile: () => button,
-    entradaConfiavelNoFlow: async (...args) => { calls.push(args); return true; },
+    entradaConfiavelNoFlow: async (...args) => { calls.push(args); if (args[0] === 'MOVE') visivel = true; return true; },
     modernWait: async check => check()
   };
   assert.equal(await clicarFavoritoFisico.call(state, tile, button), true);
   assert.deepEqual(calls, [['MOVE', 110, 70], ['CLICK', 90, 30]]);
+  calls.length = 0;
+  assert.equal(await clicarFavoritoFisico.call(state, tile, button), true);
+  assert.deepEqual(calls, [['CLICK', 90, 30]], 'coração visível recebe apenas o clique');
 });
 
 test('localiza coração pelo mat-icon mesmo sem aria-label no botão', () => {
@@ -225,6 +229,27 @@ test('não declara favorito se nem a interface nem o servidor confirmarem', asyn
   assert.equal(await apiFavorite.call(state, 'id-1', true), true);
 });
 
+test('favorito prioriza coração e só abre menu se o clique direto não confirmar', async () => {
+  const apiFavorite = method(
+    '      async apiFavorite(id, value, tileOptional = null) {',
+    '      async entradaConfiavelNoFlow(tipo, x, y) {',
+    ['old'], [{}]
+  );
+  const calls = [];
+  let direto = true;
+  const state = {
+    favoritarPeloBotao: async () => { calls.push('coracao'); return direto; },
+    favoritarPeloMenu: async () => { calls.push('menu'); return true; },
+    idServeNaApi: () => false
+  };
+  assert.equal(await apiFavorite.call(state, 'video-1', true), true);
+  assert.deepEqual(calls, ['coracao']);
+  calls.length = 0;
+  direto = false;
+  assert.equal(await apiFavorite.call(state, 'video-1', true), true);
+  assert.deepEqual(calls, ['coracao', 'menu']);
+});
+
 test('renomeação volta a usar o botão de opções do card e exige Rename no menu', () => {
   const menu = source.slice(source.indexOf('      async openTileMenu(tile, expectedLabels = []) {'), source.indexOf('      async closeMenus() {'));
   const rename = source.slice(source.indexOf('      async renomearPeloMenu(id, name, tileOptional = null) {'), source.indexOf('      async apiFavorite(id, value, tileOptional = null) {'));
@@ -275,6 +300,7 @@ test('favorito reconhece o estado preenchido e Unfavourite do Flow', () => {
     querySelector: () => ({ classList: { contains: name => name === 'fill' && fill } })
   });
   assert.equal(estado(botao('Unfavourite', false)), true);
+  assert.equal(estado(botao('Remove favourite', false)), true);
   assert.equal(estado(botao('Favourite', true)), true);
   assert.equal(estado(botao('Favourite', false)), false);
 });
