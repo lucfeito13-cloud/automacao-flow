@@ -23,7 +23,7 @@ async function execute(video, renameFails = false) {
   const document = { getElementById: id => id.endsWith('-prompts-input') ? elements.input :
     id.endsWith('-start-from') ? elements.resume : id.endsWith('-start-btn') ? elements.start :
     id.endsWith('-stop-btn') ? elements.stop : null };
-  const run = Function('document', 'parsePromptsText', 'lerModelo', 'montarNome', 'localStorage', 'stopError',
+  const run = Function('document', 'parsePromptsText', 'lerModeloContinuidade', 'montarNome', 'localStorage', 'stopError',
     `return ({${definition}}).runContinuity;`)(document, parsePromptsText, () => 'modelo', n => nome(n),
     { getItem: () => null }, () => new Error('parada'));
   const sent = [], rows = [], favorites = [], checkpoints = [], titles = new Map();
@@ -82,4 +82,28 @@ test('continuidade para se o nome falhar e guarda a mídia sem gerar a próxima 
   assert.equal(result.favorites.length, 0);
   assert.equal(result.marks['id-1'].estado, 'failed');
   assert.ok(result.rows.some(([index, status]) => index === 0 && status === 'error'));
+});
+
+test('sigla personalizada formata e reconhece a cena com três dígitos sem mudar o formato normal', () => {
+  const start = source.indexOf("    const MODELO_PADRAO = 'Cena {n} - {tipo} {g}';");
+  const end = source.indexOf('    Object.assign(proto, {', start);
+  const settings = new Map([
+    ['flow_modelo_nome', 'cena_{n}_{g}_'],
+    ['flow_continuidade_sigla_nome', JSON.stringify({ ativo: true, sigla: 'S_' })]
+  ]);
+  const helpers = Function('localStorage', 'norm', source.slice(start, end) +
+    '; return { lerModelo, lerModeloContinuidade, montarNome, lerNomeModelo };')(
+      { getItem: key => settings.get(key) || null }, text => String(text || '').trim());
+  assert.equal(helpers.lerModelo(), 'cena_{n}_{g}_');
+  assert.equal(helpers.lerModeloContinuidade(), 'S_{nnn}_');
+  assert.equal(helpers.montarNome(23, 1, false, helpers.lerModeloContinuidade()), 'S_023_');
+  assert.equal(helpers.montarNome(1, 1, true, helpers.lerModeloContinuidade()), 'S_001_');
+  assert.equal(helpers.montarNome(1234, 1, true, helpers.lerModeloContinuidade()), 'S_1234_');
+  assert.equal(helpers.lerNomeModelo('S_023_').sceneNum, 23);
+  settings.set('flow_continuidade_sigla_nome', JSON.stringify({ ativo: true, sigla: 'LOC' }));
+  assert.equal(helpers.montarNome(23, 1, false, helpers.lerModeloContinuidade()), 'LOC_023_');
+  assert.equal(helpers.lerNomeModelo('LOC_023_').sceneNum, 23);
+  settings.set('flow_continuidade_sigla_nome', JSON.stringify({ ativo: false, sigla: 'LOC' }));
+  assert.equal(helpers.lerModeloContinuidade(), 'cena_{n}_{g}_');
+  assert.equal(helpers.lerNomeModelo('LOC_023_').sceneNum, 23, 'nome salvo continua reconhecido com a opção desligada');
 });

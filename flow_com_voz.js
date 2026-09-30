@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.13  -   2026-09-30
+//  Flow NOVO v10.14  -   2026-09-30
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,8 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.14: personalização de sigla no modo cena por vez, com três dígitos
+//          (S_023_); configuração própria e reconhecimento do nome salvo.
 //  v10.13: favorito tenta primeiro o coração; hover só quando a barra está
 //          oculta e menu somente como alternativa se o botão não confirmar.
 //  v10.12: cena por vez usa só as referências do prompt; nome confirmado
@@ -191,7 +193,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.13', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.14', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -3179,7 +3181,7 @@
 
         // O formato e capturado uma vez. Alterar a aba Renomear no meio da fila
         // nao mistura padroes dentro da mesma sequencia.
-        const modeloTravado = lerModelo();
+        const modeloTravado = lerModeloContinuidade();
         let indiceInicial = 0;
         const retomarValor = Number(campoRetomar?.value);
         if (isFinite(retomarValor) && retomarValor > 0) {
@@ -3561,15 +3563,30 @@
     const MODELO_PADRAO = 'Cena {n} - {tipo} {g}';
     const CHAVE_MODELO = 'flow_modelo_nome';
     const CHAVE_ESCOPO = 'flow_renomear_escopo';
+    const CHAVE_SIGLA_CONTINUIDADE = 'flow_continuidade_sigla_nome';
 
     const lerModelo = () => {
       try { return localStorage.getItem(CHAVE_MODELO) || MODELO_PADRAO; }
       catch (_) { return MODELO_PADRAO; }
     };
 
+    const limparSiglaContinuidade = sigla => String(sigla || '').trim()
+      .replace(/[^\p{L}\p{N}_-]/gu, '').replace(/_+$/, '').slice(0, 24) || 'S';
+    const lerPersonalizacaoContinuidade = () => {
+      try {
+        const salvo = JSON.parse(localStorage.getItem(CHAVE_SIGLA_CONTINUIDADE) || 'null');
+        return { ativo: salvo?.ativo === true, sigla: limparSiglaContinuidade(salvo?.sigla) };
+      } catch (_) { return { ativo: false, sigla: 'S' }; }
+    };
+    const lerModeloContinuidade = () => {
+      const salvo = lerPersonalizacaoContinuidade();
+      return salvo.ativo ? salvo.sigla + '_{nnn}_' : lerModelo();
+    };
+
     const montarNome = (n, g, isVideo, modelo) => {
       const pad = v => String(v).padStart(2, '0');
       return String(modelo || lerModelo())
+        .replace(/\{nnn\}/gi, String(n).padStart(3, '0'))
         .replace(/\{nn\}/gi, pad(n))
         .replace(/\{gg\}/gi, pad(g))
         .replace(/\{n\}/gi, String(n))
@@ -3583,7 +3600,7 @@
     const regexDoModelo = (modelo) => {
       const marcas = [];
       const SEP = '\u0001';
-      let padrao = String(modelo).replace(/\{(nn|gg|n|g|tipo)\}/gi, (_, m) => {
+      let padrao = String(modelo).replace(/\{(nnn|nn|gg|n|g|tipo)\}/gi, (_, m) => {
         marcas.push(m.toLowerCase());
         return SEP + marcas.length + SEP;
       });
@@ -3591,7 +3608,7 @@
       padrao = padrao.replace(new RegExp(SEP + '(\\d+)' + SEP, 'g'), (_, i) => {
         const m = marcas[Number(i) - 1];
         if (m === 'tipo') return '(Imagem|V[ií]deo|Video)';
-        if (m === 'n' || m === 'nn') return '(\\d+(?:\\.\\d+)?)';
+        if (m === 'n' || m === 'nn' || m === 'nnn') return '(\\d+(?:\\.\\d+)?)';
         return '(\\d+)';
       });
       return { re: new RegExp('^' + padrao + '$', 'i'), marcas };
@@ -3600,7 +3617,7 @@
     const lerNomeModelo = (nome) => {
       const texto = norm(nome);
       if (!texto) return null;
-      for (const modelo of [lerModelo(), MODELO_PADRAO]) {
+      for (const modelo of [lerModelo(), MODELO_PADRAO, lerPersonalizacaoContinuidade().sigla + '_{nnn}_']) {
         let info;
         try { info = regexDoModelo(modelo); } catch (_) { continue; }
         const m = texto.match(info.re);
@@ -3608,7 +3625,7 @@
         const d = { sceneNum: null, imgNum: 1, isVideo: false };
         info.marcas.forEach((marca, i) => {
           const v = m[i + 1];
-          if (marca === 'n' || marca === 'nn') d.sceneNum = Number(v);
+          if (marca === 'n' || marca === 'nn' || marca === 'nnn') d.sceneNum = Number(v);
           else if (marca === 'g' || marca === 'gg') d.imgNum = Number(v);
           else if (marca === 'tipo') d.isVideo = /^v/i.test(v);
         });
@@ -5032,6 +5049,14 @@
               '<option value="cena_M_{n}_{g}_">cena_M_7_1_</option>' +
               '<option value="cena_{nn}_{gg}_">cena_07_01_</option>' +
             '</select>' +
+            '<details style="margin-top:10px;border:1px solid var(--cd-border-light);border-radius:7px;padding:8px;">' +
+              '<summary style="cursor:pointer;font-size:12px;font-weight:700;">⚙️ Personalizar nome</summary>' +
+              '<label style="display:flex;gap:7px;align-items:center;margin-top:9px;font-size:12px;">' +
+                '<input type="checkbox" id="' + prefix + '-continuity-custom">Usar sigla personalizada</label>' +
+              '<label style="display:block;margin-top:8px;font-size:11px;">Sigla inicial' +
+                '<input type="text" id="' + prefix + '-continuity-prefix" maxlength="24" placeholder="S" class="flow-textarea" style="min-height:auto;padding:7px 9px;margin-top:4px;"></label>' +
+              '<div style="font-size:11px;margin-top:6px;color:var(--cd-text-muted);">Sigla + número da cena com três dígitos. Exemplo: S_023_. Esta opção vale só para gerar uma cena por vez.</div>' +
+            '</details>' +
             '<div id="' + prefix + '-continuity-preview" style="font-size:11px;margin-top:7px;padding:7px 9px;border-radius:7px;background:var(--cd-bg-secondary);color:var(--cd-text);"></div>' +
             '<div style="font-size:10px;color:var(--cd-text-light);margin-top:6px;line-height:1.4;">Desligado, o botão Iniciar usa exatamente o fluxo normal.</div>' +
           '</div>';
@@ -5041,6 +5066,11 @@
         const modelo = card.querySelector('#' + prefix + '-continuity-model');
         const badge = card.querySelector('#' + prefix + '-continuity-badge');
         const preview = card.querySelector('#' + prefix + '-continuity-preview');
+        const personalizado = card.querySelector('#' + prefix + '-continuity-custom');
+        const sigla = card.querySelector('#' + prefix + '-continuity-prefix');
+        const personalizacao = lerPersonalizacaoContinuidade();
+        personalizado.checked = personalizacao.ativo;
+        sigla.value = personalizacao.sigla;
         const chave = 'flow_continuidade_ligada_' + prefix;
         try { caixa.checked = localStorage.getItem(chave) === '1'; } catch (_) {}
 
@@ -5056,8 +5086,33 @@
         const atualizar = () => {
           badge.textContent = caixa.checked ? 'Ligado' : 'Desligado';
           badge.style.color = caixa.checked ? '#059669' : 'var(--cd-text-muted)';
-          preview.textContent = 'Exemplo: ' + montarNome(7, 1, video, modelo.value);
+          modelo.disabled = personalizado.checked;
+          sigla.disabled = !personalizado.checked;
+          const formato = personalizado.checked ? limparSiglaContinuidade(sigla.value) + '_{nnn}_' : modelo.value;
+          preview.textContent = 'Exemplo: ' + montarNome(personalizado.checked ? 23 : 7, 1, video, formato);
         };
+        const salvarPersonalizacao = () => {
+          const dados = { ativo: personalizado.checked, sigla: limparSiglaContinuidade(sigla.value) };
+          try { localStorage.setItem(CHAVE_SIGLA_CONTINUIDADE, JSON.stringify(dados)); } catch (_) {}
+          atualizar();
+          for (const outroPrefix of ['flow', 'fv']) {
+            if (outroPrefix === prefix) continue;
+            const outraCaixa = document.getElementById(outroPrefix + '-continuity-custom');
+            const outraSigla = document.getElementById(outroPrefix + '-continuity-prefix');
+            const outroModelo = document.getElementById(outroPrefix + '-continuity-model');
+            if (!outraCaixa || !outraSigla || !outroModelo) continue;
+            outraCaixa.checked = dados.ativo;
+            outraSigla.value = dados.sigla;
+            outraSigla.disabled = !dados.ativo;
+            outroModelo.disabled = dados.ativo;
+            const prev = document.getElementById(outroPrefix + '-continuity-preview');
+            if (prev) prev.textContent = 'Exemplo: ' + montarNome(dados.ativo ? 23 : 7, 1, outroPrefix === 'fv',
+              dados.ativo ? dados.sigla + '_{nnn}_' : outroModelo.value);
+          }
+        };
+        personalizado.addEventListener('change', salvarPersonalizacao);
+        sigla.addEventListener('input', salvarPersonalizacao);
+        sigla.addEventListener('blur', () => { sigla.value = limparSiglaContinuidade(sigla.value); salvarPersonalizacao(); });
         caixa.addEventListener('change', () => {
           try { localStorage.setItem(chave, caixa.checked ? '1' : '0'); } catch (_) {}
           atualizar();
@@ -5077,7 +5132,11 @@
             }
             outro.value = modelo.value;
             const prev = document.getElementById(outroPrefix + '-continuity-preview');
-            if (prev) prev.textContent = 'Exemplo: ' + montarNome(7, 1, outroPrefix === 'fv', modelo.value);
+            if (prev) {
+              const custom = lerPersonalizacaoContinuidade();
+              prev.textContent = 'Exemplo: ' + montarNome(custom.ativo ? 23 : 7, 1, outroPrefix === 'fv',
+                custom.ativo ? custom.sigla + '_{nnn}_' : modelo.value);
+            }
           }
           atualizar();
         });
