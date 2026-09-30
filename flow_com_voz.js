@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.11  -   2026-09-29
+//  Flow NOVO v10.12  -   2026-09-30
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,8 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.12: cena por vez usa só as referências do prompt; nome confirmado
+//          libera a próxima cena e falhas de favorito ficam salvas como pendência.
 //  v10.11: Favoritar selecionadas também no painel Atribuir; mídias com nome
 //          já salvo e coração desligado permanecem na seleção.
 //  v10.10: botão para favoritar apenas mídias selecionadas já renomeadas;
@@ -187,7 +189,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.11', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.12', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -3172,7 +3174,6 @@
         // nao mistura padroes dentro da mesma sequencia.
         const modeloTravado = lerModelo();
         let indiceInicial = 0;
-        let referenciaSalva = null;
         const retomarValor = Number(campoRetomar?.value);
         if (isFinite(retomarValor) && retomarValor > 0) {
           const achou = prompts.findIndex(p => Number(p.promptNum) >= retomarValor);
@@ -3183,7 +3184,6 @@
             if (salvo && salvo.ativo && salvo.textoOriginal === textoOriginal &&
                 salvo.modelo === modeloTravado && Number(salvo.total) === prompts.length) {
               indiceInicial = Math.max(0, Math.min(prompts.length, Number(salvo.proximaCena) || 0));
-              referenciaSalva = salvo.referenciaAnterior || null;
             }
           } catch (_) {}
         }
@@ -3226,6 +3226,9 @@
         if (start) start.disabled = true;
         if (stop) stop.disabled = false;
         if (input) input.disabled = true;
+        let cenaEmExecucao = -1;
+        let midiaPendente = null;
+        let falhasFavorito = 0;
         try {
           (video ? this.buildVideoPromptList : this.buildPromptList).call(this);
           for (let anterior = 0; anterior < indiceInicial; anterior++) {
@@ -3236,12 +3239,11 @@
           await this.configureGeneration(video, 1);
           await this.prepareGalleryForRun();
 
-          let referenciaAnterior = referenciaSalva || (indiceInicial > 0
-            ? montarNome(prompts[indiceInicial - 1].promptNum, 1, video, modeloTravado)
-            : null);
           const matrizes = [];
           for (let indice = indiceInicial; indice < prompts.length; indice++) {
             if (this.modernStopped()) throw stopError();
+            cenaEmExecucao = indice;
+            midiaPendente = null;
             this._modernBatchIndex = indice;
             const prompt = prompts[indice];
             const cena = prompt.promptNum;
@@ -3249,16 +3251,9 @@
             atualizarItem.call(this, indice, 'active');
             atualizarProgresso.call(this, indice / prompts.length);
 
-            if (referenciaAnterior) {
-              status('info', '🔎 Cena ' + cena + ': confirmando referência "' + referenciaAnterior + '"...');
-              await this.esperarReferenciaContinuidade(referenciaAnterior);
-            }
-
-            const textoComContinuidade = referenciaAnterior
-              ? '[' + referenciaAnterior + '] ' + prompt.text
-              : prompt.text;
-            const promptExecucao = Object.assign({}, prompt, { text: textoComContinuidade });
-            status('info', '🎬 Gerando Cena ' + cena + (referenciaAnterior ? ' com a cena anterior...' : '...'));
+            // Somente os [nomes] escritos pelo usuário viram referências.
+            const promptExecucao = Object.assign({}, prompt);
+            status('info', '🎬 Gerando Cena ' + cena + ' com as referências do prompt...');
 
             const antes = this.snapshotImageUuids();
             const enviou = await this.prepareAndSubmit(promptExecucao);
@@ -3271,6 +3266,14 @@
 
             let tile = await this.scrollToWorkflow(resultado.uuid || resultado.workflowId);
             if (!tile) throw new Error('Não encontrei o cartão concluído da Cena ' + cena + '.');
+            const id = resultado.uuid || resultado.workflowId;
+            midiaPendente = {
+              id, dados: { nome: nomeFinal, tipo: 'scene', cena: 'Cena ' + cena,
+                imgNum: 1, isVideo: !!video, ordem: indice, original: this.getTileName(tile), estado: 'pending' }
+            };
+            const marcas = this.lerMarcas();
+            marcas[id] = midiaPendente.dados;
+            this.salvarMarcas(marcas);
             status('info', '🏷️ Cena ' + cena + ': salvando como "' + nomeFinal + '"...');
 
             let renomeou = false;
@@ -3283,31 +3286,47 @@
             }
             if (!renomeou) throw new Error('O Flow não confirmou o nome da Cena ' + cena + '.');
 
+            midiaPendente.dados.nomeSalvo = true;
+            midiaPendente.dados.estado = 'favorite_pending';
+            this.salvarMarcas({ ...this.lerMarcas(), [id]: midiaPendente.dados });
             this.pintarNomeNoTile(resultado.uuid || resultado.workflowId, nomeFinal);
-            if (!await this.apiFavorite(resultado.uuid || resultado.workflowId, true, tile)) {
-              throw new Error('O Flow salvou o nome, mas não confirmou o favorito da Cena ' + cena + '.');
+            let favoritou = false;
+            try { favoritou = await this.apiFavorite(id, true, tile); }
+            catch (erroFavorito) { this.logDebug('Favorito: ' + (erroFavorito?.message || erroFavorito), 'warning'); }
+            if (favoritou) {
+              this.registrarRenomeacaoConfirmada(id, midiaPendente.dados, tile);
+              const marcasConfirmadas = this.lerMarcas();
+              delete marcasConfirmadas[id];
+              this.salvarMarcas(marcasConfirmadas);
+              this.removeLabelFromTile(id);
+            } else {
+              falhasFavorito++;
+              this.atualizarEstadoItemAtribuir(midiaPendente.dados.cena, 'favorite_pending');
+              this.logDebug('⚠️ Nome salvo; favorito pendente: ' + nomeFinal + '. A sequência continuará.', 'warning');
             }
             this.tileAssignments.set(resultado.uuid || resultado.workflowId, {
               label: nomeFinal, type: 'scene', scene: 'Cena ' + cena,
               imgNum: 1, isVideo: !!video
             });
-            referenciaAnterior = nomeFinal;
             matrizes.push(matriz);
-            atualizarItem.call(this, indice, 'done', 'renomeada');
+            atualizarItem.call(this, indice, favoritou ? 'done' : 'error',
+              favoritou ? 'renomeada e favoritada' : 'nome salvo; falha no favorito');
             atualizarProgresso.call(this, (indice + 1) / prompts.length);
             this.salvarContinuidade(video, {
               ativo: true,
               proximaCena: indice + 1,
-              referenciaAnterior,
               modelo: modeloTravado,
               total: prompts.length,
               textoOriginal,
               atualizadoEm: Date.now()
             });
+            midiaPendente = null;
+            cenaEmExecucao = -1;
             if (campoRetomar) {
               campoRetomar.value = indice + 1 < prompts.length ? String(prompts[indice + 1].promptNum) : '';
             }
-            status('success', '✅ ' + nomeFinal + ' confirmada' +
+            status(favoritou ? 'success' : 'warning', (favoritou ? '✅ ' : '⚠️ ') + nomeFinal +
+              (favoritou ? ' confirmada' : ' renomeada; favorito pendente') +
               (indice + 1 < prompts.length ? '; preparando a próxima cena.' : '.'));
           }
 
@@ -3316,10 +3335,20 @@
             src: s.src, workflowId: s.workflowId, uuid: s.uuid, promptNum: s.promptNum, isVideo: !!video
           })));
           this.limparContinuidade(video);
-          status('success', '🔗 Continuidade concluída: <b>' + prompts.length + '/' + prompts.length + '</b> cenas geradas e renomeadas.');
+          status(falhasFavorito ? 'warning' : 'success', '🔗 Continuidade concluída: <b>' + prompts.length + '/' + prompts.length +
+            '</b> cenas geradas e renomeadas.' + (falhasFavorito ? ' ⚠️ ' + falhasFavorito + ' favorito(s) pendente(s).' : ' Favoritos confirmados.'));
           try { this.gerarRelatorioDeExecucao(video ? 'videos' : 'imagens'); } catch (_) {}
         } catch (erro) {
           const parada = erro?.stopped || this.shouldStop || this.videoShouldStop;
+          if (!parada && cenaEmExecucao >= 0) {
+            atualizarItem.call(this, cenaEmExecucao, 'error', midiaPendente?.dados.nomeSalvo ? 'falha no favorito' : 'falhou');
+          }
+          if (midiaPendente) {
+            const dados = midiaPendente.dados;
+            dados.estado = dados.nomeSalvo ? 'favorite_pending' : 'failed';
+            this.salvarMarcas({ ...this.lerMarcas(), [midiaPendente.id]: dados });
+            this.atualizarEstadoItemAtribuir(dados.cena, dados.estado);
+          }
           status(parada ? 'warning' : 'error', (parada ? '⏹ Continuidade parada. ' : '❌ Continuidade interrompida. ') + (erro?.message || erro));
         } finally {
           this._modernObservers?.forEach(observer => observer.disconnect());
@@ -4986,8 +5015,8 @@
           '<div style="padding:0 12px 12px;border-top:1px solid var(--cd-border-light);">' +
             '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;cursor:pointer;">' +
               '<input type="checkbox" id="' + prefix + '-continuity-enabled" style="margin-top:2px;">' +
-              '<span style="font-size:12px;"><b>Gerar com continuidade automática</b><br>' +
-                '<span style="font-size:11px;color:var(--cd-text-light);">Uma cena por vez: confirma, renomeia e usa a anterior como referência.</span></span>' +
+              '<span style="font-size:12px;"><b>Gerar uma cena por vez</b><br>' +
+                '<span style="font-size:11px;color:var(--cd-text-light);">Uma cena por vez: confirma, renomeia e favorita. Usa só as referências [entre colchetes] do prompt.</span></span>' +
             '</label>' +
             '<label style="display:block;margin-top:10px;font-size:11px;color:var(--cd-text-muted);">Formato do nome</label>' +
             '<select id="' + prefix + '-continuity-model" class="flow-select-imgs" style="width:100%;margin-top:4px;">' +
