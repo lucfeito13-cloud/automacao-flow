@@ -260,7 +260,7 @@ test('renomeação volta a usar o botão de opções do card e exige Rename no m
   assert.match(rename, /modernWait\(\(\) => menuItem\(\['Rename', 'Renomear'\]\)/);
 });
 
-test('vídeo sem UUID real já renomeado não é enviado para renomear outra vez', async () => {
+test('nome já salvo na galeria não depende da API antiga nem repete a renomeação', async () => {
   const renomear = method(
     '      async renomearSelecionadoConfirmado(id, name, tileOptional = null) {',
     '      async renomearPeloMenu(id, name, tileOptional = null) {',
@@ -277,12 +277,16 @@ test('vídeo sem UUID real já renomeado não é enviado para renomear outra vez
   };
   assert.equal(await renomear.call(state, 'video-123', 'cena_43_', tile), true);
   assert.equal(abriuMenu, false);
+  state.workflowIdReal = () => 'uuid-real';
+  state.apiRename = () => { throw new Error('não deve repetir um nome já salvo'); };
+  assert.equal(await renomear.call(state, 'video-123', 'cena_43_', tile), true);
 });
 
 test('vídeo sem UUID real confirma o nome pela galeria e mantém favorito pendente', () => {
   const rename = source.slice(source.indexOf('      async renomearPeloMenu(id, name, tileOptional = null) {'), source.indexOf('      async apiFavorite(id, value, tileOptional = null) {'));
   const observer = source.slice(source.indexOf('      startLabelObserver() {'), source.indexOf('      async ', source.indexOf('      startLabelObserver() {') + 20));
-  assert.match(rename, /if \(!realId\) \{[\s\S]*?const nomeNoFlow =/);
+  assert.match(rename, /const nomeNoFlow =/);
+  assert.doesNotMatch(rename, /old\.apiReadName/);
   assert.match(rename, /if \(!nomeNoFlow\(\)\) throw new Error/);
   assert.match(observer, /norm\(nomeAtual\) === norm\(pendente\.nome\) && this\.favoritoNoTile\(tile\) === true/);
   assert.match(source, /marca\.estado = renomeou \? 'favorite_pending' : 'failed'/);
@@ -413,4 +417,52 @@ test('download interrompe a varredura ao selecionar todos os IDs marcados', () =
   assert.match(source, /if \(ok === selecionados\.length\) break;/);
   assert.match(source, /plano\.push\(\{ \.\.\.entry, cena, g, novo, origem: 'favorito_pendente', favoritoPendente: true \}\)/);
   assert.match(source, /if \(jaNomeada && this\.favoritoNoTile\(tile\) !== true\)/);
+});
+
+test('renomeador aplica uma passagem e favorita logo após confirmar cada nome', async () => {
+  const status = { className: '', innerHTML: '' };
+  const bar = { style: {} };
+  const aplicar = method(
+    '      async aplicarPlanoRenomear() {',
+    '      /** Varre tudo, monta o plano e renomeia.',
+    ['document'], [{ getElementById: id => id === 'rn-status' ? status : bar }]
+  );
+  const renomear = method(
+    '      async renomearSelecionadoConfirmado(id, name, tileOptional = null) {',
+    '      async renomearPeloMenu(id, name, tileOptional = null) {',
+    ['norm'], [text => String(text || '').trim()]
+  );
+  const calls = [], visited = [];
+  const plan = ['salva', 'nova', 'semFavorito', 'erroNome'].map((uuid, index) => ({
+    uuid, novo: `S_${String(index + 1).padStart(3, '0')}_`, cena: index + 1, g: 1
+  }));
+  const marcas = Object.fromEntries(plan.map(p => [p.uuid, { nome: p.novo }]));
+  const tiles = new Map(plan.map(p => [p.uuid, {
+    id: p.uuid, isConnected: true, name: p.uuid === 'salva' ? p.novo : 'Título original', querySelectorAll: () => []
+  }]));
+  let resets = 0;
+  const state = {
+    _planoRenomear: plan, tileAssignments: new Map(),
+    mostrarPlanoRenomear() {}, lerMarcas: () => marcas, salvarMarcas() {},
+    getScroller: () => ({ set scrollTop(value) { resets++; } }), pausa: async () => {},
+    scrollToWorkflowDescendo: async id => { visited.push(id); return tiles.get(id); },
+    getUuidFromTile: tile => tile.id, workflowIdReal: tile => tile.id, getTileName: tile => tile.name,
+    renomearSelecionadoConfirmado: renomear,
+    apiRename: async (id, name, tile) => { calls.push(['nome', id]); if (id === 'erroNome') return false; tile.name = name; return true; },
+    apiFavorite: async (id, value, tile) => {
+      assert.equal(tile.name, plan.find(p => p.uuid === id).novo);
+      calls.push(['favorito', id]); return id !== 'semFavorito';
+    },
+    pintarNomeNoTile() {}, startLabelObserver() {}, registrarRenomeacaoConfirmada() {}, removeLabelFromTile() {}, logDebug() {}
+  };
+  await aplicar.call(state);
+  assert.equal(resets, 1);
+  assert.deepEqual(visited, ['salva', 'nova', 'semFavorito', 'erroNome']);
+  assert.deepEqual(calls, [['favorito', 'salva'], ['nome', 'nova'], ['favorito', 'nova'],
+    ['nome', 'semFavorito'], ['favorito', 'semFavorito'], ['nome', 'erroNome']]);
+  assert.deepEqual(state._planoRenomear.map(p => p.uuid), ['semFavorito', 'erroNome']);
+  assert.equal(marcas.semFavorito.estado, 'favorite_pending');
+  assert.equal(marcas.semFavorito.nomeSalvo, true);
+  assert.equal(marcas.erroNome.estado, 'failed');
+  assert.match(status.innerHTML, /2\/4/);
 });

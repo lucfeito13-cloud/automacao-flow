@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.15  -   2026-09-30
+//  Flow NOVO v10.16  -   2026-09-30
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,8 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.16: uma passagem no renomeador; nome confirmado pela interface do
+//          Flow libera o favorito automático sem depender da leitura antiga.
 //  v10.15: opção de personalizar sigla também na aba Renomear, com prévia
 //          e aplicação ao formato usado pelo renomeador automático.
 //  v10.14: personalização de sigla no modo cena por vez, com três dígitos
@@ -195,7 +197,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.15', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.16', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -1368,8 +1370,8 @@
       },
 
       /**
-       * Confirma pelo endpoint do Flow quando existe UUID real. Se o endpoint
-       * não aceitar, usa a interface nativa dos três pontinhos.
+       * Reaproveita o nome já exibido no Flow. Para um nome novo, tenta a API
+       * e usa o menu nativo quando o endpoint não aceitar a renomeação.
        */
       async renomearSelecionadoConfirmado(id, name, tileOptional = null) {
         let tile = tileOptional;
@@ -1379,14 +1381,9 @@
         if (!tile) return false;
 
         const realId = this.workflowIdReal(tile, id);
-        // Vídeos da galeria podem ter apenas um ID visual (video-*). Neles o
-        // nome nativo exibido pelo Flow é a confirmação disponível; não abra
-        // Rename outra vez quando o nome já está correto.
-        if (!realId && norm(this.getTileName(tile)) === norm(name)) return true;
-        if (realId && norm(this.getTileName(tile)) === norm(name) && old.apiReadName) {
-          const salvo = await this.apiComLimite(old.apiReadName.call(this, realId), 1800);
-          if (norm(salvo) === norm(name)) return true;
-        }
+        // O título da própria mídia já confirma um nome aplicado. A leitura
+        // do endpoint antigo pode estar indisponível mesmo com UUID real.
+        if (norm(this.getTileName(tile)) === norm(name)) return true;
         // Usa o mesmo caminho rápido/cooldown de todas as outras renomeações.
         // Antes este botão chamava a API antiga diretamente, sem limite de
         // tempo, e podia ficar preso entre uma mídia e a próxima.
@@ -1403,13 +1400,7 @@
           );
           const tile = tileValido ? tileOptional : (await this.scrollToWorkflow(id));
           if (!tile) throw new Error('Mídia não encontrada para renomear.');
-          if (norm(this.getTileName(tile)) === norm(name)) {
-            const realId = this.workflowIdReal(tile, id);
-            if (!realId) return true;
-            const salvo = realId && old.apiReadName
-              ? await this.apiComLimite(old.apiReadName.call(this, realId), 1800) : null;
-            if (norm(salvo) === norm(name)) return true;
-          }
+          if (norm(this.getTileName(tile)) === norm(name)) return true;
 
           // 1. Abre o menu do card (3 pontinhos)
           await this.openTileMenu(tile, ['Rename', 'Renomear']);
@@ -1483,24 +1474,15 @@
             throw new Error('O Flow não confirmou o novo nome.');
           }
 
-          const realId = this.workflowIdReal(tile, id);
-          if (!realId) {
-            const nomeNoFlow = () => {
-              const atual = this.getTiles().find(t => t.isConnected && this.getUuidFromTile(t) === id);
-              return !!atual && norm(this.getTileName(atual)) === norm(name);
-            };
-            if (!await this.modernWait(nomeNoFlow, 2500)) throw new Error('O Flow ainda nao mostrou o novo nome.');
-            await this.pausa(220);
-            if (!nomeNoFlow()) throw new Error('O novo nome não permaneceu na galeria.');
-            return true;
-          }
-          if (!old.apiReadName) throw new Error('Leitura do nome salvo indisponível.');
-          let confirmado = await this.apiComLimite(old.apiReadName.call(this, realId), 1800);
-          if (norm(confirmado) !== norm(name)) {
-            await this.pausa(160);
-            confirmado = await this.apiComLimite(old.apiReadName.call(this, realId), 1800);
-          }
-          if (norm(confirmado) !== norm(name)) throw new Error('O Flow ainda nao salvou o novo nome.');
+          // A confirmação do menu nativo é o editor fechado e o título da
+          // mesma mídia atualizado e estável, também para imagens com UUID.
+          const nomeNoFlow = () => {
+            const atual = this.getTiles().find(t => t.isConnected && this.getUuidFromTile(t) === id);
+            return !!atual && norm(this.getTileName(atual)) === norm(name);
+          };
+          if (!await this.modernWait(nomeNoFlow, 2500)) throw new Error('O Flow ainda nao mostrou o novo nome.');
+          await this.pausa(220);
+          if (!nomeNoFlow()) throw new Error('O novo nome não permaneceu na galeria.');
           return true;
         } catch (error) {
           this.logDebug(`Renomear: ${error.message}`, 'error');
@@ -4081,30 +4063,26 @@
         if (botao) botao.disabled = true;
         this.mostrarPlanoRenomear(this._planoRenomear || []);
         let ok = 0;
-        let pendentes = selecionados.slice();
+        let pendentes = [];
         const marcas = this.lerMarcas();
         try {
-          rodadas: for (let rodada = 1; rodada <= 3 && pendentes.length; rodada++) {
-            const falharamNestaRodada = [];
-            const filaDaRodada = pendentes.slice();
             const scrollerRodada = this.getScroller();
             if (scrollerRodada) {
-              // Uma única volta ao topo por rodada. Daqui em diante o localizador
-              // percorre a fila continuamente para baixo.
+              // Uma única passagem; não reinicia a galeria para retentar falhas.
               scrollerRodada.scrollTop = 0;
               await this.pausa(500);
             }
 
-            for (let i = 0; i < filaDaRodada.length; i++) {
+            for (let i = 0; i < selecionados.length; i++) {
               if (this.renomearParar) {
-                pendentes = falharamNestaRodada.concat(filaDaRodada.slice(i));
-                break rodadas;
+                pendentes.push(...selecionados.slice(i));
+                break;
               }
 
-              const p = filaDaRodada[i];
+              const p = selecionados[i];
               const atual = this._planoRenomear.find(o => o.uuid === p.uuid);
               if (atual) atual.estado = 'renaming';
-              aviso('🏷️ Rodada <b>' + rodada + '/3</b> · ' + (i + 1) + '/' + filaDaRodada.length + ' — ' + p.novo);
+              aviso('🏷️ Renomeando e favoritando · ' + (i + 1) + '/' + selecionados.length + ' — ' + p.novo);
               if (barra) barra.style.width = Math.round((ok / selecionados.length) * 100) + '%';
 
               let tile = null;
@@ -4118,7 +4096,7 @@
                   deu = await this.renomearSelecionadoConfirmado(p.uuid, p.novo, tile);
                 }
               } catch (erroItem) {
-                this.logDebug('Tentativa ' + rodada + ' falhou em ' + p.novo + ': ' + (erroItem?.message || erroItem), 'warning');
+                this.logDebug('Renomeação falhou em ' + p.novo + ': ' + (erroItem?.message || erroItem), 'warning');
               }
 
               if (deu) {
@@ -4126,7 +4104,9 @@
                 if (marcas[p.uuid]) marcas[p.uuid].nomeSalvo = true;
               }
               if (deu && tile) {
-                const favorito = await this.apiFavorite(p.uuid, true, tile);
+                let favorito = false;
+                try { favorito = await this.apiFavorite(p.uuid, true, tile); }
+                catch (erroFavorito) { this.logDebug('Favorito: ' + (erroFavorito?.message || erroFavorito), 'warning'); }
                 if (!favorito) {
                   deu = false;
                   this.logDebug('Nome salvo, mas favorito não confirmado: ' + p.novo, 'warning');
@@ -4146,28 +4126,22 @@
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', 'confirmed'));
                 this.removeLabelFromTile(p.uuid);
                 this._planoRenomear = this._planoRenomear.filter(o => o.uuid !== p.uuid);
-                if (ok % 20 === 0) this.salvarMarcas(marcas);
-                // Último item confirmado: encerra a rodada aqui, sem outra
-                // varredura da galeria ou rolagem depois da conclusão.
+                this.salvarMarcas(marcas);
+                // Último item confirmado: encerra sem nova varredura.
                 if (ok === selecionados.length) break;
               } else {
-                falharamNestaRodada.push(p);
+                pendentes.push(p);
                 const pendente = this._planoRenomear.find(o => o.uuid === p.uuid);
                 const estado = p.nomeSalvo ? 'favorite_pending' : 'failed';
                 if (pendente) { pendente.estado = estado; pendente.nomeSalvo = !!p.nomeSalvo; }
                 if (marcas[p.uuid]) marcas[p.uuid].estado = estado;
                 tile?.querySelectorAll('.flow-tile-label').forEach(el => el.setAttribute('data-rename-state', estado));
+                this.salvarMarcas(marcas);
               }
             }
 
-            pendentes = falharamNestaRodada;
             this.mostrarPlanoRenomear(this._planoRenomear || []);
             this.salvarMarcas(marcas);
-            if (pendentes.length && rodada < 3) {
-              aviso('🔁 <b>' + pendentes.length + '</b> pendente(s). Preparando nova rodada automática...', 'warning');
-              await this.sleep(1200);
-            }
-          }
 
           if (barra) barra.style.width = '100%';
           if (this.renomearParar) {
