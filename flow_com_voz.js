@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.25  -   2026-10-01
+//  Flow NOVO v10.26  -   2026-10-01
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,14 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.26: A CAUSA REAL do upscale quebrado: o Flow passou a exibir o menu em
+//          portugues e o item virou "Fazer o download". A busca exigia texto
+//          EXATO ("Download" ou "Baixar"), nao achava, e falhava NA HORA em
+//          todos os videos - era isso que fazia a fila passar voando.
+//          Agora aceita os dois idiomas, igual ao download multiplo que ja
+//          tratava isso. As opcoes do submenu tambem: "Tamanho original",
+//          "Com upscale", "GIF animado", com o texto colado ("720pCom upscale").
+//          O download simples tinha o mesmo defeito e foi corrigido junto.
 //  v10.25: o upscale volta a usar o MESMO detector de itens do download normal,
 //          que funciona neste site. O detector proprio que eu tinha inventado na
 //          v10.22 deixou a fila passar voando por todos os videos sem abrir o
@@ -369,7 +377,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.25', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.26', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -2598,7 +2606,12 @@
           };
 
           await this.openTileMenu(tile);
-          const baixar = menuItem(['Download', 'Baixar']);
+          // Mesmo problema de idioma do upscale: em portugues e "Fazer o download".
+          const baixar = menuItem(['Fazer o download', 'Download', 'Baixar', 'Fazer download']) ||
+            $$('[role="menuitem"],.cdk-overlay-pane button').find(el => {
+              if (!visible(el) || own(el) || el.disabled) return false;
+              return /^(?:fazer\s+(?:o\s+)?)?(?:download|baixar)$/i.test(controlText(el));
+            });
           if (!baixar) throw new Error('Download não encontrado no menu da mídia.');
           const r = baixar.getBoundingClientRect();
           for (const t of ['pointerover', 'mouseover', 'mouseenter', 'mousemove']) {
@@ -3820,12 +3833,20 @@
        * item de 720p/1080p nunca aparecia e o upscale nao comecava.
        */
       async abrirSubmenuDownload() {
-        const download = menuItem(['Download', 'Baixar']);
+        // O rotulo MUDA de idioma. Em portugues o Flow usa "Fazer o download",
+        // que nao e igual a "Download" nem a "Baixar" - e a comparacao aqui e por
+        // texto EXATO. Era isso que fazia o upscale falhar instantaneamente em
+        // todos os videos. Mesmo criterio ja usado no download multiplo.
+        const download = menuItem(['Fazer o download', 'Download', 'Baixar', 'Fazer download']) ||
+          $$('[role="menuitem"],.cdk-overlay-pane button').find(el => {
+            if (!visible(el) || own(el) || el.disabled) return false;
+            return /^(?:fazer\s+(?:o\s+)?)?(?:download|baixar)$/i.test(controlText(el));
+          });
         if (!download) {
           // Falhar aqui e INSTANTANEO: era isto que fazia a fila passar voando
           // por todos os videos sem nunca abrir o submenu. Agora diz o que viu.
           const vistos = this.itensDoMenuVisivel();
-          throw new Error('O item "Download" não apareceu no menu. O menu mostrava: ' +
+          throw new Error('O item de download não apareceu no menu. O menu mostrava: ' +
             (vistos.length ? vistos.join(' | ') : '(nenhum item)'));
         }
         const r = download.getBoundingClientRect();
@@ -3874,11 +3895,16 @@
         // Detector IDENTICO ao do download normal (que funciona neste site todo
         // dia). Eu tinha inventado um detector proprio e foi pior: aqui a regra
         // e reaproveitar o caminho comprovado, nao criar outro.
+        // Em portugues os rotulos viram "Tamanho original", "Com upscale",
+        // "GIF animado". E o texto vem colado ("720pCom upscale"), entao NAO
+        // pode exigir borda depois do "p". Nenhum item do menu principal casa
+        // com isto, entao nao ha risco de pegar a opcao errada.
+        const RE_OPCAO = /original|upscal|aprimorad|\bgif\b|(?:^|[^0-9])\d{3,4}\s*p/i;
         let opcoes;
         try {
           opcoes = await this.modernWait(() => {
             const itens = $$('[role="menuitem"]').filter(b => visible(b) && !b.disabled &&
-              /original|upscaled|\b\d(?:k|80p|20p)\b/i.test(b.textContent));
+              RE_OPCAO.test(norm(b.textContent)));
             return itens.length ? itens : null;
           }, 8000);
         } catch (_) {
