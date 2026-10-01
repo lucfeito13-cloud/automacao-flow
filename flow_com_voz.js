@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.26  -   2026-10-01
+//  Flow NOVO v10.27  -   2026-10-01
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,13 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.27: pedido de upscale sem aviso na tela deixa de contar como falha. O
+//          Flow nem sempre mostra o toast e os upscales estavam concluindo
+//          normalmente; so a extensao e que dava o pedido como perdido e
+//          parava. Falha de verdade e so quando o Flow RECUSA. A fila segue
+//          pedindo e informa o andamento (X de Y, pedidos, falhas). Parar so
+//          acontece em problema ESTRUTURAL repetido (menu, submenu ou
+//          resolucao inexistente), onde insistir nao resolveria nada.
 //  v10.26: A CAUSA REAL do upscale quebrado: o Flow passou a exibir o menu em
 //          portugues e o item virou "Fazer o download". A busca exigia texto
 //          EXATO ("Download" ou "Baixar"), nao achava, e falhava NA HORA em
@@ -377,7 +384,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.26', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.27', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -3791,28 +3798,41 @@
           const entries = [...(await this.scanIdentifiedVideosForUpscale()).values()]
             .map(e => ({ ...e, resolution })).filter(e => !this.getUpscaleRequestedSet().has(e.uuid + ':' + resolution));
           if (!entries.length) throw new Error('Analise o projeto e atribua os vídeos às cenas antes do upscale.');
-          let requested = 0;
-          // Se o MESMO erro acontece tres vezes seguidas, o problema nao e o
-          // video: e o fluxo. Varrer 100 videos falhando em segundos nao ajuda
-          // ninguem e so parece que a extensao enlouqueceu. Para e explica.
+          let requested = 0, semAviso = 0;
+          // v10.27: a fila NAO para mais por pedido sem aviso na tela - ela segue
+          // pedindo e so informa o andamento. Parar so faz sentido quando o
+          // problema e ESTRUTURAL (menu/submenu/resolucao que nao existe): ai
+          // repetir em 100 videos nao resolveria nada e so pareceria loucura.
           let erroRepetido = null, repeticoes = 0, abortou = null;
-          for (const entry of entries) {
+          const total = entries.length;
+          for (let i = 0; i < total; i++) {
             if (this.upscaleShouldStop) break;
+            const entry = entries[i];
+            this.setVideoStatus('info', `⬆️ Upscale ${i + 1}/${total}: ${this.esc(entry.name)}` +
+              ` · ${requested} pedido(s), ${this._modernUpscaleFailures.length} falha(s)`);
             try {
-              await this.requestModernUpscale(entry);
+              const r = await this.requestModernUpscale(entry);
               requested++;
+              if (r && r.semConfirmacao) semAviso++;
               erroRepetido = null; repeticoes = 0;
             } catch (error) {
               this._modernUpscaleFailures.push(entry);
               this.logVideoDebug(error.message, 'error');
+              if (!error.estrutural) { erroRepetido = null; repeticoes = 0; continue; }
               const assinatura = String(error.message).replace(/"[^"]*"/g, '""');
               if (assinatura === erroRepetido) repeticoes++;
               else { erroRepetido = assinatura; repeticoes = 1; }
               if (repeticoes >= 3) { abortou = error.message; break; }
             }
           }
-          if (abortou) throw new Error('Parei após 3 falhas iguais seguidas. ' + abortou);
-          this.setVideoStatus(this._modernUpscaleFailures.length || this.upscaleShouldStop ? 'warning' : 'success', `Upscale solicitado para ${requested} vídeo(s); ${this._modernUpscaleFailures.length} falha(s)${this.upscaleShouldStop ? '; interrompido pelo usuário' : ''}. Acompanhe os downloads do Flow.`);
+          if (abortou) throw new Error('Parei após 3 falhas iguais seguidas (problema de menu, não dos vídeos). ' + abortou);
+          const falhas = this._modernUpscaleFailures.length;
+          this.setVideoStatus(falhas || this.upscaleShouldStop ? 'warning' : 'success',
+            `⬆️ Upscale pedido para ${requested} de ${total} vídeo(s)` +
+            (falhas ? `; ${falhas} falha(s)` : '') +
+            (semAviso ? `; ${semAviso} sem aviso do Flow (confirmam quando o download chegar)` : '') +
+            (this.upscaleShouldStop ? '; interrompido por você' : '') +
+            '. Use "Conferir downloads do upscale" para acompanhar.');
         } catch (error) { this.setVideoStatus('error', error.message); }
         finally {
           this._modernUpscaling = false; button.disabled = false; stop.style.display = 'none';
@@ -3846,8 +3866,8 @@
           // Falhar aqui e INSTANTANEO: era isto que fazia a fila passar voando
           // por todos os videos sem nunca abrir o submenu. Agora diz o que viu.
           const vistos = this.itensDoMenuVisivel();
-          throw new Error('O item de download não apareceu no menu. O menu mostrava: ' +
-            (vistos.length ? vistos.join(' | ') : '(nenhum item)'));
+          throw Object.assign(new Error('O item de download não apareceu no menu. O menu mostrava: ' +
+            (vistos.length ? vistos.join(' | ') : '(nenhum item)')), { estrutural: true });
         }
         const r = download.getBoundingClientRect();
         for (const t of ['pointerover', 'mouseover', 'mouseenter', 'mousemove']) {
@@ -3910,16 +3930,16 @@
         } catch (_) {
           const vistos = this.itensDoMenuVisivel();
           await this.closeMenus();
-          throw new Error(`O submenu de Download não abriu para "${entry.name}". ` +
-            `O menu mostrava: ${vistos.length ? vistos.join(' | ') : '(nenhum item)'}`);
+          throw Object.assign(new Error(`O submenu de Download não abriu para "${entry.name}". ` +
+            `O menu mostrava: ${vistos.length ? vistos.join(' | ') : '(nenhum item)'}`), { estrutural: true });
         }
 
         const upscale = opcoes.find(b => alvo.test(norm(b.textContent)));
         if (!upscale) {
           const vistos = opcoes.map(b => norm(b.textContent));
           await this.closeMenus();
-          throw new Error(`A opção ${resolution}p não existe para "${entry.name}". ` +
-            `O submenu oferecia: ${vistos.join(' | ')}`);
+          throw Object.assign(new Error(`A opção ${resolution}p não existe para "${entry.name}". ` +
+            `O submenu oferecia: ${vistos.join(' | ')}`), { estrutural: true });
         }
         this.logVideoDebug(`⬆️ ${entry.name}: opção escolhida "${norm(upscale.textContent)}".`, 'info');
         if (upscale.getAttribute('aria-disabled') === 'true') { await this.closeMenus(); throw new Error(`${resolution}p indisponível para ${entry.name}.`); }
@@ -3933,8 +3953,18 @@
           state: response.ok ? 'requested' : response.failure ? 'failed' : 'unconfirmed', detail: response.text });
         await this.atualizarDownloadsUpscale();
         await this.closeMenus();
-        if (!response.ok) throw new Error('Upscale sem confirmação: ' + response.text);
+        // v10.27: NAO existir aviso na tela nao quer dizer que o pedido falhou.
+        // O Flow nem sempre mostra o toast, e os upscales estavam concluindo
+        // normalmente - so a extensao e que dava o pedido como perdido e parava.
+        // Falha de verdade e so quando o Flow RECUSA explicitamente.
+        if (response.failure) throw new Error('O Flow recusou o upscale: ' + response.text);
         this.getUpscaleRequestedSet().add(entry.uuid + ':' + resolution);
+        if (!response.ok) {
+          this.logVideoDebug(`⏳ ${entry.name}: pedido enviado, mas o Flow não mostrou aviso ` +
+            `(${response.text}). Seguindo; o download confirma depois.`, 'warning');
+          return { semConfirmacao: true };
+        }
+        return { semConfirmacao: false };
       },
       ponteDownloadsUpscale(action, job) {
         return new Promise(resolve => {
