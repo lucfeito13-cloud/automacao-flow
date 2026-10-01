@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.21  -   2026-10-01
+//  Flow NOVO v10.22  -   2026-10-01
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,13 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.22: conserta o upscale, que ficava parado no menu sem comecar. O item do
+//          submenu tem duas linhas e o texto vem colado ("720pUpscaled"); a
+//          busca usava \b depois do "p", que batia no "U" e nunca casava - nem
+//          para 720p nem para 1080p. Agora exige borda so antes do numero.
+//          O submenu de Download tambem passou a ser aberto com hover antes do
+//          clique, igual ao download normal, e a falha diz quais itens o menu
+//          mostrava em vez de so estourar o tempo.
 //  v10.21: acha o botao Enviar na caixa de prompt NOVA do Flow (out/2026), que
 //          virou <flow-generate-icon-button>; a busca antiga pelo icone
 //          arrow_forward continua como alternativa. Vale para imagem e video.
@@ -356,7 +363,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.21', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.22', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -3785,17 +3792,68 @@
           return [e.uuid, { ...e, label: e.name, sceneNum: scene?.sceneNum, videoNum: scene?.imgNum }];
         }));
       },
+      /**
+       * v10.22: o item "Download" abre um SUBMENU, e o menu do Flow reage ao
+       * PONTEIRO - so o .click() nem sempre o abre. Este e exatamente o caminho
+       * que ja funciona no download normal: hover e depois clique. Sem ele o
+       * item de 720p/1080p nunca aparecia e o upscale nao comecava.
+       */
+      async abrirSubmenuDownload() {
+        const download = menuItem(['Download', 'Baixar']);
+        if (!download) throw new Error('Menu de download não encontrado.');
+        const r = download.getBoundingClientRect();
+        for (const t of ['pointerover', 'mouseover', 'mouseenter', 'mousemove']) {
+          try {
+            download.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window,
+              clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+          } catch (_) {}
+        }
+        download.click();
+        return download;
+      },
+      /**
+       * Itens clicaveis de qualquer menu/submenu aberto. O submenu de Download
+       * nem sempre marca role="menuitem" nos filhos, entao aceitamos tambem os
+       * papeis vizinhos e os itens do Material, sem repetir o mesmo elemento.
+       */
+      itensDeMenuClicaveis() {
+        const vistos = new Set(), lista = [];
+        for (const sel of ['[role="menuitem"]', '[role="menuitemradio"]', '[role="option"]',
+                           '.mat-mdc-menu-item', '.mat-menu-item', '[mat-menu-item]']) {
+          for (const el of $$(sel)) {
+            if (!visible(el) || own(el) || vistos.has(el)) continue;
+            vistos.add(el); lista.push(el);
+          }
+        }
+        return lista;
+      },
+      /** Itens do menu aberto, em texto. Serve para explicar a falha ao usuario. */
+      itensDoMenuVisivel() {
+        return this.itensDeMenuClicaveis().map(b => norm(b.textContent)).filter(Boolean);
+      },
       async requestModernUpscale(entry) {
         const resolution = entry.resolution || 1080;
         const tile = await this.scrollToWorkflow(entry.uuid);
         if (!tile) throw new Error(`Vídeo não encontrado: ${entry.name}`);
         await this.openTileMenu(tile);
-        const download = menuItem(['Download', 'Baixar']);
-        if (!download) throw new Error('Menu de download não encontrado.');
-        download.click();
-        const upscale = await this.modernWait(() => $$('[role="menuitem"]').find(b => visible(b) &&
-          new RegExp('\\b' + resolution + 'p\\b', 'i').test(b.textContent)));
-        if (upscale.disabled || upscale.getAttribute('aria-disabled') === 'true') throw new Error(`${resolution}p indisponível para ${entry.name}.`);
+        await this.abrirSubmenuDownload();
+        // O item do submenu tem DUAS linhas ("720p" + "Upscaled"), entao o
+        // textContent vem colado: "720pUpscaled". Um \b depois do "p" exigiria
+        // um caractere nao-alfanumerico ali, bate no "U" e NUNCA casa - era isso
+        // que travava o upscale. Exigimos borda so ANTES do numero.
+        // O (?:^|[^0-9]) evita casar 720 dentro de "1720" e 1080 com "720".
+        const alvo = new RegExp('(?:^|[^0-9])' + resolution + '\\s*p', 'i');
+        let upscale;
+        try {
+          upscale = await this.modernWait(() => this.itensDeMenuClicaveis().find(b => alvo.test(norm(b.textContent))) || null, 8000);
+        } catch (_) {
+          const vistos = this.itensDoMenuVisivel();
+          await this.closeMenus();
+          throw new Error(`A opção ${resolution}p não apareceu no menu de "${entry.name}". ` +
+            `O menu mostrava: ${vistos.length ? vistos.join(' | ') : '(nenhum item)'}`);
+        }
+        this.logVideoDebug(`⬆️ ${entry.name}: opção escolhida "${norm(upscale.textContent)}".`, 'info');
+        if (upscale.disabled || upscale.getAttribute('aria-disabled') === 'true') { await this.closeMenus(); throw new Error(`${resolution}p indisponível para ${entry.name}.`); }
         const tracking = await this.ponteDownloadsUpscale('register', { mediaId: entry.uuid, label: entry.name, resolution });
         if (!tracking.ok) throw new Error('Não foi possível registrar o acompanhamento: ' + tracking.error);
         if (['requested', 'downloading', 'complete'].includes(tracking.job.state)) { await this.closeMenus(); return; }
