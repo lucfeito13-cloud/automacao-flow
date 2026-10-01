@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.23  -   2026-10-01
+//  Flow NOVO v10.24  -   2026-10-01
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,13 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.24: o UPSCALE ganha o espacamento DELE, separado da geracao. Pede N
+//          upscales (campo ajustavel, comeca em 5), espera esses N ficarem
+//          prontos e so entao segue: lote completo descansa 30-60s, lote
+//          incompleto espera 60-120s. Tem liga/desliga e configuracao propria,
+//          junto do botao de upscale, e um teto para nao esperar para sempre.
+//          O espacamento da v10.23 continua existindo, mas e so da GERACAO -
+//          sao duas coisas diferentes e agora o painel diz isso.
 //  v10.23: espacamento entre lotes, com liga/desliga proprio dentro do bloco
 //          Ritmo. Lote completo descansa 30-60s antes do proximo; lote parcial
 //          (3 ou 4 de 5) espera mais 60-120s, confere de novo quantas ficaram
@@ -375,7 +382,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.23', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.24', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -3784,11 +3791,23 @@
           const entries = [...(await this.scanIdentifiedVideosForUpscale()).values()]
             .map(e => ({ ...e, resolution })).filter(e => !this.getUpscaleRequestedSet().has(e.uuid + ':' + resolution));
           if (!entries.length) throw new Error('Analise o projeto e atribua os vídeos às cenas antes do upscale.');
+          // v10.24: espacamento SO do upscale. Nada a ver com o ritmo de geracao
+          // de prompts: outra configuracao, outro liga/desliga, outro lugar.
+          const cfgLote = this.upscaleLoteCfg();
+          const lotes = [];
+          if (cfgLote.ativo) for (let i = 0; i < entries.length; i += cfgLote.tamanho) lotes.push(entries.slice(i, i + cfgLote.tamanho));
+          else lotes.push(entries);
+          if (cfgLote.ativo) this.logVideoDebug(`📦 ${entries.length} vídeo(s) em ${lotes.length} lote(s) de até ${cfgLote.tamanho}.`, 'info');
           let requested = 0;
-          for (const entry of entries) {
+          for (let li = 0; li < lotes.length; li++) {
             if (this.upscaleShouldStop) break;
-            try { await this.requestModernUpscale(entry); requested++; }
-            catch (error) { this._modernUpscaleFailures.push(entry); this.logVideoDebug(error.message, 'error'); }
+            const chaves = new Set();
+            for (const entry of lotes[li]) {
+              if (this.upscaleShouldStop) break;
+              try { await this.requestModernUpscale(entry); requested++; chaves.add(entry.uuid + ':' + entry.resolution); }
+              catch (error) { this._modernUpscaleFailures.push(entry); this.logVideoDebug(error.message, 'error'); }
+            }
+            if (cfgLote.ativo && !this.upscaleShouldStop) await this.espacarLoteUpscale(chaves, cfgLote, li, lotes.length);
           }
           this.setVideoStatus(this._modernUpscaleFailures.length || this.upscaleShouldStop ? 'warning' : 'success', `Upscale solicitado para ${requested} vídeo(s); ${this._modernUpscaleFailures.length} falha(s)${this.upscaleShouldStop ? '; interrompido pelo usuário' : ''}. Acompanhe os downloads do Flow.`);
         } catch (error) { this.setVideoStatus('error', error.message); }
@@ -3796,6 +3815,70 @@
           this._modernUpscaling = false; button.disabled = false; stop.style.display = 'none';
           document.getElementById('fv-upscale-retry-btn').style.display = this._modernUpscaleFailures.length ? '' : 'none';
         }
+      },
+      /**
+       * v10.24 - Configuracao do espacamento DO UPSCALE. Vive nos proprios
+       * campos ao lado do botao de upscale e nao toca no ritmo de geracao.
+       */
+      upscaleLoteCfg() {
+        const num = (id, padrao) => {
+          const v = Number(document.getElementById(id)?.value);
+          return isFinite(v) && v >= 0 ? v : padrao;
+        };
+        const cfg = {
+          ativo: !!document.getElementById('fv-upscale-lote-ativo')?.checked,
+          tamanho: Math.max(1, Math.round(num('fv-upscale-lote-tam', 5))),
+          completoMin: Math.round(num('fv-upscale-lote-ok-min', 30) * 1000),
+          completoMax: Math.round(num('fv-upscale-lote-ok-max', 60) * 1000),
+          parcialMin: Math.round(num('fv-upscale-lote-parcial-min', 60) * 1000),
+          parcialMax: Math.round(num('fv-upscale-lote-parcial-max', 120) * 1000),
+          tetoMs: Math.max(60000, Math.round(num('fv-upscale-lote-teto', 10) * 60000))
+        };
+        // Um minimo maior que o maximo so geraria espera negativa.
+        cfg.completoMax = Math.max(cfg.completoMin, cfg.completoMax);
+        cfg.parcialMax = Math.max(cfg.parcialMin, cfg.parcialMax);
+        return cfg;
+      },
+      /** Espera do upscale que obedece ao botao Parar Upscale. */
+      async esperaUpscale(ms) {
+        const fim = Date.now() + Math.max(0, Number(ms) || 0);
+        while (Date.now() < fim) {
+          if (this.upscaleShouldStop) return false;
+          await this.sleep(Math.min(1000, fim - Date.now()));
+        }
+        return true;
+      },
+      /**
+       * v10.24 - Espera o lote de upscale ficar pronto e descansa antes do
+       * proximo. Lote completo = descanso normal; faltou algum = espera maior.
+       * No ultimo lote nao ha descanso final.
+       */
+      async espacarLoteUpscale(chaves, cfg, indice, total) {
+        if (!chaves.size) return;
+        const sorteio = (a, b) => Math.round(a + Math.random() * (b - a));
+        const seg = ms => Math.round(ms / 1000);
+        this.logVideoDebug(`⏳ Lote ${indice + 1}/${total}: aguardando ${chaves.size} upscale(s) ficarem prontos...`, 'info');
+        const teto = Date.now() + cfg.tetoMs;
+        let prontos = 0;
+        while (Date.now() < teto) {
+          if (this.upscaleShouldStop) return;
+          const resposta = await this.ponteDownloadsUpscale('list');
+          if (resposta?.ok) {
+            const jobs = (resposta.jobs || []).filter(j => chaves.has(j.mediaId + ':' + j.resolution));
+            prontos = jobs.filter(j => j.state === 'complete').length;
+            // Interrompido/falhou tambem "resolve": nao adianta esperar mais.
+            const resolvidos = jobs.filter(j => ['complete', 'interrupted', 'failed'].includes(j.state)).length;
+            if (resolvidos >= chaves.size) break;
+          }
+          if (!await this.esperaUpscale(4000)) return;
+        }
+        const completo = prontos >= chaves.size;
+        this.logVideoDebug(`${completo ? '✅' : '⚠️'} Lote ${indice + 1}/${total}: ${prontos}/${chaves.size} prontos` +
+          (Date.now() >= teto ? ' (tempo máximo de espera atingido)' : '') + '.', completo ? 'success' : 'warning');
+        if (indice >= total - 1) return;
+        const espera = completo ? sorteio(cfg.completoMin, cfg.completoMax) : sorteio(cfg.parcialMin, cfg.parcialMax);
+        this.logVideoDebug(`😴 Esperando ${seg(espera)}s antes do próximo lote de upscale.`, 'info');
+        await this.esperaUpscale(espera);
       },
       async scanIdentifiedVideosForUpscale() {
         const entries = await this.scanGallery();
@@ -5502,10 +5585,11 @@
             '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--cd-border-light);">' +
               '<label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;">' +
                 '<input type="checkbox" id="' + prefix + '-ritmo-lote-ativo" style="margin-top:2px;">' +
-                '<span style="font-size:12px;"><b>📦 Espaçar os lotes</b><br>' +
-                  '<span style="font-size:11px;color:var(--cd-text-light);">Espera o lote terminar e descansa antes do próximo. ' +
-                  'Se faltou alguma (ex.: 3 de 5), espera mais e confere de novo antes de seguir. ' +
-                  'Funciona mesmo com o ritmo de digitação acima desligado.</span></span>' +
+                '<span style="font-size:12px;"><b>📦 Espaçar os lotes de GERAÇÃO</b><br>' +
+                  '<span style="font-size:11px;color:var(--cd-text-light);">Vale só para gerar imagens/vídeos a partir dos prompts. ' +
+                  'Espera o lote terminar e descansa antes do próximo; se faltou alguma (ex.: 3 de 5), espera mais e confere de novo. ' +
+                  'Funciona mesmo com o ritmo de digitação acima desligado.<br>' +
+                  '<b>O upscale não usa isto</b> — ele tem o espaçamento dele, junto do botão de upscale.</span></span>' +
               '</label>' +
               '<div id="' + prefix + '-ritmo-lote-campos" style="margin-top:4px;">' +
                 linhaFase('loteCompleto', 'Lote completo (saíram todas)', 'Descanso normal antes do próximo lote.', cfg) +
@@ -7365,6 +7449,44 @@ function triggerTrustedClick(el) {
                 <label style="font-size:12px;">Resolução do upscale
                   <select id="fv-upscale-resolution"><option value="1080">1080p</option><option value="720">720p (vídeos 360p)</option></select>
                 </label>
+                <details id="fv-upscale-lote-card" style="margin-top:6px;border:1px solid var(--cd-border-light);border-radius:7px;">
+                  <summary style="cursor:pointer;list-style:none;padding:8px 10px;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;">
+                    <span>⏱️ Espaçar os pedidos de upscale</span>
+                    <span id="fv-upscale-lote-badge" style="margin-left:auto;font-size:10px;color:var(--cd-text-muted);">Desligado</span>
+                  </summary>
+                  <div style="padding:0 10px 10px;border-top:1px solid var(--cd-border-light);">
+                    <label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;cursor:pointer;">
+                      <input type="checkbox" id="fv-upscale-lote-ativo" style="margin-top:2px;">
+                      <span style="font-size:12px;"><b>Pedir em lotes e esperar ficarem prontos</b><br>
+                        <span style="font-size:11px;color:var(--cd-text-light);">Pede N upscales, espera esses N ficarem prontos e só então segue.
+                        Se o lote sair completo, descansa o tempo normal; se faltou algum, espera mais.
+                        Desligado, pede todos de uma vez como antes.</span></span>
+                    </label>
+                    <div id="fv-upscale-lote-campos" style="margin-top:8px;display:flex;flex-direction:column;gap:8px;font-size:11px;color:var(--cd-text-muted);">
+                      <div style="display:flex;align-items:center;gap:6px;">Vídeos por lote:
+                        <input type="number" id="fv-upscale-lote-tam" min="1" max="50" step="1" value="5" class="flow-select-imgs" style="width:66px;padding:4px 6px;">
+                      </div>
+                      <div>
+                        <div style="font-weight:700;color:var(--cd-text);">Lote completo (todos prontos)</div>
+                        <div style="display:flex;align-items:center;gap:6px;margin-top:4px;">de
+                          <input type="number" id="fv-upscale-lote-ok-min" min="0" max="600" step="5" value="30" class="flow-select-imgs" style="width:66px;padding:4px 6px;"> a
+                          <input type="number" id="fv-upscale-lote-ok-max" min="0" max="600" step="5" value="60" class="flow-select-imgs" style="width:66px;padding:4px 6px;"> segundos
+                        </div>
+                      </div>
+                      <div>
+                        <div style="font-weight:700;color:var(--cd-text);">Lote incompleto (faltou algum)</div>
+                        <div style="display:flex;align-items:center;gap:6px;margin-top:4px;">de
+                          <input type="number" id="fv-upscale-lote-parcial-min" min="0" max="600" step="5" value="60" class="flow-select-imgs" style="width:66px;padding:4px 6px;"> a
+                          <input type="number" id="fv-upscale-lote-parcial-max" min="0" max="600" step="5" value="120" class="flow-select-imgs" style="width:66px;padding:4px 6px;"> segundos
+                        </div>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:6px;">Desistir de esperar o lote após:
+                        <input type="number" id="fv-upscale-lote-teto" min="1" max="120" step="1" value="10" class="flow-select-imgs" style="width:66px;padding:4px 6px;"> min
+                      </div>
+                      <div style="font-size:10px;color:var(--cd-text-light);line-height:1.4;">Isso é só do upscale. Não tem relação com o ritmo de geração de prompts.</div>
+                    </div>
+                  </div>
+                </details>
                 <button class="flow-validate-btn" id="fv-upscale-btn" style="margin:0; background:linear-gradient(135deg, #8b5cf6, #6d28d9); color:#fff; border:none; margin-top: 6px;">🚀 Upscale (Vídeos Identificados)</button>
                 <button class="flow-validate-btn" id="fv-upscale-download-refresh" style="margin:0;">🔎 Conferir downloads do upscale</button>
                 <div id="fv-upscale-download-report" style="font-size:11px;max-height:220px;overflow:auto;"></div>
@@ -7760,6 +7882,34 @@ if (clearVideoRefsBtn) {
               upscaleResolution.addEventListener('change', () => localStorage.setItem('flow_upscale_resolution', upscaleResolution.value));
             }
             $('fv-upscale-download-refresh')?.addEventListener('click', () => this.atualizarDownloadsUpscale());
+
+            // v10.24: espacamento do upscale - guarda e restaura os campos.
+            // Chave propria: nada aqui encosta na configuracao de geracao.
+            (() => {
+              const CAMPOS = ['fv-upscale-lote-tam', 'fv-upscale-lote-ok-min', 'fv-upscale-lote-ok-max',
+                'fv-upscale-lote-parcial-min', 'fv-upscale-lote-parcial-max', 'fv-upscale-lote-teto'];
+              const ativo = $('fv-upscale-lote-ativo'), badge = $('fv-upscale-lote-badge'), campos = $('fv-upscale-lote-campos');
+              if (!ativo || !badge || !campos) return;
+              let salvo = {};
+              try { salvo = JSON.parse(localStorage.getItem('flow_upscale_lote_cfg') || '{}') || {}; } catch (_) {}
+              ativo.checked = !!salvo.ativo;
+              for (const id of CAMPOS) if (salvo[id] != null && $(id)) $(id).value = salvo[id];
+              const pintar = () => {
+                badge.textContent = ativo.checked ? 'Ligado · lotes de ' + ($('fv-upscale-lote-tam')?.value || 5) : 'Desligado';
+                badge.style.color = ativo.checked ? '#059669' : 'var(--cd-text-muted)';
+                campos.style.opacity = ativo.checked ? '1' : '.45';
+                campos.querySelectorAll('input').forEach(i => { i.disabled = !ativo.checked; });
+              };
+              const guardar = () => {
+                const dados = { ativo: ativo.checked };
+                for (const id of CAMPOS) dados[id] = $(id)?.value;
+                try { localStorage.setItem('flow_upscale_lote_cfg', JSON.stringify(dados)); } catch (_) {}
+                pintar();
+              };
+              ativo.addEventListener('change', guardar);
+              for (const id of CAMPOS) $(id)?.addEventListener('change', guardar);
+              pintar();
+            })();
 if (fvUpscaleBtn) fvUpscaleBtn.addEventListener('click', () => { startKeepAlive(); this.startUpscaleProcess(); });
 
 // Upscale stop button
