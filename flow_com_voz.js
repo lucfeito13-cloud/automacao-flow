@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.22  -   2026-10-01
+//  Flow NOVO v10.23  -   2026-10-01
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,12 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.23: espacamento entre lotes, com liga/desliga proprio dentro do bloco
+//          Ritmo. Lote completo descansa 30-60s antes do proximo; lote parcial
+//          (3 ou 4 de 5) espera mais 60-120s, confere de novo quantas ficaram
+//          prontas e so entao segue. No ultimo lote nao ha descanso final.
+//          A espera longa respeita o botao Parar a cada segundo. Desligado,
+//          mantem exatamente a pausa fixa de "Pausa entre lotes (seg)".
 //  v10.22: conserta o upscale, que ficava parado no menu sem comecar. O item do
 //          submenu tem duas linhas e o texto vem colado ("720pUpscaled"); a
 //          busca usava \b depois do "p", que batia no "U" e nunca casava - nem
@@ -305,7 +311,12 @@
     antesRefMin: 400, antesRefMax: 900,  // espera ANTES de abrir a referencia
     depoisRefMin: 500, depoisRefMax: 1100, // espera DEPOIS de inserir a referencia
     antesEnvioMin: 600, antesEnvioMax: 1400, // espera antes de clicar em Enviar
-    entrePromptsMin: 2000, entrePromptsMax: 5000 // respiro entre um prompt e outro
+    entrePromptsMin: 2000, entrePromptsMax: 5000, // respiro entre um prompt e outro
+    // Espacamento ENTRE LOTES. Tem o proprio liga/desliga: funciona mesmo com o
+    // ritmo de digitacao acima desligado, e os presets nao mexem nestes valores.
+    loteAtivo: false,
+    loteCompletoMin: 30000, loteCompletoMax: 60000,   // o lote saiu inteiro
+    loteParcialMin: 60000, loteParcialMax: 120000     // faltou alguma: espera mais
   };
   const RITMO_PRESETS = {
     rapido: { digitacao: 'bloco', palavraMin: 20, palavraMax: 60,
@@ -327,7 +338,8 @@
     try { salvo = JSON.parse(localStorage.getItem(ritmoChave(!!video)) || '{}') || {}; } catch (_) { salvo = {}; }
     const cfg = Object.assign({}, RITMO_PADRAO, salvo);
     // Um minimo maior que o maximo so geraria NaN/negativo mais adiante.
-    for (const par of [['palavra'], ['antesRef'], ['depoisRef'], ['antesEnvio'], ['entrePrompts']]) {
+    for (const par of [['palavra'], ['antesRef'], ['depoisRef'], ['antesEnvio'], ['entrePrompts'],
+                       ['loteCompleto'], ['loteParcial']]) {
       const min = par[0] + 'Min', max = par[0] + 'Max';
       cfg[min] = Math.max(0, Number(cfg[min]) || 0);
       cfg[max] = Math.max(cfg[min], Number(cfg[max]) || 0);
@@ -363,7 +375,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.22', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.23', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -5430,17 +5442,25 @@
         const acoes = corpo?.querySelector('.flow-actions');
         if (!corpo || !acoes) return;
 
-        const campo = (id, valor) => '<input type="number" id="' + id + '" min="0" max="600000" step="50" value="' + valor +
+        // Os tempos de lote sao longos; em milissegundos ficavam ilegiveis (30000).
+        // Guardamos sempre em ms, mas estes aparecem e sao digitados em segundos.
+        const EM_SEGUNDOS = new Set(['loteCompleto', 'loteParcial']);
+        const fator = chave => EM_SEGUNDOS.has(chave) ? 1000 : 1;
+        const campo = (id, valor, seg) => '<input type="number" id="' + id + '" min="0" max="' +
+          (seg ? 600 : 600000) + '" step="' + (seg ? 5 : 50) + '" value="' + valor +
           '" class="flow-select-imgs" style="width:76px;padding:4px 6px;">';
-        const linhaFase = (chave, titulo, dica, cfg) =>
-          '<div style="margin-top:10px;">' +
+        const linhaFase = (chave, titulo, dica, cfg) => {
+          const seg = EM_SEGUNDOS.has(chave), div = fator(chave);
+          return '<div style="margin-top:10px;">' +
             '<div style="font-size:11px;font-weight:700;color:var(--cd-text);">' + titulo + '</div>' +
             '<div style="font-size:10px;color:var(--cd-text-light);margin:2px 0 5px;line-height:1.35;">' + dica + '</div>' +
             '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--cd-text-muted);">' +
-              'de ' + campo(prefix + '-ritmo-' + chave + '-min', cfg[chave + 'Min']) +
-              ' a ' + campo(prefix + '-ritmo-' + chave + '-max', cfg[chave + 'Max']) + ' ms' +
+              'de ' + campo(prefix + '-ritmo-' + chave + '-min', cfg[chave + 'Min'] / div, seg) +
+              ' a ' + campo(prefix + '-ritmo-' + chave + '-max', cfg[chave + 'Max'] / div, seg) +
+              ' ' + (seg ? 'segundos' : 'ms') +
             '</div>' +
           '</div>';
+        };
 
         const cfg = R.ler(video);
         const card = document.createElement('details');
@@ -5478,6 +5498,20 @@
             '</div>' +
             '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--cd-border-light);font-size:11px;font-weight:800;color:var(--cd-text-muted);">⏱️ Tempos (sorteia entre o mínimo e o máximo)</div>' +
             FASES.map(f => linhaFase(f[0], f[1], f[2], cfg)).join('') +
+            // ── Espacamento entre lotes: liga/desliga proprio ──
+            '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--cd-border-light);">' +
+              '<label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;">' +
+                '<input type="checkbox" id="' + prefix + '-ritmo-lote-ativo" style="margin-top:2px;">' +
+                '<span style="font-size:12px;"><b>📦 Espaçar os lotes</b><br>' +
+                  '<span style="font-size:11px;color:var(--cd-text-light);">Espera o lote terminar e descansa antes do próximo. ' +
+                  'Se faltou alguma (ex.: 3 de 5), espera mais e confere de novo antes de seguir. ' +
+                  'Funciona mesmo com o ritmo de digitação acima desligado.</span></span>' +
+              '</label>' +
+              '<div id="' + prefix + '-ritmo-lote-campos" style="margin-top:4px;">' +
+                linhaFase('loteCompleto', 'Lote completo (saíram todas)', 'Descanso normal antes do próximo lote.', cfg) +
+                linhaFase('loteParcial', 'Lote incompleto (faltou alguma)', 'Espera maior; no fim confere de novo quantas ficaram prontas.', cfg) +
+              '</div>' +
+            '</div>' +
             '<button class="flow-validate-btn" id="' + prefix + '-ritmo-reset" style="margin-top:12px;">↩️ Restaurar preset Equilibrado</button>' +
             '<div style="font-size:10px;color:var(--cd-text-light);margin-top:8px;line-height:1.4;">Os tempos valem só para ' +
               (video ? 'VÍDEOS' : 'IMAGENS') + '. A outra aba tem a configuração dela.</div>' +
@@ -5487,31 +5521,40 @@
         const el = sufixo => card.querySelector('#' + prefix + '-ritmo-' + sufixo);
         const ligado = el('enabled'), preset = el('preset'), digitacao = el('digitacao');
         const porVez = el('porvez'), porVezLinha = el('porvez-linha'), badge = el('badge');
+        const loteAtivo = el('lote-ativo'), loteCampos = el('lote-campos');
+        // Os campos de lote vivem no MESMO armazenamento, mas fora dos presets.
+        const CHAVES = FASES.map(f => f[0]).concat(['loteCompleto', 'loteParcial']);
 
         const pintar = () => {
-          badge.textContent = ligado.checked ? 'Ligado · ' + preset.value : 'Desligado';
-          badge.style.color = ligado.checked ? '#059669' : 'var(--cd-text-muted)';
+          const partes = [];
+          if (ligado.checked) partes.push('ritmo · ' + preset.value);
+          if (loteAtivo.checked) partes.push('lotes');
+          badge.textContent = partes.length ? 'Ligado: ' + partes.join(' + ') : 'Desligado';
+          badge.style.color = partes.length ? '#059669' : 'var(--cd-text-muted)';
           porVezLinha.style.display = digitacao.value === 'pedaco' ? 'flex' : 'none';
+          loteCampos.style.opacity = loteAtivo.checked ? '1' : '.45';
+          loteCampos.querySelectorAll('input').forEach(i => { i.disabled = !loteAtivo.checked; });
         };
         const lerDaTela = () => {
           const dados = {
             ativo: ligado.checked, preset: preset.value, digitacao: digitacao.value,
-            palavrasPorVez: Number(porVez.value) || 4
+            palavrasPorVez: Number(porVez.value) || 4, loteAtivo: loteAtivo.checked
           };
-          for (const f of FASES) {
-            dados[f[0] + 'Min'] = Number(el(f[0] + '-min').value) || 0;
-            dados[f[0] + 'Max'] = Number(el(f[0] + '-max').value) || 0;
+          for (const chave of CHAVES) {
+            dados[chave + 'Min'] = (Number(el(chave + '-min').value) || 0) * fator(chave);
+            dados[chave + 'Max'] = (Number(el(chave + '-max').value) || 0) * fator(chave);
           }
           return dados;
         };
         const escreverNaTela = dados => {
           ligado.checked = !!dados.ativo;
+          loteAtivo.checked = !!dados.loteAtivo;
           preset.value = dados.preset || 'personalizado';
           digitacao.value = dados.digitacao || 'bloco';
           porVez.value = dados.palavrasPorVez;
-          for (const f of FASES) {
-            el(f[0] + '-min').value = dados[f[0] + 'Min'];
-            el(f[0] + '-max').value = dados[f[0] + 'Max'];
+          for (const chave of CHAVES) {
+            el(chave + '-min').value = dados[chave + 'Min'] / fator(chave);
+            el(chave + '-max').value = dados[chave + 'Max'] / fator(chave);
           }
           pintar();
         };
@@ -5519,24 +5562,40 @@
 
         escreverNaTela(cfg);
 
+        // O que o preset NAO pode mexer: o espacamento de lotes e so do usuario.
+        const guardarLote = () => ({
+          loteAtivo: loteAtivo.checked,
+          loteCompletoMin: (Number(el('loteCompleto-min').value) || 0) * 1000,
+          loteCompletoMax: (Number(el('loteCompleto-max').value) || 0) * 1000,
+          loteParcialMin: (Number(el('loteParcial-min').value) || 0) * 1000,
+          loteParcialMax: (Number(el('loteParcial-max').value) || 0) * 1000
+        });
         // Trocar o preset so PREENCHE os campos; depois disso tudo e editavel.
         preset.addEventListener('change', () => {
           const base = R.PRESETS[preset.value];
           if (!base) { guardar(); return; }
-          escreverNaTela(Object.assign({}, R.PADRAO, base, { ativo: ligado.checked, preset: preset.value }));
+          escreverNaTela(Object.assign({}, R.PADRAO, base,
+            { ativo: ligado.checked, preset: preset.value }, guardarLote()));
           guardar();
         });
-        // Mexer em qualquer numero vira "Personalizado": o preset deixa de valer.
+        // Mexer em qualquer numero do ritmo vira "Personalizado". Os campos de
+        // lote nao: eles nao pertencem a nenhum preset.
         const virarPersonalizado = () => { preset.value = 'personalizado'; guardar(); };
         [digitacao, porVez].forEach(c => c.addEventListener('change', virarPersonalizado));
         for (const f of FASES) {
           el(f[0] + '-min').addEventListener('change', virarPersonalizado);
           el(f[0] + '-max').addEventListener('change', virarPersonalizado);
         }
+        for (const chave of ['loteCompleto', 'loteParcial']) {
+          el(chave + '-min').addEventListener('change', guardar);
+          el(chave + '-max').addEventListener('change', guardar);
+        }
+        loteAtivo.addEventListener('change', guardar);
         ligado.addEventListener('change', guardar);
         el('reset').addEventListener('click', () => {
+          // Restaura so o ritmo; o espacamento de lotes que o usuario ajustou fica.
           escreverNaTela(Object.assign({}, R.PADRAO, R.PRESETS.equilibrado,
-            { ativo: ligado.checked, preset: 'equilibrado' }));
+            { ativo: ligado.checked, preset: 'equilibrado' }, guardarLote()));
           guardar();
         });
       };
@@ -8582,6 +8641,63 @@ clearReferencesForUI(source = 'images') {
             const video = !!(this.videoIsRunning || this._modernIndividualVideo || this._modernTestVideo);
             try { return window.__flowRitmo.ler(video); } catch (_) { return { ativo: false }; }
         }
+        /**
+         * v10.23 - Espera longa que RESPEITA o botao Parar. Dormir 60s de uma vez
+         * deixava o Parar sem efeito ate a espera acabar.
+         */
+        async esperaInterrompivel(ms) {
+            const fim = Date.now() + Math.max(0, Number(ms) || 0);
+            while (Date.now() < fim) {
+                if (this.shouldStop || this.videoShouldStop) return false;
+                await this.sleep(Math.min(1000, fim - Date.now()));
+            }
+            return true;
+        }
+
+        /**
+         * v10.23 - ESPACAMENTO ENTRE LOTES.
+         * Pedimos N por lote e esperamos o lote terminar. Se saiu COMPLETO,
+         * descansa o tempo normal antes do proximo. Se saiu PARCIAL (3 ou 4 de 5),
+         * espera MAIS e confere de novo: o que faltava costuma aparecer nesse
+         * intervalo, sem precisar reenviar nada.
+         * Desligado, mantem exatamente a pausa fixa de antes.
+         */
+        async espacarLote(matrix, indiceLote, totalLotes) {
+            const ultimo = indiceLote >= totalLotes - 1;
+            const cfg = this.ritmoCfg();
+            if (!cfg.loteAtivo || !window.__flowRitmo) {
+                if (!ultimo) await this.esperaFixa(CONFIG.DELAY_BETWEEN_BATCHES[0]);
+                return;
+            }
+            const R = window.__flowRitmo;
+            const reg = (this.videoIsRunning ? this.logVideoDebug : this.logDebug).bind(this);
+            const lista = Array.isArray(matrix) ? matrix : [];
+            const prontos = () => lista.filter(s => s.state === 'loaded').length;
+            const total = lista.length;
+            const seg = ms => Math.round(ms / 1000);
+
+            if (total && prontos() < total) {
+                const extra = R.sorteio(cfg.loteParcialMin, cfg.loteParcialMax);
+                reg(`⏸️ Lote ${indiceLote + 1}/${totalLotes}: só ${prontos()}/${total} ficaram prontas. ` +
+                    `Aguardando mais ${seg(extra)}s antes de seguir.`, 'warning');
+                if (!await this.esperaInterrompivel(extra)) return;
+                // Reconfere: estes dois existem no adaptador novo; se nao houver,
+                // seguimos com a contagem que ja tinhamos.
+                try { this.captureModernResults?.(); } catch (_) {}
+                try { this.resgatarResultadosConcluidos?.(lista, true); } catch (_) {}
+                const agora = prontos();
+                reg(`🔎 Depois da espera: ${agora}/${total} prontas.`,
+                    agora >= total ? 'success' : 'warning');
+            } else if (total) {
+                reg(`✅ Lote ${indiceLote + 1}/${totalLotes} completo (${total}/${total}).`, 'success');
+            }
+
+            if (ultimo) return;
+            const descanso = R.sorteio(cfg.loteCompletoMin, cfg.loteCompletoMax);
+            reg(`😴 Descanso de ${seg(descanso)}s antes do próximo lote.`, 'info');
+            await this.esperaInterrompivel(descanso);
+        }
+
         /** Espera sorteada de uma fase. Desligado, nao espera nada. */
         async ritmoEsperar(fase, cfg) {
             const c = cfg || this.ritmoCfg();
@@ -9341,7 +9457,8 @@ while (retryCount[key] < maxRetries && !this.shouldStop) {
                         }
                     }
 
-                    if (bIdx < batches.length - 1) await this.esperaFixa(CONFIG.DELAY_BETWEEN_BATCHES[0]);
+                    // v10.23: espacamento entre lotes (adapta se o lote saiu parcial).
+                    await this.espacarLote(matrix, bIdx, batches.length);
                 }
 
                 // ══════ DEFERRED RETRY: retentar falhas acumuladas ══════
@@ -11413,7 +11530,8 @@ while (retryCount[key] < maxVideoRetries && !this.videoShouldStop) {
                         }
                     }
 
-                    if (bIdx < batches.length - 1) await this.esperaFixa(CONFIG.DELAY_BETWEEN_BATCHES[0]);
+                    // v10.23: espacamento entre lotes (adapta se o lote saiu parcial).
+                    await this.espacarLote(matrix, bIdx, batches.length);
                 }
 
                 // ══════ DEFERRED RETRY (Vídeos): retentar falhas acumuladas ══════
