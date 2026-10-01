@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.22  -   2026-10-01
+//  Flow NOVO v10.25  -   2026-10-01
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,12 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.25: o upscale volta a usar o MESMO detector de itens do download normal,
+//          que funciona neste site. O detector proprio que eu tinha inventado na
+//          v10.22 deixou a fila passar voando por todos os videos sem abrir o
+//          submenu. Agora as falhas dizem qual passo quebrou e o que o menu
+//          mostrava, e tres falhas iguais seguidas param a fila em vez de varrer
+//          o projeto inteiro em segundos.
 //  v10.22: conserta o upscale, que ficava parado no menu sem comecar. O item do
 //          submenu tem duas linhas e o texto vem colado ("720pUpscaled"); a
 //          busca usava \b depois do "p", que batia no "U" e nunca casava - nem
@@ -363,7 +369,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.22', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.25', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -3773,11 +3779,26 @@
             .map(e => ({ ...e, resolution })).filter(e => !this.getUpscaleRequestedSet().has(e.uuid + ':' + resolution));
           if (!entries.length) throw new Error('Analise o projeto e atribua os vídeos às cenas antes do upscale.');
           let requested = 0;
+          // Se o MESMO erro acontece tres vezes seguidas, o problema nao e o
+          // video: e o fluxo. Varrer 100 videos falhando em segundos nao ajuda
+          // ninguem e so parece que a extensao enlouqueceu. Para e explica.
+          let erroRepetido = null, repeticoes = 0, abortou = null;
           for (const entry of entries) {
             if (this.upscaleShouldStop) break;
-            try { await this.requestModernUpscale(entry); requested++; }
-            catch (error) { this._modernUpscaleFailures.push(entry); this.logVideoDebug(error.message, 'error'); }
+            try {
+              await this.requestModernUpscale(entry);
+              requested++;
+              erroRepetido = null; repeticoes = 0;
+            } catch (error) {
+              this._modernUpscaleFailures.push(entry);
+              this.logVideoDebug(error.message, 'error');
+              const assinatura = String(error.message).replace(/"[^"]*"/g, '""');
+              if (assinatura === erroRepetido) repeticoes++;
+              else { erroRepetido = assinatura; repeticoes = 1; }
+              if (repeticoes >= 3) { abortou = error.message; break; }
+            }
           }
+          if (abortou) throw new Error('Parei após 3 falhas iguais seguidas. ' + abortou);
           this.setVideoStatus(this._modernUpscaleFailures.length || this.upscaleShouldStop ? 'warning' : 'success', `Upscale solicitado para ${requested} vídeo(s); ${this._modernUpscaleFailures.length} falha(s)${this.upscaleShouldStop ? '; interrompido pelo usuário' : ''}. Acompanhe os downloads do Flow.`);
         } catch (error) { this.setVideoStatus('error', error.message); }
         finally {
@@ -3800,7 +3821,13 @@
        */
       async abrirSubmenuDownload() {
         const download = menuItem(['Download', 'Baixar']);
-        if (!download) throw new Error('Menu de download não encontrado.');
+        if (!download) {
+          // Falhar aqui e INSTANTANEO: era isto que fazia a fila passar voando
+          // por todos os videos sem nunca abrir o submenu. Agora diz o que viu.
+          const vistos = this.itensDoMenuVisivel();
+          throw new Error('O item "Download" não apareceu no menu. O menu mostrava: ' +
+            (vistos.length ? vistos.join(' | ') : '(nenhum item)'));
+        }
         const r = download.getBoundingClientRect();
         for (const t of ['pointerover', 'mouseover', 'mouseenter', 'mousemove']) {
           try {
@@ -3843,17 +3870,33 @@
         // que travava o upscale. Exigimos borda so ANTES do numero.
         // O (?:^|[^0-9]) evita casar 720 dentro de "1720" e 1080 com "720".
         const alvo = new RegExp('(?:^|[^0-9])' + resolution + '\\s*p', 'i');
-        let upscale;
+
+        // Detector IDENTICO ao do download normal (que funciona neste site todo
+        // dia). Eu tinha inventado um detector proprio e foi pior: aqui a regra
+        // e reaproveitar o caminho comprovado, nao criar outro.
+        let opcoes;
         try {
-          upscale = await this.modernWait(() => this.itensDeMenuClicaveis().find(b => alvo.test(norm(b.textContent))) || null, 8000);
+          opcoes = await this.modernWait(() => {
+            const itens = $$('[role="menuitem"]').filter(b => visible(b) && !b.disabled &&
+              /original|upscaled|\b\d(?:k|80p|20p)\b/i.test(b.textContent));
+            return itens.length ? itens : null;
+          }, 8000);
         } catch (_) {
           const vistos = this.itensDoMenuVisivel();
           await this.closeMenus();
-          throw new Error(`A opção ${resolution}p não apareceu no menu de "${entry.name}". ` +
+          throw new Error(`O submenu de Download não abriu para "${entry.name}". ` +
             `O menu mostrava: ${vistos.length ? vistos.join(' | ') : '(nenhum item)'}`);
         }
+
+        const upscale = opcoes.find(b => alvo.test(norm(b.textContent)));
+        if (!upscale) {
+          const vistos = opcoes.map(b => norm(b.textContent));
+          await this.closeMenus();
+          throw new Error(`A opção ${resolution}p não existe para "${entry.name}". ` +
+            `O submenu oferecia: ${vistos.join(' | ')}`);
+        }
         this.logVideoDebug(`⬆️ ${entry.name}: opção escolhida "${norm(upscale.textContent)}".`, 'info');
-        if (upscale.disabled || upscale.getAttribute('aria-disabled') === 'true') { await this.closeMenus(); throw new Error(`${resolution}p indisponível para ${entry.name}.`); }
+        if (upscale.getAttribute('aria-disabled') === 'true') { await this.closeMenus(); throw new Error(`${resolution}p indisponível para ${entry.name}.`); }
         const tracking = await this.ponteDownloadsUpscale('register', { mediaId: entry.uuid, label: entry.name, resolution });
         if (!tracking.ok) throw new Error('Não foi possível registrar o acompanhamento: ' + tracking.error);
         if (['requested', 'downloading', 'complete'].includes(tracking.job.state)) { await this.closeMenus(); return; }
