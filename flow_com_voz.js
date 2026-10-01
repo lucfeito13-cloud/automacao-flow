@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.16  -   2026-09-30
+//  Flow NOVO v10.21  -   2026-10-01
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,21 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.21: acha o botao Enviar na caixa de prompt NOVA do Flow (out/2026), que
+//          virou <flow-generate-icon-button>; a busca antiga pelo icone
+//          arrow_forward continua como alternativa. Vale para imagem e video.
+//          Adiciona o bloco "Ritmo & Seguranca de Geracao" em cada aba: digita
+//          palavra por palavra ou em pedacos e espera antes/depois da
+//          referencia, antes do envio e entre um prompt e o proximo. Desligado
+//          por padrao - assim nada do comportamento antigo muda.
+//  v10.20: escolha de upscale 720p/1080p, confirmação pelo snackbar novo
+//          e acompanhamento persistente dos downloads concluídos no Chrome.
+//  v10.19: cinco erros seguidos pausam a fila por cinco minutos; somente
+//          resultados afetados são tentados duas vezes, sem atualizar a página.
+//  v10.18: detecta atividade incomum na galeria inteira visível, inclusive
+//          erros fora dos registros do lote; deduplica por ID da mídia.
+//  v10.17: segurança opcional na continuidade; desligada registra falhas e
+//          tenta a próxima cena, ligada para se gerar ou renomear falhar.
 //  v10.16: uma passagem no renomeador; nome confirmado pela interface do
 //          Flow libera o favorito automático sem depender da leitura antiga.
 //  v10.15: opção de personalizar sigla também na aba Renomear, com prévia
@@ -195,9 +210,153 @@
   const pure = { norm, refKey, sceneInfo, unique, cleanEditorText, safeName, zipFiles, blobToJpeg, videoIdentity };
   if (typeof module === 'object' && module.exports) module.exports = pure;
 
+  // ==========================================================================
+  //  v10.21 - LOCALIZADOR DO BOTAO ENVIAR (caixa de prompt nova)
+  //  Em out/2026 o Flow trocou a caixa de prompt. O botao de enviar deixou de
+  //  ser um <button> com <i class="google-symbols">arrow_forward</i> e virou um
+  //  componente proprio: <flow-generate-icon-button> dentro de <flow-prompt-box>
+  //  (-> div.prompt-box-content -> flow-base-prompt-box -> div.bottom-controls).
+  //  Esta funcao acha o botao nos dois formatos. Se nao achar, devolve null e
+  //  quem chamou continua com a busca antiga - nada do fluxo velho foi removido.
+  // ==========================================================================
+  const flowVisivel = el => {
+    try { return !!el && !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden'; }
+    catch (_) { return false; }
+  };
+  const flowNosso = el => { try { return !!el.closest('#flow-panel,#flow-assign-panel,#flow-popup,#flow-mini'); } catch (_) { return false; } };
+  /** Dentro do componente novo quem recebe o clique e o <button> interno. */
+  const flowBotaoInterno = el => {
+    if (!el) return null;
+    if (el.tagName === 'BUTTON') return el;
+    return el.querySelector('button') || el;
+  };
+  /** Vale tanto para o <button> quanto para o componente que o embrulha. */
+  const flowEnvioDesabilitado = btn => {
+    if (!btn) return true;
+    if (btn.disabled === true) return true;
+    if (btn.getAttribute && btn.getAttribute('aria-disabled') === 'true') return true;
+    try {
+      const host = btn.closest('flow-generate-icon-button');
+      if (host && (host.getAttribute('aria-disabled') === 'true' || host.hasAttribute('disabled'))) return true;
+    } catch (_) {}
+    return false;
+  };
+  const flowCaixaDePrompt = () =>
+    document.querySelector('flow-prompt-box, .prompt-box-container, flow-base-prompt-box, .base-prompt-box');
+  const flowAcharEnviar = () => {
+    // 1) Formato novo: o componente dedicado. E o caminho mais confiavel.
+    for (const host of document.querySelectorAll('flow-generate-icon-button')) {
+      if (!flowVisivel(host) || flowNosso(host)) continue;
+      const btn = flowBotaoInterno(host);
+      if (btn) return btn;
+    }
+    // 2) Rotulo oficial, nas versoes que ainda o publicam.
+    for (const sel of ['button[aria-label="Start generation"]', 'button[aria-label="Iniciar geração"]']) {
+      const btn = document.querySelector(sel);
+      if (flowVisivel(btn) && !flowNosso(btn)) return btn;
+    }
+    // 3) Icone/rotulo, mas so DENTRO da caixa de prompt: fora dela existem
+    //    setas parecidas na galeria e clicar nelas era o que dava erro.
+    const caixa = flowCaixaDePrompt();
+    if (caixa) {
+      const candidatos = [...caixa.querySelectorAll('button')].filter(btn => {
+        if (!flowVisivel(btn) || flowNosso(btn)) return false;
+        const aria = norm(btn.getAttribute('aria-label')).toLowerCase();
+        const titulo = norm(btn.getAttribute('title')).toLowerCase();
+        const texto = norm(btn.textContent).toLowerCase();
+        const icone = norm(btn.querySelector('i.google-symbols,mat-icon,[class*="google-symbol"]')?.textContent).toLowerCase();
+        const nomeado = /(start generation|iniciar gera[cç][aã]o|generate|gerar|create|criar|send|enviar)/i.test(aria + ' ' + titulo) ||
+          /^(generate|gerar|create|criar|send|enviar)$/i.test(texto);
+        const iconico = /^(arrow_forward|arrow_upward|send|play_arrow)$/i.test(icone);
+        return nomeado || iconico;
+      });
+      // O envio fica na ponta direita da linha de controles.
+      if (candidatos.length) {
+        candidatos.sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right);
+        return candidatos[0];
+      }
+    }
+    return null;
+  };
+  root.__flowAcharEnviar = flowAcharEnviar;
+  root.__flowEnvioDesabilitado = flowEnvioDesabilitado;
+
+  // ==========================================================================
+  //  v10.21 - RITMO & SEGURANCA DE GERACAO
+  //  Deixa a automacao mais parecida com uma pessoa digitando: escreve por
+  //  palavra, respira antes e depois de cada referencia, espera antes de clicar
+  //  em Enviar e da um intervalo entre um prompt e o proximo.
+  //  Com "ativo: false" NADA muda - o caminho antigo roda exatamente igual.
+  //  A configuracao e separada por tipo de geracao (imagem e video).
+  // ==========================================================================
+  const RITMO_PADRAO = {
+    ativo: false,
+    preset: 'equilibrado',
+    digitacao: 'bloco',       // bloco | palavra | pedaco
+    palavrasPorVez: 4,        // usado so no modo "pedaco"
+    palavraMin: 50,  palavraMax: 140,   // pausa entre palavras/pedacos
+    antesRefMin: 400, antesRefMax: 900,  // espera ANTES de abrir a referencia
+    depoisRefMin: 500, depoisRefMax: 1100, // espera DEPOIS de inserir a referencia
+    antesEnvioMin: 600, antesEnvioMax: 1400, // espera antes de clicar em Enviar
+    entrePromptsMin: 2000, entrePromptsMax: 5000 // respiro entre um prompt e outro
+  };
+  const RITMO_PRESETS = {
+    rapido: { digitacao: 'bloco', palavraMin: 20, palavraMax: 60,
+      antesRefMin: 150, antesRefMax: 350, depoisRefMin: 200, depoisRefMax: 450,
+      antesEnvioMin: 200, antesEnvioMax: 500, entrePromptsMin: 500, entrePromptsMax: 1200 },
+    equilibrado: { digitacao: 'pedaco', palavrasPorVez: 4, palavraMin: 50, palavraMax: 140,
+      antesRefMin: 400, antesRefMax: 900, depoisRefMin: 500, depoisRefMax: 1100,
+      antesEnvioMin: 600, antesEnvioMax: 1400, entrePromptsMin: 2000, entrePromptsMax: 5000 },
+    seguro: { digitacao: 'palavra', palavraMin: 90, palavraMax: 240,
+      antesRefMin: 800, antesRefMax: 1600, depoisRefMin: 900, depoisRefMax: 1900,
+      antesEnvioMin: 1200, antesEnvioMax: 2500, entrePromptsMin: 5000, entrePromptsMax: 11000 },
+    'muito-seguro': { digitacao: 'palavra', palavraMin: 160, palavraMax: 420,
+      antesRefMin: 1500, antesRefMax: 3000, depoisRefMin: 1800, depoisRefMax: 3500,
+      antesEnvioMin: 2500, antesEnvioMax: 5000, entrePromptsMin: 12000, entrePromptsMax: 25000 }
+  };
+  const ritmoChave = video => 'flow_ritmo_cfg_' + (video ? 'fv' : 'flow');
+  const ritmoLer = video => {
+    let salvo = {};
+    try { salvo = JSON.parse(localStorage.getItem(ritmoChave(!!video)) || '{}') || {}; } catch (_) { salvo = {}; }
+    const cfg = Object.assign({}, RITMO_PADRAO, salvo);
+    // Um minimo maior que o maximo so geraria NaN/negativo mais adiante.
+    for (const par of [['palavra'], ['antesRef'], ['depoisRef'], ['antesEnvio'], ['entrePrompts']]) {
+      const min = par[0] + 'Min', max = par[0] + 'Max';
+      cfg[min] = Math.max(0, Number(cfg[min]) || 0);
+      cfg[max] = Math.max(cfg[min], Number(cfg[max]) || 0);
+    }
+    cfg.palavrasPorVez = Math.max(1, Math.min(40, Number(cfg.palavrasPorVez) || 4));
+    return cfg;
+  };
+  const ritmoSalvar = (video, cfg) => {
+    try { localStorage.setItem(ritmoChave(!!video), JSON.stringify(cfg || {})); } catch (_) {}
+  };
+  const ritmoSorteio = (min, max) => {
+    const a = Math.max(0, Number(min) || 0), b = Math.max(a, Number(max) || 0);
+    return Math.round(a + Math.random() * (b - a));
+  };
+  /** Quebra o texto conforme o modo escolhido, preservando os espacos. */
+  const ritmoFatiar = (texto, cfg) => {
+    if (!texto) return [];
+    if (!cfg || !cfg.ativo || cfg.digitacao === 'bloco') return [texto];
+    // A alternativa com \s+ preserva o espaco do INICIO do trecho. Sem ela o
+    // prompt remontado perdia espacos e colava palavras depois de uma referencia.
+    const palavras = texto.match(/\S+\s*|\s+/g) || [texto];
+    if (cfg.digitacao === 'palavra') return palavras;
+    const n = Math.max(1, Number(cfg.palavrasPorVez) || 4);
+    const pedacos = [];
+    for (let i = 0; i < palavras.length; i += n) pedacos.push(palavras.slice(i, i + n).join(''));
+    return pedacos;
+  };
+  root.__flowRitmo = {
+    PADRAO: RITMO_PADRAO, PRESETS: RITMO_PRESETS,
+    ler: ritmoLer, salvar: ritmoSalvar, chave: ritmoChave,
+    sorteio: ritmoSorteio, fatiar: ritmoFatiar
+  };
+
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.16', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.21', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -257,6 +416,21 @@
       },
       /** Pausa interna do adapter, sujeita ao seletor de velocidade. */
       pausa(ms) { return this.sleep(Math.max(20, Math.round(ms * this.fatorVelocidade()))); },
+      /** v10.21: Ritmo da aba correspondente. Imagem e video sao separados. */
+      ritmoCfg() {
+        const video = !!(this.videoIsRunning || this._modernIndividualVideo || this._modernTestVideo);
+        try { return root.__flowRitmo.ler(video); } catch (_) { return root.__flowRitmo.PADRAO; }
+      },
+      /**
+       * Espera sorteada de uma das fases do Ritmo. Com o modo desligado nao
+       * espera nada, entao o fluxo antigo continua com a mesma velocidade.
+       */
+      async ritmoEsperar(fase, cfg) {
+        const c = cfg || this.ritmoCfg();
+        if (!c || !c.ativo) return;
+        const ms = root.__flowRitmo.sorteio(c[fase + 'Min'], c[fase + 'Max']);
+        if (ms > 0) await this.sleep(ms);
+      },
       async modernWait(check, timeout = 10000) {
         // O Flow costuma responder em menos de meio segundo. Conferir de 150 em
         // 150ms fazia a gente PERDER ate 150ms em CADA espera, e sao varias por
@@ -286,7 +460,23 @@
         document.execCommand('delete', false);
         await this.modernWait(() => cleanEditorText(editor) === '' || this.textoSemChips(editor) === '');
       },
+      /**
+       * v10.21: com o Ritmo ligado o texto entra em pedacos (palavra a palavra
+       * ou em grupos), com uma pausa entre eles. Desligado, manda tudo de uma
+       * vez - exatamente como antes.
+       */
       async insertText(text) {
+        if (!text) return;
+        const cfg = this.ritmoCfg();
+        const partes = root.__flowRitmo.fatiar(text, cfg);
+        if (partes.length <= 1) return this.insertTextBloco(text);
+        for (let i = 0; i < partes.length; i++) {
+          if (this.modernStopped()) throw stopError();
+          await this.insertTextBloco(partes[i]);
+          if (i < partes.length - 1) await this.ritmoEsperar('palavra', cfg);
+        }
+      },
+      async insertTextBloco(text) {
         if (!text) return;
         // Com o painel de ingredientes aberto o cursor NAO esta na caixa de
         // prompt e a escrita se perde. Volta para a caixa antes de escrever.
@@ -635,6 +825,13 @@
         const envioDeVideo = !!(this.videoIsRunning || this._modernIndividualVideo);
 
         const findSubmitButton = () => {
+          // v10.21: caixa de prompt nova (<flow-generate-icon-button>). Tenta
+          // primeiro o localizador novo; se ele nao achar, segue o caminho antigo.
+          try {
+            const novo = root.__flowAcharEnviar && root.__flowAcharEnviar();
+            if (novo && !own(novo)) return novo;
+          } catch (_) {}
+
           const exact = $('button[aria-label="Start generation"]');
           if (exact && visible(exact) && !own(exact)) return exact;
 
@@ -676,14 +873,14 @@
           const agora = this.textoSemChips(ed);
           if (textoAntes && agora.length <= Math.max(2, Math.round(textoAntes.length * 0.4))) return true;
           const b = findSubmitButton();
-          if (b && b.disabled) return true;
+          if (b && root.__flowEnvioDesabilitado(b)) return true;
           if (this.getTiles().filter(t => this.tileHasProgress(t)).length > gerandoAntes) return true;
           return false;
         };
 
         const btn = await this.modernWait(() => {
           const candidate = findSubmitButton();
-          return candidate && !candidate.disabled && candidate.getAttribute('aria-disabled') !== 'true' ? candidate : null;
+          return candidate && !root.__flowEnvioDesabilitado(candidate) ? candidate : null;
         });
         this.logDebug(
           'Botão Gerar localizado: ' + JSON.stringify({
@@ -792,6 +989,8 @@
         this.logDebug(`Preparando prompt ${prompt.promptNum}...`, 'info');
         await this.clearEditor();
         const partes = parsePrompt(prompt.text);
+        const ritmo = this.ritmoCfg();
+        if (ritmo.ativo) this.logDebug('🐢 Ritmo ligado (' + ritmo.preset + ', digitação: ' + ritmo.digitacao + ').', 'info');
         const t0 = Date.now();
         const tempos = [];
         for (let i = 0; i < partes.length; i++) {
@@ -802,15 +1001,21 @@
           if (parte.type === 'ref') {
             // Sem reaproveitar o painel: o caminho completo e o que comprovadamente
             // funciona. O atalho economizava pouco e arriscava a referencia.
+            await this.ritmoEsperar('antesRef', ritmo);
             await this.searchAndSelect(parte.name);
+            await this.ritmoEsperar('depoisRef', ritmo);
           } else if (parte.type === 'voice') {
+            await this.ritmoEsperar('antesRef', ritmo);
             await this.searchAndSelectVoice(parte.name);
+            await this.ritmoEsperar('depoisRef', ritmo);
           }
           tempos.push(parte.name + ' ' + ((Date.now() - marca) / 1000).toFixed(1) + 's');
         }
         // Medicao para saber ONDE esta o tempo, em vez de apertar no escuro.
         if (tempos.length) this.logDebug('⏱️ referências: ' + tempos.join(' · '), 'info');
+        await this.ritmoEsperar('antesEnvio', ritmo);
         const enviou = await this.clickSubmit();
+        await this.ritmoEsperar('entrePrompts', ritmo);
         this.logDebug('⏱️ prompt ' + prompt.promptNum + ' montado e enviado em ' + ((Date.now() - t0) / 1000).toFixed(1) + 's', 'info');
         return enviou;
       },
@@ -2789,13 +2994,35 @@
         }
       },
       async prepareAndSubmit(prompt) {
+        this.verificarAtividadeIncomumNaGaleria?.();
+        if (this.modernStopped()) throw stopError();
+        if (this._unusualRecoveryRequested && !this._unusualRetryInProgress) {
+          // Resolve o lote em curso antes de enviar um prompt novo. Não marca
+          // prompts ainda não enviados como falha nem os perde na fila.
+          this.captureModernResults();
+          const records = [...(this._modernActiveRecords || [])];
+          const matrix = records.flatMap(record => Array.from({ length: record.expected }, (_, index) => ({
+            promptNum: record.promptNum, promptKey: record.promptKey,
+            imgNum: index + 1, state: 'pending', record, index
+          })));
+          await this.waitForMatrix(matrix);
+          for (const record of records) {
+            const slots = matrix.filter(slot => slot.promptKey === record.promptKey);
+            slots.forEach((slot, index) => record.results.set(index, slot.state === 'loaded' ?
+              { ...slot, loaded: true, error: false } : { error: true, errorReason: slot.errorReason }));
+            this._modernRecords.set(record.promptKey, record);
+          }
+          this._modernActiveRecords = records;
+          if (this.modernStopped()) throw stopError();
+        }
         this._modernCurrentPrompt = prompt.promptNum;
         const beforeIds = this.snapshotImageUuids();
         const expected = this.videoIsRunning ? this.videoResultsPerPrompt : this.imagesPerPrompt;
         const promptKey = this.chaveDoPrompt(prompt.promptNum);
         // O registro nasce ANTES do envio. Se o Flow aceitar o clique mas demorar
         // para mostrar os cartoes, a cena (inclusive 70.1, 71.1...) nao se perde.
-        const record = { promptNum: prompt.promptNum, promptKey, nodes: [], results: new Map(), beforeIds, expected, signature: '' };
+        const record = { promptNum: prompt.promptNum, promptKey, nodes: [], results: new Map(), beforeIds,
+          beforeNodes: new WeakSet(this.getTiles()), expected, signature: '' };
         this._modernActiveRecords ||= [];
         this._modernActiveRecords.push(record);
         this._modernRecords ||= new Map();
@@ -2816,7 +3043,7 @@
           const scroller = this.getScroller();
           if (scroller) {
             this._modernGalleryObserver = new MutationObserver(() => this.captureModernResults());
-            this._modernGalleryObserver.observe(scroller, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'data-media-id', 'aria-label'] });
+            this._modernGalleryObserver.observe(scroller, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['src', 'data-media-id', 'aria-label'] });
           }
         }
         record.observer = this._modernGalleryObserver;
@@ -2843,6 +3070,8 @@
         return true;
       },
       captureModernResults() {
+        // Erros não dependem de associação por posição/UUID ao lote ativo.
+        this.verificarAtividadeIncomumNaGaleria?.();
         const records = this._modernActiveRecords || [];
         if (!records.length) return;
         const fresh = this.getTiles().filter(tile => !this._modernBaseline?.has(this.getUuidFromTile(tile)));
@@ -2850,8 +3079,12 @@
         let offset = 0;
         for (const record of records) {
           // Se nodes não estão associados ou foram desconectados pelo CDK, associa da lista de fresh
-          if (!record.nodes || record.nodes.some(n => !n.isConnected)) {
-            const available = fresh.slice(offset, offset + record.expected);
+          if (!record.nodes?.length || record.nodes.some(n => !n.isConnected)) {
+            const candidates = this._unusualRetryInProgress ? fresh.filter(tile => {
+              const id = this.getUuidFromTile(tile);
+              return id ? !record.beforeIds.has(id) : !record.beforeNodes?.has(tile);
+            }) : fresh;
+            const available = candidates.slice(offset, offset + record.expected);
             if (available.length) record.nodes = available;
           }
           offset += record.expected;
@@ -3015,6 +3248,10 @@
             }
           }
           if (!pending) {
+            if (this._unusualRecoveryRequested && !this._unusualRetryInProgress) {
+              await this.repetirFalhasAtividadeIncomum(matrix);
+              break;
+            }
             if (!confirmar) break;
             if (zeradoEm == null) zeradoEm = Date.now();
             if (Date.now() - zeradoEm >= confirmar) break;
@@ -3049,6 +3286,9 @@
           for (const s of aindaFaltam) { s.state = 'error'; s.errorReason = motivoParada; }
           const reg = this.videoIsRunning ? this.logVideoDebug : this.logDebug;
           try { reg.call(this, '⚠️ ' + motivoParada + ' ' + aindaFaltam.length + ' contam como falha real — a fila SEGUE.', 'warning'); } catch (_) {}
+        }
+        if (this._unusualRecoveryRequested && !this._unusualRetryInProgress) {
+          await this.repetirFalhasAtividadeIncomum(matrix);
         }
         for (const record of new Set(matrix.map(slot => slot.record).filter(Boolean))) record.observer?.disconnect();
         for (const slot of matrix) if (slot.uuid) this._modernBaseline?.add(slot.uuid);
@@ -3094,15 +3334,22 @@
         this._modernIgnoredErrors = new Map();
         if (resetRecovery) {
           this._unusualActivitySeen = new WeakSet();
+          this._unusualActivityIds = new Set();
           this._unusualActivityCount = 0;
           this._autoRecoveryTriggered = false;
+          this._unusualRecoveryRequested = false;
+          this._unusualOutcomeIds = new Set(this.getTiles().map(tile => this.getUuidFromTile(tile)).filter(Boolean));
         }
         for (const tile of this.getTiles().filter(t => this.isTileError(t))) {
           const key = norm(tile.textContent);
           this._modernIgnoredErrors.set(key, (this._modernIgnoredErrors.get(key) || 0) + 1);
           // Erros que ja estavam na galeria antes desta execucao nao podem
           // disparar uma nova atualizacao automatica.
-          if (this.extractTileError(tile) === '🚨 Atividade incomum') this._unusualActivitySeen.add(tile);
+          if (resetRecovery && this.extractTileError(tile) === '🚨 Atividade incomum') {
+            this._unusualActivitySeen.add(tile);
+            const id = this.getUuidFromTile(tile);
+            if (id) this._unusualActivityIds.add(id);
+          }
         }
       },
 
@@ -3166,7 +3413,9 @@
         // O formato e capturado uma vez. Alterar a aba Renomear no meio da fila
         // nao mistura padroes dentro da mesma sequencia.
         const modeloTravado = lerModeloContinuidade();
+        const pararEmFalha = !!document.getElementById(prefix + '-continuity-stop-on-failure')?.checked;
         let indiceInicial = 0;
+        let falhasRegistradas = {};
         const retomarValor = Number(campoRetomar?.value);
         if (isFinite(retomarValor) && retomarValor > 0) {
           const achou = prompts.findIndex(p => Number(p.promptNum) >= retomarValor);
@@ -3177,6 +3426,7 @@
             if (salvo && salvo.ativo && salvo.textoOriginal === textoOriginal &&
                 salvo.modelo === modeloTravado && Number(salvo.total) === prompts.length) {
               indiceInicial = Math.max(0, Math.min(prompts.length, Number(salvo.proximaCena) || 0));
+              if (salvo.falhas && typeof salvo.falhas === 'object' && !Array.isArray(salvo.falhas)) falhasRegistradas = salvo.falhas;
             }
           } catch (_) {}
         }
@@ -3221,11 +3471,22 @@
         if (input) input.disabled = true;
         let cenaEmExecucao = -1;
         let midiaPendente = null;
-        let falhasFavorito = 0;
+        const falhasAnteriores = Object.entries(falhasRegistradas).filter(([indice]) => Number(indice) < indiceInicial).map(([, falha]) => falha);
+        let falhasFavorito = falhasAnteriores.filter(f => f.tipo === 'favorito').length;
+        let falhasCena = falhasAnteriores.filter(f => f.tipo === 'cena').length;
+        let concluidas = indiceInicial - falhasCena;
+        const salvarAvanco = indice => {
+          this.salvarContinuidade(video, {
+            ativo: true, proximaCena: indice + 1, modelo: modeloTravado,
+            total: prompts.length, textoOriginal, falhas: { ...falhasRegistradas }, atualizadoEm: Date.now()
+          });
+          if (campoRetomar) campoRetomar.value = indice + 1 < prompts.length ? String(prompts[indice + 1].promptNum) : '';
+        };
         try {
           (video ? this.buildVideoPromptList : this.buildPromptList).call(this);
           for (let anterior = 0; anterior < indiceInicial; anterior++) {
-            atualizarItem.call(this, anterior, 'done', 'já concluída');
+            atualizarItem.call(this, anterior, falhasRegistradas[anterior] ? 'error' : 'done',
+              falhasRegistradas[anterior]?.mensagem || 'já concluída');
           }
           atualizarProgresso.call(this, indiceInicial / prompts.length);
           status('info', '🔗 Modo Continuidade: preparando uma cena por vez...');
@@ -3244,6 +3505,7 @@
             atualizarItem.call(this, indice, 'active');
             atualizarProgresso.call(this, indice / prompts.length);
 
+            try {
             // Somente os [nomes] escritos pelo usuário viram referências.
             const promptExecucao = Object.assign({}, prompt);
             status('info', '🎬 Gerando Cena ' + cena + ' com as referências do prompt...');
@@ -3253,6 +3515,7 @@
             if (!enviou) throw new Error('A Cena ' + cena + ' não foi enviada com segurança.');
             await this.pausa(1000);
             const matriz = this.buildPositionMatrix([promptExecucao], 1);
+            matrizes.push(matriz);
             await this.waitForMatrix(matriz, antes);
             const resultado = matriz.find(item => item.state === 'loaded' && (item.uuid || item.workflowId));
             if (!resultado) throw new Error('A Cena ' + cena + ' não terminou com uma mídia confirmada.');
@@ -3301,26 +3564,37 @@
               label: nomeFinal, type: 'scene', scene: 'Cena ' + cena,
               imgNum: 1, isVideo: !!video
             });
-            matrizes.push(matriz);
+            concluidas++;
             atualizarItem.call(this, indice, favoritou ? 'done' : 'error',
               favoritou ? 'renomeada e favoritada' : 'nome salvo; falha no favorito');
+            if (favoritou) delete falhasRegistradas[indice];
+            else falhasRegistradas[indice] = { tipo: 'favorito', mensagem: 'nome salvo; falha no favorito' };
             atualizarProgresso.call(this, (indice + 1) / prompts.length);
-            this.salvarContinuidade(video, {
-              ativo: true,
-              proximaCena: indice + 1,
-              modelo: modeloTravado,
-              total: prompts.length,
-              textoOriginal,
-              atualizadoEm: Date.now()
-            });
+            salvarAvanco(indice);
             midiaPendente = null;
             cenaEmExecucao = -1;
-            if (campoRetomar) {
-              campoRetomar.value = indice + 1 < prompts.length ? String(prompts[indice + 1].promptNum) : '';
-            }
             status(favoritou ? 'success' : 'warning', (favoritou ? '✅ ' : '⚠️ ') + nomeFinal +
               (favoritou ? ' confirmada' : ' renomeada; favorito pendente') +
               (indice + 1 < prompts.length ? '; preparando a próxima cena.' : '.'));
+            } catch (erroCena) {
+              // Parar manual continua obrigatório. A segurança opcional protege
+              // sequências dependentes; desligada, cada falha fica registrada.
+              if (erroCena?.stopped || this.shouldStop || this.videoShouldStop || pararEmFalha) throw erroCena;
+              falhasCena++;
+              falhasRegistradas[indice] = { tipo: 'cena', mensagem: midiaPendente ? 'falha ao renomear' : 'falha na geração' };
+              atualizarItem.call(this, indice, 'error', midiaPendente ? 'falha ao renomear' : 'falha na geração');
+              if (midiaPendente) {
+                midiaPendente.dados.estado = midiaPendente.dados.nomeSalvo ? 'favorite_pending' : 'failed';
+                this.salvarMarcas({ ...this.lerMarcas(), [midiaPendente.id]: midiaPendente.dados });
+                this.atualizarEstadoItemAtribuir(midiaPendente.dados.cena, midiaPendente.dados.estado);
+              }
+              this.logDebug('⚠️ Cena ' + cena + ': ' + (erroCena?.message || erroCena) + '. Seguindo para o próximo prompt.', 'warning');
+              atualizarProgresso.call(this, (indice + 1) / prompts.length);
+              salvarAvanco(indice);
+              midiaPendente = null;
+              cenaEmExecucao = -1;
+              status('warning', '⚠️ Cena ' + cena + ' com falha registrada; seguindo para o próximo prompt.');
+            }
           }
 
           this._lastMatrices = matrizes;
@@ -3328,8 +3602,9 @@
             src: s.src, workflowId: s.workflowId, uuid: s.uuid, promptNum: s.promptNum, isVideo: !!video
           })));
           this.limparContinuidade(video);
-          status(falhasFavorito ? 'warning' : 'success', '🔗 Continuidade concluída: <b>' + prompts.length + '/' + prompts.length +
-            '</b> cenas geradas e renomeadas.' + (falhasFavorito ? ' ⚠️ ' + falhasFavorito + ' favorito(s) pendente(s).' : ' Favoritos confirmados.'));
+          status(falhasFavorito || falhasCena ? 'warning' : 'success', '🔗 Fila finalizada: <b>' + concluidas + '/' + prompts.length +
+            '</b> cenas geradas e renomeadas.' + (falhasCena ? ' ⚠️ ' + falhasCena + ' cena(s) com falha.' : '') +
+            (falhasFavorito ? ' ⚠️ ' + falhasFavorito + ' favorito(s) pendente(s).' : ''));
           try { this.gerarRelatorioDeExecucao(video ? 'videos' : 'imagens'); } catch (_) {}
         } catch (erro) {
           const parada = erro?.stopped || this.shouldStop || this.videoShouldStop;
@@ -3484,7 +3759,11 @@
         const button = document.getElementById('fv-upscale-btn'), stop = document.getElementById('fv-upscale-stop-btn');
         button.disabled = true; stop.style.display = '';
         try {
-          const entries = [...(await this.scanIdentifiedVideosForUpscale()).values()].filter(e => !this.getUpscaleRequestedSet().has(e.uuid));
+          const resolution = Number(document.getElementById('fv-upscale-resolution')?.value) === 720 ? 720 : 1080;
+          localStorage.setItem('flow_upscale_resolution', String(resolution));
+          await this.atualizarDownloadsUpscale();
+          const entries = [...(await this.scanIdentifiedVideosForUpscale()).values()]
+            .map(e => ({ ...e, resolution })).filter(e => !this.getUpscaleRequestedSet().has(e.uuid + ':' + resolution));
           if (!entries.length) throw new Error('Analise o projeto e atribua os vídeos às cenas antes do upscale.');
           let requested = 0;
           for (const entry of entries) {
@@ -3507,18 +3786,69 @@
         }));
       },
       async requestModernUpscale(entry) {
+        const resolution = entry.resolution || 1080;
         const tile = await this.scrollToWorkflow(entry.uuid);
         if (!tile) throw new Error(`Vídeo não encontrado: ${entry.name}`);
         await this.openTileMenu(tile);
         const download = menuItem(['Download', 'Baixar']);
         if (!download) throw new Error('Menu de download não encontrado.');
         download.click();
-        const upscale = await this.modernWait(() => $$('[role="menuitem"]').find(b => visible(b) && /1080p/i.test(b.textContent)));
-        if (upscale.disabled || upscale.getAttribute('aria-disabled') === 'true') throw new Error(`1080p indisponível para ${entry.name}.`);
+        const upscale = await this.modernWait(() => $$('[role="menuitem"]').find(b => visible(b) &&
+          new RegExp('\\b' + resolution + 'p\\b', 'i').test(b.textContent)));
+        if (upscale.disabled || upscale.getAttribute('aria-disabled') === 'true') throw new Error(`${resolution}p indisponível para ${entry.name}.`);
+        const tracking = await this.ponteDownloadsUpscale('register', { mediaId: entry.uuid, label: entry.name, resolution });
+        if (!tracking.ok) throw new Error('Não foi possível registrar o acompanhamento: ' + tracking.error);
+        if (['requested', 'downloading', 'complete'].includes(tracking.job.state)) { await this.closeMenus(); return; }
+        const before = new Map($$('flow-snackbar,.mat-mdc-snack-bar-label,li[data-sonner-toast]').map(node => [node, norm(node.textContent)]));
         upscale.click();
-        await this.modernWait(() => !visible(upscale), 10000);
-        this.getUpscaleRequestedSet().add(entry.uuid);
-        await this.sleep(800); await this.closeMenus();
+        const response = await this.waitForUpscaleToast(before);
+        await this.ponteDownloadsUpscale('update', { key: tracking.job.key,
+          state: response.ok ? 'requested' : response.failure ? 'failed' : 'unconfirmed', detail: response.text });
+        await this.atualizarDownloadsUpscale();
+        await this.closeMenus();
+        if (!response.ok) throw new Error('Upscale sem confirmação: ' + response.text);
+        this.getUpscaleRequestedSet().add(entry.uuid + ':' + resolution);
+      },
+      ponteDownloadsUpscale(action, job) {
+        return new Promise(resolve => {
+          const requestId = 'upscale-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+          const finish = result => { clearTimeout(timer); window.removeEventListener('message', receive); resolve(result); };
+          const receive = event => {
+            const data = event.data;
+            if (event.source === window && event.origin === location.origin && data?.source === 'criadores-dark-extension-bridge' &&
+              data.type === 'FLOW_UPSCALE_TRACK_RESULT' && data.requestId === requestId) finish(data);
+          };
+          const timer = setTimeout(() => finish({ ok: false, error: 'Recarregue a extensão para habilitar o acompanhamento de downloads.' }), 5000);
+          window.addEventListener('message', receive);
+          window.postMessage({ source: 'criadores-dark-flow-main', type: 'FLOW_UPSCALE_TRACK_REQUEST', requestId, action, job }, location.origin);
+        });
+      },
+      async atualizarDownloadsUpscale() {
+        if (this._upscaleDownloadPollBusy) return;
+        this._upscaleDownloadPollBusy = true;
+        try {
+          const result = await this.ponteDownloadsUpscale('list');
+          const panel = document.getElementById('fv-upscale-download-report');
+          if (!result.ok) { if (panel) panel.textContent = result.error; return; }
+          const jobs = result.jobs || [];
+          const labels = { requesting: '⏳ Enviando pedido', requested: '⏳ Pedido confirmado; aguardando download',
+            unconfirmed: '⚠️ Pedido sem confirmação', failed: '❌ Falha no pedido', downloading: '⬇️ Baixando',
+            complete: '✅ Download concluído', interrupted: '❌ Download interrompido' };
+          for (const job of jobs) {
+            const key = job.mediaId + ':' + job.resolution;
+            if (['requested', 'downloading', 'complete'].includes(job.state)) this.getUpscaleRequestedSet().add(key);
+            else this.getUpscaleRequestedSet().delete(key);
+          }
+          if (panel) panel.innerHTML = '<b>' + jobs.filter(job => job.state === 'complete').length + '/' + jobs.length +
+            ' downloads concluídos</b>' + jobs.map(job => '<div style="padding:5px 0;border-bottom:1px solid #eee;">' +
+              this.esc(job.label) + ' · ' + job.resolution + 'p<br>' + labels[job.state] +
+              (job.error ? ' · ' + this.esc(job.error) : '') + '</div>').join('') +
+            '<small>Sem identificação segura do arquivo, o pedido permanece aguardando download. Não usa a ordem dos avisos.</small>';
+          if (jobs.some(job => ['requesting', 'requested', 'unconfirmed', 'downloading'].includes(job.state))) {
+            clearTimeout(this._upscaleDownloadPollTimer);
+            this._upscaleDownloadPollTimer = setTimeout(() => this.atualizarDownloadsUpscale(), 5000);
+          }
+        } finally { this._upscaleDownloadPollBusy = false; }
       },
       async retryFailedUpscale() {
         if (this._modernUpscaling) return;
@@ -5021,6 +5351,141 @@
       } catch (_) {}
     }
 
+    /**
+     * v10.21 - Bloco "Ritmo & Segurança de Geração", um em cada aba.
+     * Tudo aqui e ajustavel pelo usuario; os presets so preenchem os campos.
+     * Com o bloco desligado a automacao roda exatamente como antes.
+     */
+    function montarCardRitmo() {
+      const R = root.__flowRitmo;
+      const FASES = [
+        ['palavra', 'Entre palavras / pedaços', 'Pausa entre cada palavra (ou grupo) digitada.'],
+        ['antesRef', 'Antes de inserir a referência', 'Espera antes de abrir o seletor @.'],
+        ['depoisRef', 'Depois de inserir a referência', 'Espera depois que o chip entra, antes de seguir o texto.'],
+        ['antesEnvio', 'Antes de clicar em Enviar', 'Prompt já montado: respira antes de enviar.'],
+        ['entrePrompts', 'Entre um prompt e o próximo', 'Depois de enviar, espera antes de começar o seguinte.']
+      ];
+      const montar = (video) => {
+        const prefix = video ? 'fv' : 'flow';
+        if (document.getElementById(prefix + '-ritmo-card')) return;
+        const corpo = document.querySelector('.flow-tab-content[data-tab="' + (video ? 'videos' : 'images') + '"] .flow-tab-body');
+        const acoes = corpo?.querySelector('.flow-actions');
+        if (!corpo || !acoes) return;
+
+        const campo = (id, valor) => '<input type="number" id="' + id + '" min="0" max="600000" step="50" value="' + valor +
+          '" class="flow-select-imgs" style="width:76px;padding:4px 6px;">';
+        const linhaFase = (chave, titulo, dica, cfg) =>
+          '<div style="margin-top:10px;">' +
+            '<div style="font-size:11px;font-weight:700;color:var(--cd-text);">' + titulo + '</div>' +
+            '<div style="font-size:10px;color:var(--cd-text-light);margin:2px 0 5px;line-height:1.35;">' + dica + '</div>' +
+            '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--cd-text-muted);">' +
+              'de ' + campo(prefix + '-ritmo-' + chave + '-min', cfg[chave + 'Min']) +
+              ' a ' + campo(prefix + '-ritmo-' + chave + '-max', cfg[chave + 'Max']) + ' ms' +
+            '</div>' +
+          '</div>';
+
+        const cfg = R.ler(video);
+        const card = document.createElement('details');
+        card.id = prefix + '-ritmo-card';
+        card.className = 'flow-card';
+        card.style.cssText = 'margin-bottom:10px;';
+        card.innerHTML =
+          '<summary style="cursor:pointer;list-style:none;padding:10px 12px;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;">' +
+            '<span>🐢 Ritmo &amp; Segurança de Geração</span>' +
+            '<span id="' + prefix + '-ritmo-badge" style="margin-left:auto;font-size:10px;color:var(--cd-text-muted);">Desligado</span>' +
+          '</summary>' +
+          '<div style="padding:0 12px 12px;border-top:1px solid var(--cd-border-light);">' +
+            '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;cursor:pointer;">' +
+              '<input type="checkbox" id="' + prefix + '-ritmo-enabled" style="margin-top:2px;">' +
+              '<span style="font-size:12px;"><b>Gerar em ritmo humano</b><br>' +
+                '<span style="font-size:11px;color:var(--cd-text-light);">Digita em pedaços e espera entre cada etapa, em vez de despejar o prompt inteiro de uma vez. Desligado, nada muda.</span></span>' +
+            '</label>' +
+            '<label style="display:block;margin-top:12px;font-size:11px;color:var(--cd-text-muted);">Preset</label>' +
+            '<select id="' + prefix + '-ritmo-preset" class="flow-select-imgs" style="width:100%;margin-top:4px;">' +
+              '<option value="rapido">⚡ Rápido (quase igual ao normal)</option>' +
+              '<option value="equilibrado">🙂 Equilibrado</option>' +
+              '<option value="seguro">🛡️ Seguro</option>' +
+              '<option value="muito-seguro">🐌 Muito seguro</option>' +
+              '<option value="personalizado">✏️ Personalizado</option>' +
+            '</select>' +
+            '<label style="display:block;margin-top:10px;font-size:11px;color:var(--cd-text-muted);">Como escrever o texto</label>' +
+            '<select id="' + prefix + '-ritmo-digitacao" class="flow-select-imgs" style="width:100%;margin-top:4px;">' +
+              '<option value="bloco">Bloco inteiro de uma vez</option>' +
+              '<option value="palavra">Palavra por palavra</option>' +
+              '<option value="pedaco">Em pedaços de N palavras</option>' +
+            '</select>' +
+            '<div id="' + prefix + '-ritmo-porvez-linha" style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:var(--cd-text-muted);">' +
+              'Palavras por pedaço: <input type="number" id="' + prefix + '-ritmo-porvez" min="1" max="40" step="1" value="' +
+                cfg.palavrasPorVez + '" class="flow-select-imgs" style="width:66px;padding:4px 6px;">' +
+            '</div>' +
+            '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--cd-border-light);font-size:11px;font-weight:800;color:var(--cd-text-muted);">⏱️ Tempos (sorteia entre o mínimo e o máximo)</div>' +
+            FASES.map(f => linhaFase(f[0], f[1], f[2], cfg)).join('') +
+            '<button class="flow-validate-btn" id="' + prefix + '-ritmo-reset" style="margin-top:12px;">↩️ Restaurar preset Equilibrado</button>' +
+            '<div style="font-size:10px;color:var(--cd-text-light);margin-top:8px;line-height:1.4;">Os tempos valem só para ' +
+              (video ? 'VÍDEOS' : 'IMAGENS') + '. A outra aba tem a configuração dela.</div>' +
+          '</div>';
+        acoes.parentElement.insertBefore(card, acoes);
+
+        const el = sufixo => card.querySelector('#' + prefix + '-ritmo-' + sufixo);
+        const ligado = el('enabled'), preset = el('preset'), digitacao = el('digitacao');
+        const porVez = el('porvez'), porVezLinha = el('porvez-linha'), badge = el('badge');
+
+        const pintar = () => {
+          badge.textContent = ligado.checked ? 'Ligado · ' + preset.value : 'Desligado';
+          badge.style.color = ligado.checked ? '#059669' : 'var(--cd-text-muted)';
+          porVezLinha.style.display = digitacao.value === 'pedaco' ? 'flex' : 'none';
+        };
+        const lerDaTela = () => {
+          const dados = {
+            ativo: ligado.checked, preset: preset.value, digitacao: digitacao.value,
+            palavrasPorVez: Number(porVez.value) || 4
+          };
+          for (const f of FASES) {
+            dados[f[0] + 'Min'] = Number(el(f[0] + '-min').value) || 0;
+            dados[f[0] + 'Max'] = Number(el(f[0] + '-max').value) || 0;
+          }
+          return dados;
+        };
+        const escreverNaTela = dados => {
+          ligado.checked = !!dados.ativo;
+          preset.value = dados.preset || 'personalizado';
+          digitacao.value = dados.digitacao || 'bloco';
+          porVez.value = dados.palavrasPorVez;
+          for (const f of FASES) {
+            el(f[0] + '-min').value = dados[f[0] + 'Min'];
+            el(f[0] + '-max').value = dados[f[0] + 'Max'];
+          }
+          pintar();
+        };
+        const guardar = () => { R.salvar(video, lerDaTela()); pintar(); };
+
+        escreverNaTela(cfg);
+
+        // Trocar o preset so PREENCHE os campos; depois disso tudo e editavel.
+        preset.addEventListener('change', () => {
+          const base = R.PRESETS[preset.value];
+          if (!base) { guardar(); return; }
+          escreverNaTela(Object.assign({}, R.PADRAO, base, { ativo: ligado.checked, preset: preset.value }));
+          guardar();
+        });
+        // Mexer em qualquer numero vira "Personalizado": o preset deixa de valer.
+        const virarPersonalizado = () => { preset.value = 'personalizado'; guardar(); };
+        [digitacao, porVez].forEach(c => c.addEventListener('change', virarPersonalizado));
+        for (const f of FASES) {
+          el(f[0] + '-min').addEventListener('change', virarPersonalizado);
+          el(f[0] + '-max').addEventListener('change', virarPersonalizado);
+        }
+        ligado.addEventListener('change', guardar);
+        el('reset').addEventListener('click', () => {
+          escreverNaTela(Object.assign({}, R.PADRAO, R.PRESETS.equilibrado,
+            { ativo: ligado.checked, preset: 'equilibrado' }));
+          guardar();
+        });
+      };
+      montar(false);
+      montar(true);
+    }
+
     /** Um unico resumo discreto em cada aba; fechado por padrao. */
     function montarModoContinuidade() {
       const montar = (video) => {
@@ -5044,6 +5509,10 @@
               '<span style="font-size:12px;"><b>Gerar uma cena por vez</b><br>' +
                 '<span style="font-size:11px;color:var(--cd-text-light);">Uma cena por vez: confirma, renomeia e favorita. Usa só as referências [entre colchetes] do prompt.</span></span>' +
             '</label>' +
+            '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;cursor:pointer;font-size:12px;">' +
+              '<input type="checkbox" id="' + prefix + '-continuity-stop-on-failure" style="margin-top:2px;">' +
+              '<span><b>🛡️ Parar se a cena não gerar ou renomear</b><br>' +
+                '<span style="font-size:11px;color:var(--cd-text-light);">Ative quando a próxima cena precisar da anterior. Desligado, registra a falha e tenta o próximo prompt. Falha no favorito não interrompe.</span></span></label>' +
             '<label style="display:block;margin-top:10px;font-size:11px;color:var(--cd-text-muted);">Formato do nome</label>' +
             '<select id="' + prefix + '-continuity-model" class="flow-select-imgs" style="width:100%;margin-top:4px;">' +
               '<option value="Cena {n} - {tipo} {g}">Cena 7 - ' + (video ? 'Vídeo' : 'Imagem') + ' 1</option>' +
@@ -5065,6 +5534,12 @@
         acoes.parentElement.insertBefore(card, acoes);
 
         const caixa = card.querySelector('#' + prefix + '-continuity-enabled');
+        const seguranca = card.querySelector('#' + prefix + '-continuity-stop-on-failure');
+        const chaveSeguranca = 'flow_continuidade_parar_falha_' + prefix;
+        try { seguranca.checked = localStorage.getItem(chaveSeguranca) === '1'; } catch (_) {}
+        seguranca.addEventListener('change', () => {
+          try { localStorage.setItem(chaveSeguranca, seguranca.checked ? '1' : '0'); } catch (_) {}
+        });
         const modelo = card.querySelector('#' + prefix + '-continuity-model');
         const badge = card.querySelector('#' + prefix + '-continuity-badge');
         const preview = card.querySelector('#' + prefix + '-continuity-preview');
@@ -5154,11 +5629,13 @@
       setTimeout(montarAbaRenomear, ms);
       setTimeout(montarAbaRelatorio, ms);
       setTimeout(montarModoContinuidade, ms);
+      setTimeout(montarCardRitmo, ms);
     });
     setInterval(() => {
       montarAbaRenomear();
       montarAbaRelatorio();
       montarModoContinuidade();
+      montarCardRitmo();
     }, 4000);
 
     // Diagnostico do hover: descobre O QUE abre o painel de prompt.
@@ -6768,7 +7245,12 @@ function triggerTrustedClick(el) {
                 <button class="flow-validate-btn" id="fv-dl-identified" style="margin:0;">📋 Todas as Identificadas</button>
                 <button class="flow-validate-btn" id="fv-dl-scenes" style="margin:0;">🎬 Apenas Cenas</button>
                 <button class="flow-validate-btn" id="fv-dl-all" style="margin:0;">📦 Completo (Todas as Geradas)</button>
-                <button class="flow-validate-btn" id="fv-upscale-btn" style="margin:0; background:linear-gradient(135deg, #8b5cf6, #6d28d9); color:#fff; border:none; margin-top: 6px;">🚀 Upscale 1080p (Vídeos Identificados)</button>
+                <label style="font-size:12px;">Resolução do upscale
+                  <select id="fv-upscale-resolution"><option value="1080">1080p</option><option value="720">720p (vídeos 360p)</option></select>
+                </label>
+                <button class="flow-validate-btn" id="fv-upscale-btn" style="margin:0; background:linear-gradient(135deg, #8b5cf6, #6d28d9); color:#fff; border:none; margin-top: 6px;">🚀 Upscale (Vídeos Identificados)</button>
+                <button class="flow-validate-btn" id="fv-upscale-download-refresh" style="margin:0;">🔎 Conferir downloads do upscale</button>
+                <div id="fv-upscale-download-report" style="font-size:11px;max-height:220px;overflow:auto;"></div>
                 <button class="flow-validate-btn" id="fv-upscale-stop-btn" style="margin:0; margin-top:6px; display:none; background:#fef2f2; color:#991b1b; border:1px solid #fecaca;">⏹ Parar Upscale</button>
                 <button class="flow-validate-btn" id="fv-upscale-retry-btn" style="margin:0; margin-top:6px; display:none; background:linear-gradient(135deg, #f59e0b, #d97706); color:#fff; border:none;">🔄 Retentar Falhas do Upscale</button>
              
@@ -7155,6 +7637,12 @@ if (clearVideoRefsBtn) {
             
             // BOTÃO NOVO (UPSCALE) INJETADO AQUI
             const fvUpscaleBtn = $('fv-upscale-btn');
+            const upscaleResolution = $('fv-upscale-resolution');
+            if (upscaleResolution) {
+              upscaleResolution.value = localStorage.getItem('flow_upscale_resolution') === '720' ? '720' : '1080';
+              upscaleResolution.addEventListener('change', () => localStorage.setItem('flow_upscale_resolution', upscaleResolution.value));
+            }
+            $('fv-upscale-download-refresh')?.addEventListener('click', () => this.atualizarDownloadsUpscale());
 if (fvUpscaleBtn) fvUpscaleBtn.addEventListener('click', () => { startKeepAlive(); this.startUpscaleProcess(); });
 
 // Upscale stop button
@@ -8031,7 +8519,37 @@ clearReferencesForUI(source = 'images') {
             document.execCommand('delete', false, null); await this.dynamicSleep(CONFIG.DELAY_SHORT);
         }
 
+        /** v10.21: Ritmo da aba correspondente. Imagem e video sao separados. */
+        ritmoCfg() {
+            const video = !!(this.videoIsRunning || this._modernIndividualVideo || this._modernTestVideo);
+            try { return window.__flowRitmo.ler(video); } catch (_) { return { ativo: false }; }
+        }
+        /** Espera sorteada de uma fase. Desligado, nao espera nada. */
+        async ritmoEsperar(fase, cfg) {
+            const c = cfg || this.ritmoCfg();
+            if (!c || !c.ativo || !window.__flowRitmo) return;
+            const ms = window.__flowRitmo.sorteio(c[fase + 'Min'], c[fase + 'Max']);
+            if (ms > 0) await this.sleep(ms);
+        }
+
+        /**
+         * v10.21: com o Ritmo ligado o texto entra em pedacos, com pausa entre
+         * eles. Desligado, manda tudo de uma vez - igual ao comportamento antigo.
+         */
         async insertText(text) {
+            if (!text) return;
+            const cfg = this.ritmoCfg();
+            let partes = [text];
+            try { if (window.__flowRitmo) partes = window.__flowRitmo.fatiar(text, cfg); } catch (_) { partes = [text]; }
+            if (partes.length <= 1) return this.insertTextBloco(text);
+            for (let i = 0; i < partes.length; i++) {
+                if (this.shouldStop || this.videoShouldStop) return;
+                await this.insertTextBloco(partes[i]);
+                if (i < partes.length - 1) await this.ritmoEsperar('palavra', cfg);
+            }
+        }
+
+        async insertTextBloco(text) {
             const e = this.getEditor();
             if (!e) throw new Error('Editor não encontrado');
             e.focus(); await this.dynamicSleep([250, 400]);
@@ -8212,9 +8730,18 @@ clearReferencesForUI(source = 'images') {
        async clickSubmit() {
     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
 
-    const findSubmitBtn = () => [...document.querySelectorAll('button')].find(b =>
-        b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
-    );
+    // v10.21: a caixa de prompt nova nao usa mais o icone arrow_forward solto.
+    // Tenta o localizador novo e so depois cai na busca antiga pelo icone.
+    const findSubmitBtn = () => {
+        try {
+            const novo = window.__flowAcharEnviar && window.__flowAcharEnviar();
+            if (novo) return novo;
+        } catch (_) {}
+        return [...document.querySelectorAll('button')].find(b =>
+            b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
+        );
+    };
+    const envioTravado = b => window.__flowEnvioDesabilitado ? window.__flowEnvioDesabilitado(b) : !!(b && b.disabled);
 
     // Assinatura do conteúdo REAL do editor Slate.
     // IMPORTANTE: NÃO usar innerText/textContent — quando o editor está vazio
@@ -8239,11 +8766,11 @@ clearReferencesForUI(source = 'images') {
     }
 
     for (let i = 0; i < 30; i++) {
-        if (!btn.disabled) break;
+        if (!envioTravado(btn)) break;
         await this.dynamicSleep(CONFIG.DELAY_SHORT);
     }
 
-    if (btn.disabled) {
+    if (envioTravado(btn)) {
         throw new Error('Botão enviar desabilitado');
     }
 
@@ -8262,7 +8789,7 @@ clearReferencesForUI(source = 'images') {
         const currentBtn = findSubmitBtn();
 
         const editorCleared = hadContentBefore && editorSignature() === EMPTY_SIG;
-        const buttonReacted = currentBtn && currentBtn.disabled;
+        const buttonReacted = currentBtn && envioTravado(currentBtn);
 
         if (editorCleared || buttonReacted) {
             await this.dynamicSleep(CONFIG.DELAY_LONG);
@@ -8280,14 +8807,17 @@ clearReferencesForUI(source = 'images') {
                 try {
                     this.logDebug(`Preparando prompt ${promptObj.promptNum}: "${promptObj.text.substring(0,50)}..."${attempt > 1 ? ` (tentativa ${attempt})` : ''}`, 'info');
                     const segs = parsePrompt(promptObj.text);
+                    const ritmo = this.ritmoCfg();
+                    if (ritmo.ativo) this.logDebug(`🐢 Ritmo ligado (${ritmo.preset}, digitação: ${ritmo.digitacao}).`, 'info');
                     await this.clearEditor();
                     await this.dynamicSleep(CONFIG.DELAY_MEDIUM);
                     for (const seg of segs) {
                         if (this.shouldStop || this.videoShouldStop) return false;
                         if (seg.type === 'text') {
                              await this.insertText(seg.content);
-} else if (seg.type === 'ref') { 
-                         await this.openAtSelector(); 
+} else if (seg.type === 'ref') {
+                         await this.ritmoEsperar('antesRef', ritmo);
+                         await this.openAtSelector();
                          await this.clickDialogTab('image');
                          await this.searchAndSelect(seg.name); 
                          await this.dynamicSleep(CONFIG.DELAY_SHORT);
@@ -8316,16 +8846,21 @@ clearReferencesForUI(source = 'images') {
                              }
                              // --- FIM DA CORREÇÃO ---
                          }
+                         await this.ritmoEsperar('depoisRef', ritmo);
 
                     } else if (seg.type === 'voice') {
-                             await this.openAtSelector(); 
+                             await this.ritmoEsperar('antesRef', ritmo);
+                             await this.openAtSelector();
                              await this.clickDialogTab('voice');
-                             await this.searchAndSelectVoice(seg.name); 
+                             await this.searchAndSelectVoice(seg.name);
                              await this.dynamicSleep(CONFIG.DELAY_SHORT);
+                             await this.ritmoEsperar('depoisRef', ritmo);
                         }
                     }
+                    await this.ritmoEsperar('antesEnvio', ritmo);
                     await this.clickSubmit();
                     this.logDebug(`Prompt ${promptObj.promptNum} enviado ✅`, 'success');
+                    await this.ritmoEsperar('entrePrompts', ritmo);
                     return true;
                 } catch (err) {
                     this.logDebug(`⚠️ Erro no prompt ${promptObj.promptNum}: ${err.message} — ${attempt < MAX_SUBMIT_RETRIES ? 'resetando editor...' : 'falha definitiva'}`, 'error');
@@ -11132,24 +11667,28 @@ const displaySceneName = this.formatSceneNameWithVariationCount(sceneName, varia
             return { ok: true };
         }
 
-        async waitForUpscaleToast() {
+        async waitForUpscaleToast(before = new Map()) {
             // Pega QUALQUER toast que aparecer (não só o de sucesso), pra a gente
             // saber o que o Flow respondeu (ex: erro de "já tem upscale rodando").
             const toast = await this.waitFor(() => {
-                const toasts = [...document.querySelectorAll('li[data-sonner-toast]')];
-                return toasts[0] || null;
+                const toasts = [...document.querySelectorAll('flow-snackbar,.mat-mdc-snack-bar-label,li[data-sonner-toast]')];
+                return toasts.find(node => {
+                    const text = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+                    return before.get(node) !== text && /upscal|downloaded|baixado|falha|failed|error|erro/i.test(text);
+                }) || null;
             }, 8000, 200);
 
             if (!toast) return { ok: false, text: '(nenhum toast apareceu)', type: '' };
 
             const text = (toast.innerText || toast.textContent || '').replace(/\s*Dismiss\s*$/i, '').replace(/\s+/g, ' ').trim().slice(0, 130);
             const type = toast.getAttribute('data-type') || '';
-            const isUpscaling = /upscal/i.test(text);   // "Upscaling your video..."
+            const failure = type === 'error' || /failed|error|erro|falha|unable|cannot|can't|too many|limit|try again/i.test(text);
+            const isUpscaling = !failure && /upscaling your video|upscale.*requested|your video has been downloaded|vídeo.*baixado|upscale.*solicitado/i.test(text);
 
             const dismissBtn = [...toast.querySelectorAll('button')].find(btn => /dismiss/i.test(btn.textContent || ''));
             if (dismissBtn) dismissBtn.click();
 
-            return { ok: isUpscaling, text, type };
+            return { ok: isUpscaling, text, type, failure };
         }
 
         getUpscaleRequestedSet() {
@@ -11870,16 +12409,41 @@ async scrollToWorkflow(wfId) {
             return card;
         }
 
+        verificarAtividadeIncomumNaGaleria() {
+            if (this._autoRecoveryTriggered || !this.isRunning && !this.videoIsRunning) return;
+            for (const tile of this.getTiles().slice().reverse()) {
+                // Triagem barata: não inspeciona indicadores em mídias normais.
+                if (!/unusual activity|atividade incomum|atividade suspeita/i.test(tile.textContent || '')) {
+                    const id = this.getUuidFromTile(tile);
+                    this._unusualOutcomeIds ||= new Set();
+                    if (id && !this._unusualOutcomeIds.has(id) && (this.isTileLoaded(tile) || this.isTileError(tile))) {
+                        this._unusualOutcomeIds.add(id);
+                        this._unusualActivityCount = 0;
+                    }
+                    continue;
+                }
+                if (this.extractTileError(tile) !== '🚨 Atividade incomum') continue;
+                this.observarErroAtividadeIncomum(tile, this._modernCurrentPrompt ?? 1);
+                if (this._autoRecoveryTriggered) break;
+            }
+        }
+
         observarErroAtividadeIncomum(tile, promptNum) {
             if (!tile || this._autoRecoveryTriggered || !this.isRunning && !this.videoIsRunning) return;
             this._unusualActivitySeen ||= new WeakSet();
-            if (this._unusualActivitySeen.has(tile)) return;
+            this._unusualActivityIds ||= new Set();
+            const id = this.getUuidFromTile(tile);
+            // O Flow pode recriar o DOM do mesmo cartão ao rolar a galeria.
+            // Com ID, conta a mídia; sem ID, usa a identidade do nó.
+            if (id ? this._unusualActivityIds.has(id) : this._unusualActivitySeen.has(tile)) return;
             this._unusualActivitySeen.add(tile);
+            if (id) this._unusualActivityIds.add(id);
+            if (id) { this._unusualOutcomeIds ||= new Set(); this._unusualOutcomeIds.add(id); }
             this._unusualActivityCount = Number(this._unusualActivityCount || 0) + 1;
             const count = this._unusualActivityCount;
             this.mostrarEstadoRecuperacao(
                 `🚨 Atividade incomum: ${count}/5`,
-                count < 5 ? 'A fila continua sendo monitorada. Com 5 ocorrências, o estado será salvo e a página reiniciada.' : 'Limite atingido. Salvando fila e relatório...',
+                count < 5 ? 'Com 5 ocorrências seguidas, pausa por 5 minutos e tenta somente os prompts afetados.' : 'Limite atingido. Preparando pausa de 5 minutos...',
                 count * 20,
                 count >= 5
             );
@@ -11943,44 +12507,81 @@ async scrollToWorkflow(wfId) {
         async iniciarRecuperacaoAutomatica() {
             if (this._autoRecoveryTriggered) return;
             this._autoRecoveryTriggered = true;
-            const isVideo = !!this.videoIsRunning;
-            const promptNum = this.promptParaRecuperacao();
-            this.sincronizarEstadoComRegistrosAtivos(isVideo);
-            this.persistirEstadosDePromptAgora();
-            this.salvarRelatorioRecuperacao(isVideo);
+            this._unusualRecoveryRequested = true;
+        }
 
-            if (this.tentativasRecentesDeRecuperacao(false) >= 3) {
-                this.saveRunState(promptNum, { autoResume: false, reason: 'unusual_activity', unusualCount: this._unusualActivityCount });
+        async repetirFalhasAtividadeIncomum(matrix) {
+            const video = !!this.videoIsRunning;
+            const lista = video ? this.videoPrompts : this.prompts;
+            const falhou = slot => slot.errorReason === '🚨 Atividade incomum';
+            let pendentes = matrix.filter(falhou);
+            this._unusualRetryInProgress = true;
+            const count = video ? this.videoResultsPerPrompt : this.imagesPerPrompt;
+            try {
+                if (!pendentes.length) throw new Error('Atividade incomum detectada, mas os prompts afetados não foram identificados. Fila pausada sem reenviar prompts por suposição.');
+                for (let tentativa = 1; tentativa <= 2 && pendentes.length; tentativa++) {
+                    this.persistirEstadosDePromptAgora();
+                    this.salvarRelatorioRecuperacao(video);
+                    this.saveRunState(pendentes[0].promptNum, { autoResume: false, reason: 'unusual_activity_pause', recoveryAttempt: tentativa });
+                    for (let segundos = 300; segundos > 0; segundos--) {
+                        if (this.modernStopped()) throw stopError();
+                        this.mostrarEstadoRecuperacao('⏳ Pausa por atividade incomum',
+                            `Tentativa ${tentativa}/2: ${Math.ceil(segundos / 60)} min restantes. Somente os prompts que falharam serão reenviados.`, (300 - segundos) / 3);
+                        await this.sleep(1000);
+                    }
+                    if (this.modernStopped()) throw stopError();
+                    const grupos = new Map();
+                    for (const slot of pendentes) {
+                        const key = this.chaveDoPrompt(slot.promptNum);
+                        if (!grupos.has(key)) grupos.set(key, []);
+                        grupos.get(key).push(slot);
+                    }
+                    for (const [key, slots] of grupos) {
+                        if (this.modernStopped()) throw stopError();
+                        const prompt = lista?.find(p => this.chaveDoPrompt(p.promptNum) === key);
+                        if (!prompt) throw new Error('Prompt afetado não encontrado: ' + key);
+                        this._modernActiveRecords = [];
+                        await this.configureGeneration(video, slots.length);
+                        if (video) this.videoResultsPerPrompt = slots.length;
+                        else this.imagesPerPrompt = slots.length;
+                        const before = this.snapshotImageUuids();
+                        await this.prepareAndSubmit(prompt);
+                        const retry = this.buildPositionMatrix([prompt], slots.length);
+                        await this.waitForMatrix(retry, before);
+                        retry.forEach((resultado, index) => {
+                            const slot = slots[index];
+                            const originalRecord = slot.record, originalIndex = slot.index, imgNum = slot.imgNum;
+                            // Não deixa o erro antigo sobreviver a uma tentativa pronta.
+                            delete slot.errorReason;
+                            Object.assign(slot, resultado, { imgNum });
+                            if (originalRecord) {
+                                originalRecord.results.set(originalIndex, resultado.state === 'loaded' ?
+                                    { ...resultado, loaded: true, error: false } : { error: true, errorReason: resultado.errorReason });
+                                slot.record = originalRecord; slot.index = originalIndex;
+                                this._modernRecords.set(key, originalRecord);
+                            }
+                        });
+                    }
+                    pendentes = matrix.filter(falhou);
+                }
+                if (pendentes.length) throw new Error('Atividade incomum persistiu após duas tentativas com pausas de 5 minutos. Geração parada.');
+                this.mostrarEstadoRecuperacao('✅ Tentativas concluídas', 'Prompts afetados conferidos. A fila pode continuar; outras falhas permanecem no relatório.', 100);
+            } catch (error) {
+                this._modernUncertain = true;
                 this.shouldStop = true;
                 this.videoShouldStop = true;
-                this.limparCacheTemporarioDaExecucao();
-                this.mostrarEstadoRecuperacao(
-                    '⛔ Recuperação automática pausada',
-                    'O Flow bloqueou 3 vezes em 30 minutos. O estado e o relatório estão salvos; use Continuar quando o serviço normalizar.',
-                    100, true
-                );
-                return;
+                this.persistirEstadosDePromptAgora();
+                this.salvarRelatorioRecuperacao(video);
+                throw error;
+            } finally {
+                if (video) this.videoResultsPerPrompt = count;
+                else this.imagesPerPrompt = count;
+                this._unusualRetryInProgress = false;
+                this._unusualRecoveryRequested = false;
+                this._unusualActivityCount = 0;
+                this._autoRecoveryTriggered = false;
+                if (!this.modernStopped()) await this.configureGeneration(video, count);
             }
-
-            const attempt = this.tentativasRecentesDeRecuperacao(true);
-            this.saveRunState(promptNum, {
-                autoResume: true,
-                reason: 'unusual_activity',
-                unusualCount: this._unusualActivityCount,
-                recoveryAttempt: attempt,
-                waitSeconds: 20
-            });
-            this._modernUncertain = true;
-            this.shouldStop = true;
-            this.videoShouldStop = true;
-            this.limparCacheTemporarioDaExecucao();
-            this.mostrarEstadoRecuperacao(
-                '💾 Estado salvo com sucesso',
-                `Cache temporário limpo e relatório preservado. Atualizando em 4 segundos; depois retomará no prompt ${this.esc(String(promptNum))}.`,
-                100, true
-            );
-            await new Promise(resolve => setTimeout(resolve, 4000));
-            location.reload();
         }
 
         /**
@@ -12238,9 +12839,10 @@ async scrollToWorkflow(wfId) {
             if (errorOverlay && bodyText.includes('Error')) {
                 // Verifica se o editor sumiu (indica crash real)
                 const editor = this.getEditor?.();
-                const submitBtn = [...document.querySelectorAll('button')].find(b =>
-                    b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
-                );
+                const submitBtn = (window.__flowAcharEnviar && window.__flowAcharEnviar()) ||
+                    [...document.querySelectorAll('button')].find(b =>
+                        b.querySelector('i.google-symbols')?.textContent.trim() === 'arrow_forward'
+                    );
                 if (!editor && !submitBtn) return true;
             }
 

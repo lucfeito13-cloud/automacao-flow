@@ -4,6 +4,7 @@
  */
 
 // Servidor original para Whisk, Meta, etc.
+importScripts('upscale_downloads.js');
 const SCRIPT_BASE_URL = 'https://fixa.tech/a_dark';
 
 // Tu link do GitHub Pages:
@@ -164,6 +165,14 @@ function installTrustedInputBridge() {
         if (event.source !== window || event.origin !== location.origin) return;
         const data = event.data;
         if (!data || data.source !== 'criadores-dark-flow-main' || !data.requestId) return;
+        if (data.type === 'FLOW_UPSCALE_TRACK_REQUEST') {
+            let result;
+            try { result = await chrome.runtime.sendMessage({ type: 'FLOW_UPSCALE_TRACK', action: data.action, job: data.job }); }
+            catch (error) { result = { ok: false, error: error.message }; }
+            window.postMessage({ source: 'criadores-dark-extension-bridge', type: 'FLOW_UPSCALE_TRACK_RESULT',
+                requestId: data.requestId, ...result }, location.origin);
+            return;
+        }
         const isClick = data.type === 'FLOW_TRUSTED_CLICK_REQUEST';
         const isEnter = data.type === 'FLOW_TRUSTED_ENTER_REQUEST';
         const isMove = data.type === 'FLOW_TRUSTED_MOVE_REQUEST';
