@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.28  -   2026-10-01
+//  Flow NOVO v10.29  -   2026-10-01
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,17 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.29: o envio de IMAGEM passa a clicar NO ELEMENTO primeiro, pelo seletor,
+//          igual ao que o resto da extensao e o envio de VIDEO ja faziam.
+//          Isso resolve os dois defeitos do clique por coordenada: ele acertava
+//          quem estivesse POR CIMA do ponto (com a janela estreita, o proprio
+//          painel da extensao) e dependia do chrome.debugger, que navegadores
+//          anti-detect como o AdsPower nao liberam.
+//          O clique fisico continua como SEGUNDA tentativa, se o Flow nao
+//          aceitar o clique no elemento - entao o Chrome normal nao perde nada.
+//          Sem risco de enviar duas vezes: a segunda tentativa so acontece com
+//          o editor intacto, ou seja, se nada tiver saido mesmo. E quando ela
+//          ocorre, o painel da extensao sai da frente do ponto e volta depois.
 //  v10.28: o envio de IMAGEM passa a ter alternativa quando o navegador nao
 //          libera o chrome.debugger - caso dos anti-detect (AdsPower, Dolphin,
 //          GoLogin). Nesses o clique "fisico" nao existe e o envio morria ali,
@@ -390,7 +401,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.28', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.29', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -954,8 +965,31 @@
         const rect = btn.getBoundingClientRect();
         const clickX = Math.round(rect.left + rect.width / 2);
         const clickY = Math.round(rect.top + rect.height / 2);
+        // v10.29: o clique "fisico" acerta QUEM ESTIVER POR CIMA do ponto, nao o
+        // botao. Com a janela estreita (AdsPower, DevTools aberto) a caixa de
+        // prompt do Flow desliza para debaixo do NOSSO painel, e o clique batia
+        // no painel: o envio ia embora sem nunca tocar no Gerar. Um .click() de
+        // JavaScript nao sofre disso porque mira o elemento direto.
+        const pontoNoBotao = () => {
+          const emCima = document.elementFromPoint(clickX, clickY);
+          return !!emCima && (emCima === btn || btn.contains(emCima) || emCima.contains(btn));
+        };
+        const restaurarPainel = [];
+        if (!pontoNoBotao()) {
+          for (const painel of $('#flow-panel,#flow-assign-panel,#flow-popup,#flow-mini,#flow-sidebar')) {
+            restaurarPainel.push([painel, painel.style.pointerEvents]);
+            painel.style.pointerEvents = 'none';
+          }
+          if (restaurarPainel.length) {
+            this.logDebug('O painel estava sobre o botão Gerar; liberei o ponto só durante o clique.', 'warning');
+          }
+        }
+        const pontoLivre = pontoNoBotao();
+        const devolverPainel = () => {
+          for (const [painel, valor] of restaurarPainel) painel.style.pointerEvents = valor;
+        };
         const requestId = 'flow-click-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-        const trustedClick = new Promise((resolve, reject) => {
+        const enviarCliqueFisico = () => new Promise((resolve, reject) => {
           let finished = false;
           const finish = (fn, value) => {
             if (finished) return;
@@ -985,21 +1019,11 @@
           }, location.origin);
         });
 
-        this.logDebug((envioDeVideo ? 'Vídeo' : 'Imagem') +
-          ': enviando clique físico ao botão Gerar em ' + clickX + ',' + clickY + '.', 'info');
-
-        // v10.28: navegadores anti-detect (AdsPower, Dolphin, GoLogin...) nao
-        // liberam o chrome.debugger, que e o que faz o clique "fisico". Nesses
-        // casos o envio de imagem morria aqui, mesmo com tudo o resto certo.
-        // O clique simples e o mesmo que o envio de VIDEO ja usa com sucesso,
-        // entao ele serve de alternativa em vez de derrubar o prompt.
-        let usouAlternativa = false;
-        try {
-          await trustedClick;
-        } catch (erroClique) {
-          usouAlternativa = true;
-          this.logDebug('Canal de clique físico indisponível (' +
-            (erroClique?.message || erroClique) + '). Usando o clique simples, o mesmo dos vídeos.', 'warning');
+        // v10.29: PRIMEIRO o clique no ELEMENTO, pelo seletor - igual ao que todas
+        // as outras funcoes da extensao fazem (menu, download, upscale) e igual ao
+        // envio de VIDEO, que sempre funcionou assim. Mirando o elemento nao
+        // importa o que esteja por cima nem se o navegador libera o chrome.debugger.
+        const cliqueNoElemento = () => {
           try { btn.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
           const r = btn.getBoundingClientRect();
           const ponto = { bubbles: true, cancelable: true, view: window, button: 0,
@@ -1013,7 +1037,52 @@
             } catch (_) {}
           }
           try { btn.click(); } catch (_) {}
+        };
+
+        this.logDebug('Imagem: clicando no botão Gerar pelo elemento.', 'info');
+        cliqueNoElemento();
+        try {
+          await this.modernWait(aceitou, 4000);
+          this.logDebug('✅ O Flow aceitou o clique no elemento.', 'success');
+          return true;
+        } catch (_) {}
+
+        // Nao aceitou. So seguimos para o clique fisico se o editor estiver
+        // INTACTO - ou seja, se nada aconteceu mesmo. Se o texto ja mudou, o
+        // envio pode ter ido e um segundo clique gastaria credito duas vezes.
+        const editorIntacto = () => {
+          const ed = this.getEditor();
+          if (!ed || !textoAntes) return !!ed;
+          return this.textoSemChips(ed).length >= Math.round(textoAntes.length * 0.9);
+        };
+        if (!editorIntacto()) {
+          this._modernUncertain = true;
+          this.logDebug('O clique no elemento não foi confirmado, mas o editor mudou. ' +
+            'Não repeti o clique para não gastar crédito duas vezes.', 'error');
+          throw new Error('Envio sem confirmação do Flow.');
         }
+        this.logDebug('O clique no elemento não foi confirmado em 4s; tentando o clique físico em ' +
+          clickX + ',' + clickY + '.', 'warning');
+
+        // v10.28: navegadores anti-detect (AdsPower, Dolphin, GoLogin...) nao
+        // liberam o chrome.debugger, que e o que faz o clique "fisico". Nesses
+        // casos o envio de imagem morria aqui, mesmo com tudo o resto certo.
+        // O clique simples e o mesmo que o envio de VIDEO ja usa com sucesso,
+        // entao ele serve de alternativa em vez de derrubar o prompt.
+        let usouAlternativa = false;
+        try {
+          if (!pontoLivre) {
+            const emCima = document.elementFromPoint(clickX, clickY);
+            throw new Error('o ponto do botão está coberto por <' +
+              String(emCima && emCima.tagName || '?').toLowerCase() + '>');
+          }
+          await enviarCliqueFisico();
+        } catch (erroClique) {
+          usouAlternativa = true;
+          this.logDebug('Canal de clique físico indisponível (' +
+            (erroClique?.message || erroClique) + '). Usando o clique simples, o mesmo dos vídeos.', 'warning');
+          cliqueNoElemento();
+        } finally { devolverPainel(); }
 
         try {
           await this.modernWait(aceitou, 15000);
