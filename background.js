@@ -204,6 +204,14 @@ const trustedDebuggerTabs = new Map();
 
 async function ensureTrustedDebugger(tabId) {
     if (trustedDebuggerTabs.has(tabId)) return;
+    // Navegadores anti-detect (AdsPower, Dolphin, GoLogin) costumam nao expor
+    // o chrome.debugger, ou ja estao usando o canal CDP para a propria
+    // automacao. Avisar NA HORA deixa a pagina cair no clique simples em vez
+    // de esperar o tempo da ponte esgotar a cada envio.
+    if (!chrome.debugger || typeof chrome.debugger.attach !== 'function') {
+        throw new Error('Este navegador não libera o canal de clique físico (chrome.debugger). ' +
+            'É o caso de navegadores anti-detect como o AdsPower.');
+    }
     try {
         await chrome.debugger.attach({ tabId }, '1.3');
         trustedDebuggerTabs.set(tabId, null);

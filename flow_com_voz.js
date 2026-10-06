@@ -1,6 +1,6 @@
 // ============================================================================
 //  CRIADORES DARK - AUTOMACAO DO GOOGLE FLOW
-//  Flow NOVO v10.27  -   2026-10-01
+//  Flow NOVO v10.28  -   2026-10-01
 // ============================================================================
 //
 //  ESTE E O ARQUIVO UNICO. Todo o codigo da automacao esta aqui dentro.
@@ -82,6 +82,12 @@
 //         favorito salvo; tambem revisa nomes corretos que ficaram sem estrela.
 //  v10.6: localiza o coracao pelo mat-icon favorite mesmo sem aria-label e
 //         revela a barra antes de clicar, inclusive quando comeca oculta.
+//  v10.28: o envio de IMAGEM passa a ter alternativa quando o navegador nao
+//          libera o chrome.debugger - caso dos anti-detect (AdsPower, Dolphin,
+//          GoLogin). Nesses o clique "fisico" nao existe e o envio morria ali,
+//          com todo o resto certo. A alternativa e o mesmo clique simples que o
+//          envio de VIDEO ja usa com sucesso. No Chrome normal NADA muda: a
+//          alternativa so roda se o clique fisico falhar.
 //  v10.27: pedido de upscale sem aviso na tela deixa de contar como falha. O
 //          Flow nem sempre mostra o toast e os upscales estavam concluindo
 //          normalmente; so a extensao e que dava o pedido como perdido e
@@ -384,7 +390,7 @@
 
   root.__installFlowModern = function (FlowAutomation, ctx) {
     if (location.hostname !== 'flow.google.com' && !location.hostname.endsWith('.flow.google.com')) return;
-    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.27', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
+    console.info('%c[Flow] Criadores Dark — Flow NOVO v10.28', 'background:#10b981;color:#fff;font-weight:bold;padding:2px 6px;border-radius:4px');
     const { CONFIG, parsePrompt, parsePromptsText, parseIndividualPromptsText, extractReferences, parseReferenceHeader } = ctx;
     const proto = FlowAutomation.prototype;
     const old = Object.fromEntries(Object.getOwnPropertyNames(proto).filter(k => typeof proto[k] === 'function').map(k => [k, proto[k]]));
@@ -981,10 +987,37 @@
 
         this.logDebug((envioDeVideo ? 'Vídeo' : 'Imagem') +
           ': enviando clique físico ao botão Gerar em ' + clickX + ',' + clickY + '.', 'info');
-        await trustedClick;
+
+        // v10.28: navegadores anti-detect (AdsPower, Dolphin, GoLogin...) nao
+        // liberam o chrome.debugger, que e o que faz o clique "fisico". Nesses
+        // casos o envio de imagem morria aqui, mesmo com tudo o resto certo.
+        // O clique simples e o mesmo que o envio de VIDEO ja usa com sucesso,
+        // entao ele serve de alternativa em vez de derrubar o prompt.
+        let usouAlternativa = false;
+        try {
+          await trustedClick;
+        } catch (erroClique) {
+          usouAlternativa = true;
+          this.logDebug('Canal de clique físico indisponível (' +
+            (erroClique?.message || erroClique) + '). Usando o clique simples, o mesmo dos vídeos.', 'warning');
+          try { btn.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
+          const r = btn.getBoundingClientRect();
+          const ponto = { bubbles: true, cancelable: true, view: window, button: 0,
+            clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+          for (const tipo of ['pointerover', 'mouseover', 'pointermove', 'mousemove',
+                              'pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
+            try {
+              btn.dispatchEvent(tipo.startsWith('pointer')
+                ? new PointerEvent(tipo, { ...ponto, pointerId: 1, isPrimary: true })
+                : new MouseEvent(tipo, ponto));
+            } catch (_) {}
+          }
+          try { btn.click(); } catch (_) {}
+        }
 
         try {
           await this.modernWait(aceitou, 15000);
+          if (usouAlternativa) this.logDebug('✅ O clique simples foi aceito pelo Flow.', 'success');
         } catch (error) {
           // Nao repetimos um envio duvidoso: ele pode ja ter gasto credito.
           this._modernUncertain = true;
